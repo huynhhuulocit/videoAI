@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@videoai/contracts": ["packages/contracts/src/index.ts"],
+      "@videoai/errors": ["packages/errors/src/index.ts"],
+      "@videoai/logger": ["packages/logger/src/index.ts"],
+      "@videoai/storage": ["packages/storage/src/index.ts"],
+      "@videoai/ai-providers": ["packages/ai-providers/src/index.ts"],
+      "@videoai/config": ["packages/config/src/index.ts"],
+      "@videoai/auth": ["packages/auth/src/index.ts"],
+      "@videoai/database": ["packages/database/src/index.ts"]
+    }
+  }
+}

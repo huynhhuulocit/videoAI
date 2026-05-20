@@ -1,0 +1,36 @@
+{
+  "name": "videoai",
+  "private": true,
+  "version": "0.1.0",
+  "description": "VideoAI microservice monorepo scaffold.",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace @videoai/web run dev",
+    "dev:api": "npm --workspace @videoai/api-gateway run dev",
+    "db:generate": "prisma generate --schema prisma/schema.prisma",
+    "db:push": "prisma db push --schema prisma/schema.prisma --skip-generate",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:setup": "npm run db:generate && npm run db:push && npm run db:seed",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,css}\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.2",
+    "prisma": "^6.19.3",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3"
+  }
+}

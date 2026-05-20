@@ -1,0 +1,4 @@
+interface:
+  display_name: "VideoAI Frontend Dashboard"
+  short_description: "Build polished VideoAI dashboards"
+  default_prompt: "Use $videoai-frontend-dashboard to implement a polished VideoAI dashboard screen."

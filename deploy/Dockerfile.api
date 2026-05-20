@@ -1,0 +1,27 @@
+FROM node:24-bookworm-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY apps/api-gateway/package.json apps/api-gateway/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages packages
+COPY services services
+COPY workers workers
+COPY prisma prisma
+COPY apps/api-gateway apps/api-gateway
+
+RUN npm ci \
+  && npm run db:generate \
+  && npm --workspace @videoai/contracts run build \
+  && npm --workspace @videoai/api-gateway run build
+
+ENV NODE_ENV=production
+
+EXPOSE 4000
+
+CMD ["npm", "--workspace", "@videoai/api-gateway", "run", "start"]

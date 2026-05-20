@@ -1,0 +1,284 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["users", "projects", "media", "content", "config", "video", "ai_logs", "jobs"]
+}
+
+model UserProfile {
+  id           String   @id @default(cuid())
+  authUserId   String   @unique @map("auth_user_id")
+  username     String   @unique
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  displayName  String   @map("display_name")
+  role         String
+  status       String   @default("active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([role])
+  @@map("user_profiles")
+  @@schema("users")
+}
+
+model ProjectRecord {
+  id          String   @id
+  ownerUserId String   @map("owner_user_id")
+  name        String
+  description String?
+  flowType    String   @map("flow_type")
+  templateSelection Json?   @map("template_selection")
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerUserId])
+  @@index([ownerUserId, createdAt])
+  @@map("projects")
+  @@schema("projects")
+}
+
+model PromptRecord {
+  id                   String   @id
+  projectId            String   @map("project_id")
+  ownerUserId          String   @map("owner_user_id")
+  sourceType           String   @map("source_type")
+  inputText            String?  @map("input_text")
+  productUrl           String?  @map("product_url")
+  mediaAssetIds        Json     @map("media_asset_ids")
+  generatedPrompt      String   @map("generated_prompt")
+  finalPrompt          String?  @map("final_prompt")
+  provider             String
+  model                String
+  status               String
+  providerMetadata     Json?    @map("provider_metadata")
+  productAttributes    Json?    @map("product_attributes")
+  mediaAnalysisSummary Json?    @map("media_analysis_summary")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([ownerUserId, createdAt])
+  @@map("prompts")
+  @@schema("content")
+}
+
+model VideoTemplateRecord {
+  id          String   @id
+  ownerUserId String   @map("owner_user_id")
+  name        String
+  description String?
+  idea        String?
+  attributes  Json
+  isDefault   Boolean  @default(false) @map("is_default")
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerUserId, createdAt])
+  @@index([ownerUserId, isDefault])
+  @@index([status])
+  @@map("video_templates")
+  @@schema("content")
+}
+
+model VideoShotPlanRecord {
+  id              String   @id
+  ownerUserId     String   @map("owner_user_id")
+  projectId       String?  @map("project_id")
+  name            String
+  sourceText      String   @map("source_text")
+  durationSeconds Int      @map("duration_seconds")
+  attributes      Json     @default("[]")
+  shots           Json
+  isDefault       Boolean  @default(false) @map("is_default")
+  status          String   @default("active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([ownerUserId, updatedAt])
+  @@index([ownerUserId, isDefault])
+  @@index([status])
+  @@map("video_shot_plans")
+  @@schema("content")
+}
+
+model MediaAsset {
+  id               String   @id
+  ownerUserId      String   @map("owner_user_id")
+  projectId        String   @map("project_id")
+  storageProvider  String   @default("local") @map("storage_provider")
+  storageKey       String   @map("storage_key")
+  originalFilename String   @map("original_filename")
+  mimeType         String   @map("mime_type")
+  mediaType        String   @map("media_type")
+  sizeBytes        Int      @map("size_bytes")
+  durationSeconds  Int?     @map("duration_seconds")
+  width            Int?
+  height           Int?
+  status           String
+  validationError  String?  @map("validation_error")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([ownerUserId, createdAt])
+  @@index([status])
+  @@map("media_assets")
+  @@schema("media")
+}
+
+model ScriptRecord {
+  id          String   @id
+  projectId   String   @map("project_id")
+  promptId    String?  @map("prompt_id")
+  ownerUserId String   @map("owner_user_id")
+  scriptText  String   @map("script_text")
+  provider    String
+  model       String
+  status      String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([ownerUserId, createdAt])
+  @@map("scripts")
+  @@schema("content")
+}
+
+model VideoGenerationRecord {
+  id                 String    @id
+  projectId          String    @map("project_id")
+  ownerUserId        String    @map("owner_user_id")
+  promptId           String?   @map("prompt_id")
+  scriptId           String?   @map("script_id")
+  provider           String
+  model              String
+  status             String
+  jobId              String?   @unique @map("job_id")
+  outputMediaAssetId String?   @map("output_media_asset_id")
+  errorCode          String?   @map("error_code")
+  errorMessage       String?   @map("error_message")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  completedAt        DateTime? @map("completed_at")
+
+  @@index([projectId])
+  @@index([ownerUserId, createdAt])
+  @@index([status])
+  @@map("video_generations")
+  @@schema("video")
+}
+
+model AiSiteConfig {
+  id                   String   @id @default(cuid())
+  contentMode          String   @map("content_mode")
+  promptProvider       String   @map("prompt_provider")
+  promptModel          String   @map("prompt_model")
+  shotGenerationPrompt String?  @map("shot_generation_prompt")
+  shotComposerPrompt   String?  @map("shot_composer_prompt")
+  templateSelectionPrompt String?  @map("template_selection_prompt")
+  videoProvider        String   @map("video_provider")
+  videoModel           String   @map("video_model")
+  isActive             Boolean  @default(true) @map("is_active")
+  createdByAdminId     String?  @map("created_by_admin_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive])
+  @@map("ai_site_configs")
+  @@schema("config")
+}
+
+model AiProviderKey {
+  id               String   @id @default(cuid())
+  provider         String   @unique
+  encryptedKey     String   @map("encrypted_key")
+  keyStatus        String   @map("key_status")
+  createdByAdminId String?  @map("created_by_admin_id")
+  rotatedAt        DateTime @map("rotated_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("ai_provider_keys")
+  @@schema("config")
+}
+
+model MasterPrompt {
+  id               String   @id @default(cuid())
+  type             String
+  name             String
+  content          String   @db.Text
+  isDefault        Boolean  @default(false) @map("is_default")
+  status           String   @default("active")
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([type, status])
+  @@index([type, isDefault])
+  @@map("master_prompts")
+  @@schema("config")
+}
+
+model AiRequestLog {
+  id              String          @id @default(cuid())
+  requestId       String          @unique @map("request_id")
+  actorUserId     String          @map("actor_user_id")
+  actorRole       String          @map("actor_role")
+  projectId       String?         @map("project_id")
+  flowType        String          @map("flow_type")
+  provider        String
+  model           String
+  requestPayload  Json            @map("request_payload")
+  mediaReferences Json            @map("media_references")
+  status          String
+  createdAt       DateTime        @default(now()) @map("created_at")
+  completedAt     DateTime?       @map("completed_at")
+  responses       AiResponseLog[]
+
+  @@index([projectId])
+  @@index([actorUserId, createdAt])
+  @@index([flowType])
+  @@index([status])
+  @@map("ai_request_logs")
+  @@schema("ai_logs")
+}
+
+model AiResponseLog {
+  id              String       @id @default(cuid())
+  requestLogId    String       @map("request_log_id")
+  requestLog      AiRequestLog @relation(fields: [requestLogId], references: [id], onDelete: Cascade)
+  responsePayload Json?        @map("response_payload")
+  errorCode       String?      @map("error_code")
+  errorMessage    String?      @map("error_message")
+  latencyMs       Int?         @map("latency_ms")
+  tokenUsage      Json?        @map("token_usage")
+  costEstimate    Json?        @map("cost_estimate")
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  @@index([requestLogId])
+  @@map("ai_response_logs")
+  @@schema("ai_logs")
+}
+
+model JobStatusRecord {
+  jobId     String   @id @map("job_id")
+  type      String
+  status    String
+  progress  Int
+  result    Json?
+  error     Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([type])
+  @@map("job_statuses")
+  @@schema("jobs")
+}

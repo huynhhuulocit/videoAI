@@ -1,0 +1,598 @@
+import { z } from "zod";
+
+export const UserRoleSchema = z.enum(["user", "admin"]);
+export type UserRole = z.infer<typeof UserRoleSchema>;
+
+export const UserStatusSchema = z.enum(["active", "disabled"]);
+export type UserStatus = z.infer<typeof UserStatusSchema>;
+
+export const ContentModeSchema = z.enum(["script", "video"]);
+export type ContentMode = z.infer<typeof ContentModeSchema>;
+
+export const ProviderSchema = z.string().trim().min(1).max(80).transform((provider) => provider.toLowerCase());
+export type Provider = z.infer<typeof ProviderSchema>;
+
+export const ProviderKeyStatusSchema = z.enum(["missing", "configured", "env"]);
+export type ProviderKeyStatus = z.infer<typeof ProviderKeyStatusSchema>;
+
+export const ProviderKeySourceSchema = z.enum(["input", "stored", "env", "missing"]);
+export type ProviderKeySource = z.infer<typeof ProviderKeySourceSchema>;
+
+export const JobStatusSchema = z.enum([
+  "queued",
+  "processing",
+  "succeeded",
+  "failed",
+  "cancelled"
+]);
+export type JobStatus = z.infer<typeof JobStatusSchema>;
+
+export const FlowTypeSchema = z.enum([
+  "script_prompt",
+  "product_url",
+  "media_analysis",
+  "script_generation",
+  "video_generation",
+  "template_generation",
+  "template_selection",
+  "shot_generation"
+]);
+export type FlowType = z.infer<typeof FlowTypeSchema>;
+
+export const MasterPromptTypeSchema = z.enum(["scenario", "shots", "scripts"]);
+export type MasterPromptType = z.infer<typeof MasterPromptTypeSchema>;
+
+export const MasterPromptStatusSchema = z.enum(["active", "archived"]);
+export type MasterPromptStatus = z.infer<typeof MasterPromptStatusSchema>;
+
+export const ProjectFlowSchema = z.enum(["script", "product"]);
+export type ProjectFlow = z.infer<typeof ProjectFlowSchema>;
+
+export const ApiMetaSchema = z.object({
+  requestId: z.string().optional()
+});
+export type ApiMeta = z.infer<typeof ApiMetaSchema>;
+
+export const ApiErrorCodeSchema = z.enum([
+  "UNAUTHENTICATED",
+  "FORBIDDEN",
+  "VALIDATION_ERROR",
+  "PROJECT_NOT_FOUND",
+  "MEDIA_NOT_FOUND",
+  "MEDIA_INVALID_TYPE",
+  "MEDIA_SIZE_EXCEEDED",
+  "MEDIA_DURATION_EXCEEDED",
+  "AI_CONFIG_MISSING",
+  "AI_PROVIDER_FAILED",
+  "AI_RATE_LIMITED",
+  "VIDEO_PROVIDER_FAILED",
+  "JOB_NOT_FOUND",
+  "INTERNAL_ERROR"
+]);
+export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
+
+export const ApiErrorSchema = z.object({
+  code: ApiErrorCodeSchema,
+  message: z.string(),
+  details: z.record(z.unknown()).optional()
+});
+export type ApiError = z.infer<typeof ApiErrorSchema>;
+
+export const UserProfileSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  role: UserRoleSchema,
+  status: UserStatusSchema
+});
+export type UserProfile = z.infer<typeof UserProfileSchema>;
+
+export const ProjectSchema = z.object({
+  id: z.string(),
+  ownerUserId: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  flowType: ProjectFlowSchema,
+  templateSelection: z.lazy(() => TemplateSelectionSchema).nullable().optional(),
+  status: z.enum(["active", "archived"]),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type Project = z.infer<typeof ProjectSchema>;
+
+export const CreateProjectRequestSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(500).optional(),
+  flowType: ProjectFlowSchema
+});
+export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
+
+export const MediaAssetSchema = z.object({
+  id: z.string(),
+  ownerUserId: z.string(),
+  projectId: z.string(),
+  mediaType: z.enum(["image", "video"]),
+  mimeType: z.string(),
+  originalFilename: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  status: z.enum(["uploaded", "validated", "rejected", "deleted"]),
+  previewUrl: z.string().optional(),
+  validationError: z.string().optional(),
+  createdAt: z.string()
+});
+export type MediaAsset = z.infer<typeof MediaAssetSchema>;
+
+export const TemplateOptionSchema = z.object({
+  id: z.string(),
+  label: z.string().min(1),
+  value: z.string().min(1),
+  description: z.string().optional()
+});
+export type TemplateOption = z.infer<typeof TemplateOptionSchema>;
+
+export const TemplateAttributeSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  options: z.array(TemplateOptionSchema).default([])
+});
+export type TemplateAttribute = z.infer<typeof TemplateAttributeSchema>;
+
+export const VideoTemplateSchema = z.object({
+  id: z.string(),
+  ownerUserId: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  idea: z.string().optional(),
+  attributes: z.array(TemplateAttributeSchema),
+  isDefault: z.boolean().default(false),
+  status: z.enum(["active", "archived"]),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type VideoTemplate = z.infer<typeof VideoTemplateSchema>;
+
+export const TemplateSelectionAttributeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  options: z.array(TemplateOptionSchema)
+});
+export type TemplateSelectionAttribute = z.infer<typeof TemplateSelectionAttributeSchema>;
+
+export const TemplateSelectionSchema = z.object({
+  templateId: z.string(),
+  templateName: z.string(),
+  attributes: z.array(TemplateSelectionAttributeSchema)
+});
+export type TemplateSelection = z.infer<typeof TemplateSelectionSchema>;
+
+export const AnalyzeTemplateSelectionRequestSchema = z.object({
+  inputText: z.string().min(1).max(12000),
+  templateId: z.string().min(1),
+  masterPrompt: z.string().min(1).max(12000).optional()
+});
+export type AnalyzeTemplateSelectionRequest = z.infer<typeof AnalyzeTemplateSelectionRequestSchema>;
+
+export const TemplateSelectionAnalysisResultSchema = z.object({
+  projectId: z.string(),
+  templateSelection: TemplateSelectionSchema,
+  compactSelection: z.string(),
+  rawRequest: z.unknown(),
+  rawResponse: z.unknown(),
+  provider: ProviderSchema,
+  model: z.string()
+});
+export type TemplateSelectionAnalysisResult = z.infer<typeof TemplateSelectionAnalysisResultSchema>;
+
+export const SaveProjectTemplateSelectionRequestSchema = z.object({
+  templateSelection: TemplateSelectionSchema.nullable()
+});
+export type SaveProjectTemplateSelectionRequest = z.infer<typeof SaveProjectTemplateSelectionRequestSchema>;
+
+export const VideoShotAttributeSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  value: z.string().min(1)
+});
+export type VideoShotAttribute = z.infer<typeof VideoShotAttributeSchema>;
+
+export const VideoShotSchema = z.object({
+  id: z.string(),
+  title: z.string().min(1),
+  description: z.string().min(1),
+  durationSeconds: z.number().int().min(1).max(8),
+  attributes: z.array(VideoShotAttributeSchema).default([]),
+  mediaIds: z.array(z.string()).default([])
+});
+export type VideoShot = z.infer<typeof VideoShotSchema>;
+
+export const VideoShotPlanSchema = z.object({
+  id: z.string(),
+  ownerUserId: z.string(),
+  projectId: z.string().nullable().optional(),
+  name: z.string(),
+  sourceText: z.string(),
+  durationSeconds: z.number().int().min(1).max(8),
+  attributes: z.array(VideoShotAttributeSchema).default([]),
+  shots: z.array(VideoShotSchema),
+  isDefault: z.boolean().default(false),
+  status: z.enum(["active", "archived"]),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type VideoShotPlan = z.infer<typeof VideoShotPlanSchema>;
+
+export const ShotSelectionSchema = z.object({
+  shotPlanId: z.string(),
+  shotPlanName: z.string(),
+  attributes: z.array(VideoShotAttributeSchema).default([]),
+  shots: z.array(VideoShotSchema)
+});
+export type ShotSelection = z.infer<typeof ShotSelectionSchema>;
+
+export const CreateTemplateRequestSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(500).optional(),
+  idea: z.string().max(1000).optional(),
+  attributes: z.array(TemplateAttributeSchema).min(1)
+});
+export type CreateTemplateRequest = z.infer<typeof CreateTemplateRequestSchema>;
+
+export const UpdateTemplateRequestSchema = CreateTemplateRequestSchema.partial().extend({
+  attributes: z.array(TemplateAttributeSchema).min(1).optional()
+});
+export type UpdateTemplateRequest = z.infer<typeof UpdateTemplateRequestSchema>;
+
+export const GenerateTemplateRequestSchema = z.object({
+  idea: z.string().min(1).max(1000),
+  masterPrompt: z.string().min(1).max(12000).optional()
+});
+export type GenerateTemplateRequest = z.infer<typeof GenerateTemplateRequestSchema>;
+
+export const GenerateTemplateResultSchema = VideoTemplateSchema.extend({
+  rawRequest: z.unknown(),
+  rawResponse: z.unknown(),
+  provider: ProviderSchema,
+  model: z.string()
+});
+export type GenerateTemplateResult = z.infer<typeof GenerateTemplateResultSchema>;
+
+export const GenerateShotsRequestSchema = z.object({
+  sourceText: z.string().min(1).max(12000),
+  durationSeconds: z.number().int().min(1).max(8).optional().default(8),
+  attributes: z.array(VideoShotAttributeSchema).default([]),
+  masterPrompt: z.string().min(1).max(20000).optional()
+});
+export type GenerateShotsRequest = z.infer<typeof GenerateShotsRequestSchema>;
+
+export const GenerateShotsJobResultSchema = z.object({
+  shotPlan: VideoShotPlanSchema,
+  rawRequest: z.unknown(),
+  rawResponse: z.unknown(),
+  provider: ProviderSchema,
+  model: z.string()
+});
+export type GenerateShotsJobResult = z.infer<typeof GenerateShotsJobResultSchema>;
+
+export const UpdateShotPlanRequestSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  durationSeconds: z.number().int().min(1).max(8).optional(),
+  attributes: z.array(VideoShotAttributeSchema).optional(),
+  shots: z.array(VideoShotSchema).min(1).optional()
+});
+export type UpdateShotPlanRequest = z.infer<typeof UpdateShotPlanRequestSchema>;
+
+export const GeneratePromptRequestSchema = z.object({
+  inputText: z.string().min(1),
+  mediaIds: z.array(z.string()).default([]),
+  masterPrompt: z.string().min(1).max(20000).optional(),
+  templateSelection: TemplateSelectionSchema.optional(),
+  shotSelection: ShotSelectionSchema.optional()
+});
+export type GeneratePromptRequest = z.infer<typeof GeneratePromptRequestSchema>;
+
+export const AnalyzeProductRequestSchema = z.object({
+  productUrl: z.string().url(),
+  mediaIds: z.array(z.string()).default([]),
+  templateSelection: TemplateSelectionSchema.optional()
+});
+export type AnalyzeProductRequest = z.infer<typeof AnalyzeProductRequestSchema>;
+
+export const CreateScriptRequestSchema = z.object({
+  promptId: z.string().optional(),
+  finalPrompt: z.string().min(1)
+});
+export type CreateScriptRequest = z.infer<typeof CreateScriptRequestSchema>;
+
+export const CreateVideoRequestSchema = z.object({
+  promptId: z.string().optional(),
+  scriptId: z.string().optional(),
+  finalPrompt: z.string().min(1)
+});
+export type CreateVideoRequest = z.infer<typeof CreateVideoRequestSchema>;
+
+export const JobSchema = z.object({
+  jobId: z.string(),
+  type: z.enum([
+    "prompt_generation",
+    "product_analysis",
+    "media_analysis",
+    "script_generation",
+    "video_generation",
+    "template_selection",
+    "shot_generation"
+  ]),
+  status: JobStatusSchema,
+  progress: z.number().min(0).max(100),
+  result: z.unknown().nullable(),
+  error: ApiErrorSchema.nullable()
+});
+export type Job = z.infer<typeof JobSchema>;
+
+export const AiConfigSchema = z.object({
+  contentMode: ContentModeSchema,
+  promptProvider: ProviderSchema,
+  promptModel: z.string(),
+  shotGenerationPrompt: z.string().nullable().optional(),
+  scriptGenerationPrompt: z.string().nullable().optional(),
+  templateSelectionPrompt: z.string().nullable().optional(),
+  promptKeyStatus: ProviderKeyStatusSchema,
+  videoProvider: ProviderSchema,
+  videoModel: z.string(),
+  videoKeyStatus: ProviderKeyStatusSchema,
+  updatedAt: z.string()
+});
+export type AiConfig = z.infer<typeof AiConfigSchema>;
+
+export const UpdateAiConfigRequestSchema = z.object({
+  contentMode: ContentModeSchema,
+  promptProvider: ProviderSchema,
+  promptModel: z.string().min(1),
+  videoProvider: ProviderSchema,
+  videoModel: z.string().min(1)
+});
+export type UpdateAiConfigRequest = z.infer<typeof UpdateAiConfigRequestSchema>;
+
+export const RotateProviderKeyRequestSchema = z.object({
+  apiKey: z.string().min(1)
+});
+export type RotateProviderKeyRequest = z.infer<typeof RotateProviderKeyRequestSchema>;
+
+export const TestProviderConnectionRequestSchema = z.object({
+  provider: ProviderSchema,
+  model: z.string().trim().min(1).max(120),
+  apiKey: z.string().trim().min(1).optional()
+});
+export type TestProviderConnectionRequest = z.infer<typeof TestProviderConnectionRequestSchema>;
+
+export const TestProviderConnectionResultSchema = z.object({
+  provider: ProviderSchema,
+  model: z.string(),
+  status: z.enum(["success", "failed"]),
+  keySource: ProviderKeySourceSchema,
+  message: z.string()
+});
+export type TestProviderConnectionResult = z.infer<typeof TestProviderConnectionResultSchema>;
+
+export const SHOT_PROMPT_REQUIRED_PLACEHOLDERS = [
+  "{story}",
+  "{attributes}",
+  "{durationSeconds}"
+] as const;
+
+export const SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS = [
+  "{source}",
+  "{shotTitle}",
+  "{shotDuration}",
+  "{shotDescription}",
+  "{shotDialogue}",
+  "{shotAttributes}",
+  "{planAttributes}",
+  "{templateSelection}",
+  "{mediaSummary}"
+] as const;
+
+export const DEFAULT_SHOT_GENERATION_PROMPT = [
+  "You are an expert screenwriter and AI video prompt architect for Veo.",
+  "Read the story and split it into short, continuous video shots with concise spoken dialogue or voiceover for each shot.",
+  "",
+  "Story:",
+  "{story}",
+  "",
+  "Scenario attributes in compact format attribute=option1,option2;:",
+  "{attributes}",
+  "",
+  "Target seconds per shot: {durationSeconds}",
+  "",
+  "Use last-state / end-state continuity. Every shot must include Start state, End state and Dialogue attributes. The next shot's Start state must continue from the previous shot's End state. Dialogue should be natural, short and useful for generating voice or captions."
+].join("\n");
+
+export const DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT = [
+  "Prompt hoàn chỉnh cho shot",
+  "",
+  "1. Ngữ cảnh nguồn",
+  "{source}",
+  "",
+  "2. Shot cần tạo",
+  "- Tiêu đề: {shotTitle}",
+  "- Thời lượng: {shotDuration}",
+  "- Mô tả: {shotDescription}",
+  "- Lời thoại: {shotDialogue}",
+  "",
+  "3. Attribute của shot",
+  "{shotAttributes}",
+  "",
+  "4. Attribute của shot plan",
+  "{planAttributes}",
+  "",
+  "5. Kịch bản đã chọn",
+  "{templateSelection}",
+  "",
+  "6. Media tham khảo",
+  "{mediaSummary}"
+].join("\n");
+
+export const DEFAULT_TEMPLATE_SELECTION_PROMPT = [
+  "You are a video script analyst.",
+  "Read the user's story/script and choose the best matching scenario options from the provided attributes.",
+  "",
+  "Story:",
+  "{story}",
+  "",
+  "Scenario attributes/catalog:",
+  "{attributes}",
+  "",
+  "Rules:",
+  "- Use only optionId values from the provided scenario catalog.",
+  "- Select 1 to 3 useful options per attribute when the story clearly supports them.",
+  "- If no option fits an attribute, return an empty selectedOptionIds array for that attribute.",
+  "- Return strict JSON only. No markdown, no prose outside JSON.",
+  "",
+  "Required JSON shape:",
+  JSON.stringify(
+    {
+      attributes: [
+        {
+          attributeId: "videoPurpose",
+          attributeName: "Video Purpose",
+          selectedOptionIds: ["videoPurpose-storytelling"],
+          selectedOptionLabels: ["Storytelling"],
+          reason: "Why these options fit the story."
+        }
+      ],
+      compactSelection: "videoPurpose=Storytelling;",
+      notes: "Short summary of the selection."
+    },
+    null,
+    2
+  )
+].join("\n");
+
+export const DEFAULT_SCRIPT_GENERATION_PROMPT = [
+  "You are a video script and prompt strategist.",
+  "Create clear, reviewable content for a short product or story video.",
+  "Use the user's source text, selected scenario options, selected shots and media references as structured context.",
+  "",
+  "User source text:",
+  "{inputText}",
+  "",
+  "Reference media:",
+  "{mediaSummary}",
+  "",
+  "Selected shot plan:",
+  "{shotSelection}",
+  "",
+  "Selected scenario/options:",
+  "{scenarioSelection}",
+  "",
+  "Return readable sections with concise bullets and practical video direction."
+].join("\n");
+
+export function getShotPromptMissingPlaceholders(prompt: string) {
+  return SHOT_PROMPT_REQUIRED_PLACEHOLDERS.filter(
+    (placeholder) => !prompt.includes(placeholder)
+  );
+}
+
+export function getShotComposerPromptMissingPlaceholders(prompt: string) {
+  return SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS.filter(
+    (placeholder) => !prompt.includes(placeholder)
+  );
+}
+
+export const ShotPromptConfigSchema = z.object({
+  prompt: z.string(),
+  defaultPrompt: z.string(),
+  requiredPlaceholders: z.array(z.string()),
+  isDefault: z.boolean(),
+  composerPrompt: z.string(),
+  defaultComposerPrompt: z.string(),
+  composerRequiredPlaceholders: z.array(z.string()),
+  composerIsDefault: z.boolean(),
+  scenarioAnalysisPrompt: z.string(),
+  defaultScenarioAnalysisPrompt: z.string(),
+  scenarioAnalysisIsDefault: z.boolean(),
+  updatedAt: z.string()
+});
+export type ShotPromptConfig = z.infer<typeof ShotPromptConfigSchema>;
+
+export const UpdateShotPromptRequestSchema = z.object({
+  prompt: z.string().min(1).max(20000),
+  composerPrompt: z.string().min(1).max(20000),
+  scenarioAnalysisPrompt: z.string().min(1).max(12000).optional()
+});
+export type UpdateShotPromptRequest = z.infer<typeof UpdateShotPromptRequestSchema>;
+
+export const MasterPromptSchema = z.object({
+  id: z.string(),
+  type: MasterPromptTypeSchema,
+  name: z.string(),
+  content: z.string(),
+  isDefault: z.boolean(),
+  status: MasterPromptStatusSchema,
+  isBuiltIn: z.boolean().default(false),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type MasterPrompt = z.infer<typeof MasterPromptSchema>;
+
+export const MasterPromptGroupSchema = z.object({
+  type: MasterPromptTypeSchema,
+  prompts: z.array(MasterPromptSchema),
+  defaultPrompt: MasterPromptSchema
+});
+export type MasterPromptGroup = z.infer<typeof MasterPromptGroupSchema>;
+
+export const MasterPromptConfigSchema = z.object({
+  groups: z.array(MasterPromptGroupSchema),
+  updatedAt: z.string()
+});
+export type MasterPromptConfig = z.infer<typeof MasterPromptConfigSchema>;
+
+export const CreateMasterPromptRequestSchema = z.object({
+  type: MasterPromptTypeSchema,
+  name: z.string().trim().min(1).max(120),
+  content: z.string().trim().min(1).max(20000)
+});
+export type CreateMasterPromptRequest = z.infer<typeof CreateMasterPromptRequestSchema>;
+
+export const UpdateMasterPromptRequestSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  content: z.string().trim().min(1).max(20000).optional()
+});
+export type UpdateMasterPromptRequest = z.infer<typeof UpdateMasterPromptRequestSchema>;
+
+export const AiLogSchema = z.object({
+  requestId: z.string(),
+  timestamp: z.string(),
+  actorUserId: z.string(),
+  actorRole: UserRoleSchema,
+  projectId: z.string().optional(),
+  flowType: FlowTypeSchema,
+  provider: ProviderSchema,
+  model: z.string(),
+  status: z.enum(["pending", "success", "failed"]),
+  latencyMs: z.number().optional()
+});
+export type AiLog = z.infer<typeof AiLogSchema>;
+
+export const AiLogDetailSchema = AiLogSchema.extend({
+  requestPayload: z.record(z.unknown()),
+  responsePayload: z.record(z.unknown()).optional(),
+  errorCode: z.string().optional(),
+  errorMessage: z.string().optional()
+});
+export type AiLogDetail = z.infer<typeof AiLogDetailSchema>;
+
+export type ApiSuccess<T> = {
+  data: T;
+  meta?: ApiMeta;
+};
+
+export type ApiFailure = {
+  error: ApiError;
+  meta?: ApiMeta;
+};
+
+export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
+
+export const nowIso = () => new Date().toISOString();
