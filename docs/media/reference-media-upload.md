@@ -8,6 +8,8 @@
 - The frontend receives database media IDs from `POST /api/v1/projects/{projectId}/media`.
 - Prompt generation and product analysis may only submit media IDs that exist in PostgreSQL with status `validated`.
 - In `Script Flow`, uploaded media is attached inside an individual shot card and the validated media IDs are stored in that shot JSON as `mediaIds`.
+- Shot media uploads are persisted to the active shot plan so reloading the project keeps the uploaded image/video attached to the same shot.
+- Prompt popups that receive media show the saved media preview, filename, database media ID, MIME, size and preview URL. Prompt copy remains text-only and does not copy image binaries.
 - In `Product Flow`, uploaded media remains project-level and is sent with the product analysis request.
 - Removing a file soft-deletes the media metadata by setting status `deleted`; deleted media IDs must not be accepted by AI workflows.
 

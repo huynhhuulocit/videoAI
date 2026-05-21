@@ -279,6 +279,8 @@ const messages = {
   "workspace.shotMediaEmpty": "No reference media for this shot yet.",
   "workspace.shotMediaHelp":
     "Add images or videos for this shot so the prompt can follow the right context, camera angle, and visual style.",
+  "workspace.shotMediaSaved": "Shot reference media saved",
+  "workspace.shotMediaSaveFailed": "Cannot save shot reference media",
   "workspace.shotMediaTitle": "Shot reference media",
   "workspace.templateCreateLink": "Create scenario",
   "workspace.templateHelp":

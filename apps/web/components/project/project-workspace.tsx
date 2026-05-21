@@ -150,6 +150,7 @@ type RawDataModalState = {
   title: string;
   help: string;
   value: unknown;
+  mediaItems?: MediaItem[];
 };
 
 type ProjectStoryContentResponse = {
@@ -971,6 +972,25 @@ function renderPromptTemplate(
     (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
     template,
   );
+}
+
+function formatMediaPromptSummary(items: MediaItem[], emptyText: string) {
+  if (items.length === 0) {
+    return emptyText;
+  }
+
+  return items
+    .map((item, index) =>
+      [
+        `${index + 1}. ${item.name}`,
+        `   - ID: ${item.id}`,
+        `   - Type: ${item.kind}`,
+        `   - MIME: ${item.mimeType}`,
+        `   - Size: ${formatBytes(item.sizeBytes)}`,
+        ...(item.previewUrl ? [`   - Preview URL: ${item.previewUrl}`] : []),
+      ].join("\n"),
+    )
+    .join("\n");
 }
 
 function makeScenarioEditorId(prefix: string) {
@@ -1917,12 +1937,37 @@ export function ProjectWorkspace({
       .filter((item) => item.status === "validated")
       .map((item) => item.id);
     if (shotId && validUploadedIds.length > 0) {
-      updateShot(shotId, (shot) => ({
-        ...shot,
-        mediaIds: Array.from(
-          new Set([...(shot.mediaIds ?? []), ...validUploadedIds]),
-        ),
-      }));
+      const nextShotPlan = selectedShotPlan
+        ? {
+            ...selectedShotPlan,
+            shots: selectedShotPlan.shots.map((shot) =>
+              shot.id === shotId
+                ? {
+                    ...shot,
+                    mediaIds: Array.from(
+                      new Set([...(shot.mediaIds ?? []), ...validUploadedIds]),
+                    ),
+                  }
+                : shot,
+            ),
+          }
+        : null;
+
+      if (nextShotPlan) {
+        setShotPlans((current) =>
+          current.map((shotPlan) =>
+            shotPlan.id === nextShotPlan.id ? nextShotPlan : shotPlan,
+          ),
+        );
+        setGeneratedShotPrompts((current) => {
+          const { [shotId]: _removedPrompt, ...nextPrompts } = current;
+          return nextPrompts;
+        });
+        void persistShotPlanMedia(nextShotPlan, [
+          ...validMediaIds,
+          ...validUploadedIds,
+        ]);
+      }
     }
     setStatus({
       label: nextItems.some((item) => item.status === "rejected")
@@ -1945,6 +1990,54 @@ export function ProjectWorkspace({
   function onDrop(event: DragEvent<HTMLDivElement>, shotId?: string) {
     event.preventDefault();
     void addFiles(event.dataTransfer.files, shotId);
+  }
+
+  function buildShotPlanSaveBody(
+    shotPlan: VideoShotPlan,
+    allowedMediaIds = validMediaIds,
+  ) {
+    return {
+      name: shotPlan.name,
+      description: shotPlan.description,
+      durationSeconds: shotPlan.durationSeconds,
+      attributes: shotPlan.attributes.filter(
+        (attribute) => attribute.name.trim() && attribute.value.trim(),
+      ),
+      shots: shotPlan.shots.map((shot) => ({
+        ...shot,
+        durationSeconds: clampShotDuration(shot.durationSeconds),
+        mediaIds: (shot.mediaIds ?? []).filter((mediaId) =>
+          allowedMediaIds.includes(mediaId),
+        ),
+        attributes: shot.attributes.filter(
+          (attribute) => attribute.name.trim() && attribute.value.trim(),
+        ),
+      })),
+    };
+  }
+
+  async function persistShotPlanMedia(
+    shotPlan: VideoShotPlan,
+    allowedMediaIds = validMediaIds,
+  ) {
+    try {
+      const saved = await apiPatch<VideoShotPlan>(
+        isOneClickMode
+          ? `/projects/${projectId}/shots/${shotPlan.id}`
+          : `/shots/${shotPlan.id}`,
+        buildShotPlanSaveBody(shotPlan, allowedMediaIds),
+      );
+      setShotPlans((current) =>
+        current.map((item) => (item.id === saved.id ? saved : item)),
+      );
+      setShotsResultText(formatShotPlanResultText(saved));
+      setStatus({ label: t("workspace.shotMediaSaved"), tone: "success" });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : t("workspace.shotMediaSaveFailed"),
+      );
+      setStatus({ label: t("workspace.shotMediaSaveFailed"), tone: "danger" });
+    }
   }
 
   async function removeMedia(mediaId: string) {
@@ -1975,6 +2068,19 @@ export function ProjectWorkspace({
       }
       return current.filter((candidate) => candidate.id !== mediaId);
     });
+    const nextSelectedShotPlan = selectedShotPlan
+      ? {
+          ...selectedShotPlan,
+          shots: selectedShotPlan.shots.map((shot) =>
+            (shot.mediaIds ?? []).includes(mediaId)
+              ? {
+                  ...shot,
+                  mediaIds: (shot.mediaIds ?? []).filter((id) => id !== mediaId),
+                }
+              : shot,
+          ),
+        }
+      : null;
     setShotPlans((current) =>
       current.map((shotPlan) => ({
         ...shotPlan,
@@ -1988,6 +2094,12 @@ export function ProjectWorkspace({
         ),
       })),
     );
+    if (nextSelectedShotPlan) {
+      void persistShotPlanMedia(
+        nextSelectedShotPlan,
+        validMediaIds.filter((id) => id !== mediaId),
+      );
+    }
     setGeneratedShotPrompts({});
     setRawStoryRequest(null);
     setRawStoryResponse(null);
@@ -2680,8 +2792,11 @@ export function ProjectWorkspace({
     }
 
     const mediaSummary =
-      requestMediaIds.length > 0
-        ? `Use ${requestMediaIds.length} reference media file(s) to keep visual style, lighting, composition, and pacing consistent.`
+      requestMediaItems.length > 0
+        ? [
+            "Use the reference media below to keep visual style, lighting, composition, and pacing consistent.",
+            formatMediaPromptSummary(requestMediaItems, ""),
+          ].join("\n")
         : "No reference media. Use a clean modern style, soft lighting, and stable camera movement.";
     const shotSelectionText = buildShotGuidance() || "No selected shot plan.";
     const scenarioSelection = buildTemplateGuidance() || "No selected scenario options.";
@@ -2769,7 +2884,10 @@ export function ProjectWorkspace({
       flowType === "script" ? requestMediaItems : validMediaItems;
     const mediaInstruction =
       previewMediaItems.length > 0
-        ? t("workspace.promptPreviewMedia", { count: previewMediaItems.length })
+        ? [
+            t("workspace.promptPreviewMedia", { count: previewMediaItems.length }),
+            formatMediaPromptSummary(previewMediaItems, ""),
+          ].join("\n")
         : t("workspace.promptPreviewNoMedia");
     const shotInstruction = buildShotGuidancePreview();
     const templateInstruction = buildTemplateGuidancePreview();
@@ -2940,7 +3058,11 @@ export function ProjectWorkspace({
       return null;
     }
 
+    const modalTitle = rawDataModal.title;
+    const modalHelp = rawDataModal.help;
     const renderedValue = formatRawJson(rawDataModal.value);
+    const modalMediaItems = rawDataModal.mediaItems ?? [];
+    const hasMediaItems = modalMediaItems.length > 0;
 
     async function copyRawDataValue() {
       try {
@@ -2976,10 +3098,10 @@ export function ProjectWorkspace({
                 id="raw-data-title"
                 className="text-base font-semibold text-foreground"
               >
-                {rawDataModal.title}
+                {modalTitle}
               </h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                {rawDataModal.help}
+                {modalHelp}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -3015,6 +3137,45 @@ export function ProjectWorkspace({
             </div>
           </div>
           <div className="overflow-y-auto p-5">
+            {hasMediaItems ? (
+              <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                {modalMediaItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-md border border-sky-100 bg-sky-50 p-3"
+                  >
+                    <div className="mb-2 overflow-hidden rounded-md border border-sky-100 bg-white">
+                      {item.kind === "image" && item.previewUrl ? (
+                        <img
+                          alt={item.name}
+                          src={item.previewUrl}
+                          className="h-32 w-full object-cover"
+                        />
+                      ) : item.kind === "video" && item.previewUrl ? (
+                        <video
+                          className="h-32 w-full bg-black object-contain"
+                          src={item.previewUrl}
+                          controls
+                          muted
+                        />
+                      ) : (
+                        <div className="flex h-32 items-center justify-center text-muted-foreground">
+                          <AlertCircle size={24} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {item.name}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {item.id} | {item.mimeType} | {formatBytes(item.sizeBytes)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-4 text-xs leading-5 text-slate-50">
               {renderedValue}
             </pre>
@@ -3189,6 +3350,7 @@ export function ProjectWorkspace({
     title: string,
     help: string,
     value: string | null,
+    mediaItems?: MediaItem[],
   ) {
     const hasValue = Boolean(value);
 
@@ -3201,7 +3363,12 @@ export function ProjectWorkspace({
         title={hasValue ? title : t("workspace.fullPromptUnavailable")}
         onClick={() => {
           if (value) {
-            setRawDataModal({ title, help, value });
+            setRawDataModal({
+              title,
+              help,
+              value,
+              ...(mediaItems ? { mediaItems } : {}),
+            });
           }
         }}
       >
@@ -3323,6 +3490,7 @@ export function ProjectWorkspace({
                 t("workspace.storyFullPrompt"),
                 t("workspace.storyFullPromptHelp"),
                 buildStoryContentFullPrompt(),
+                requestMediaItems,
               )}
               {renderRawDataButton(
                 t("workspace.rawRequestButton"),
@@ -3976,7 +4144,7 @@ export function ProjectWorkspace({
     const templateSelectionText = templateLines.join("\n");
     const mediaSummary =
       shotMediaItems.length > 0
-        ? `- ${t("workspace.mediaCount", { count: shotMediaItems.length })}`
+        ? formatMediaPromptSummary(shotMediaItems, "")
         : `- ${t("workspace.shotPromptNoMedia")}`;
     const renderedPrompt = renderPromptTemplate(shotComposerPromptTemplate, {
       source: `- ${sourceText}`,
@@ -4019,6 +4187,7 @@ export function ProjectWorkspace({
   }
 
   function openShotPrompt(shot: VideoShot) {
+    const shotMediaItems = getValidShotMediaItems(shot);
     const prompt = composeShotPrompt(shot);
     setGeneratedShotPrompts((current) => ({
       ...current,
@@ -4028,6 +4197,7 @@ export function ProjectWorkspace({
       title: t("workspace.shotPromptTitle"),
       help: t("workspace.shotPromptPopupHelp"),
       value: prompt,
+      mediaItems: shotMediaItems,
     });
     setErrorMessage("");
     setStatus({ label: t("workspace.shotPromptGenerated"), tone: "success" });
@@ -4259,6 +4429,7 @@ export function ProjectWorkspace({
                 t("workspace.shotsFullPrompt"),
                 t("workspace.shotsFullPromptHelp"),
                 buildShotGenerationFullPrompt(),
+                requestMediaItems,
               )}
               {renderRawDataButton(
                 t("workspace.rawRequestButton"),

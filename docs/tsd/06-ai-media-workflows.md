@@ -48,7 +48,7 @@ sequenceDiagram
   Media-->>API: Media IDs saved in shot JSON
   User->>Web: Click Create Prompt inside a shot
   Web->>Web: Compose local prompt from source text, that shot media count, shot attributes and template options
-  Web->>Web: Display formatted prompt with copy action
+  Web->>Web: Display formatted prompt with copy actions and persisted media previews
 ```
 
 ## 2.0.1. One Click Script Flow Shortcut
@@ -135,7 +135,8 @@ Steps:
 13. User can edit, add or remove shots, arbitrary shot attributes and the dedicated per-shot dialogue/voiceover textarea.
 14. User can upload reference media inside each shot card; validated media IDs are stored in that shot JSON as `mediaIds`.
 15. Any project workspace owned by the same user can load and select the saved shot plan, then compose a local prompt for each shot from the shot JSON, that shot's media references and the current template selection.
-16. The per-shot `Create Prompt` action uses the legacy local composer prompt from `config.ai_site_configs.shot_composer_prompt` or its built-in default, then appends structured shot context locally. Attribute placeholders render bracketed rows such as `[Start State]: ...`, `[Action & Motion]: ...`, `[End State]: ...`, and `[Voiceover Script]: "..."` for the `Dialogue` value. It must not call an AI provider.
+16. Media-aware prompt popups show the saved image/video preview and metadata. Prompt copy remains text-only and does not copy image binaries from the media card or popup.
+17. The per-shot `Create Prompt` action uses the legacy local composer prompt from `config.ai_site_configs.shot_composer_prompt` or its built-in default, then appends structured shot context locally. Attribute placeholders render bracketed rows such as `[Start State]: ...`, `[Action & Motion]: ...`, `[End State]: ...`, and `[Voiceover Script]: "..."` for the `Dialogue` value. It must not call an AI provider.
 
 ## 2.4. Script Prompt/Content Generation
 

@@ -67,6 +67,7 @@ Purpose:
 - Render visible master prompt editors in the shared cyan prompt surface while ordinary story/script/schema textareas remain neutral.
 - Let users generate and edit reusable user-owned video shot plans.
 - Let users attach reference media to each shot and compose/copy a formatted prompt from shot media, shot attributes and selected template options.
+- Media-aware prompt popups show saved media previews and metadata, but prompt copy remains text-only and does not copy image binaries.
 - Project shot cards expose per-shot `Prompt`, `Create video`, `Request` and `Response` controls. `Prompt` uses the shared popup/copy pattern, `Create video` calls the configured video provider/model with the composed shot prompt, and raw request/response popups are scoped to the shot.
 
 ## 4. Product Analysis Components
@@ -99,7 +100,7 @@ Components:
 Purpose:
 
 - Support image/video upload, preview, validation and removal.
-- In Script Flow, media upload is embedded inside each shot card and writes validated media IDs into the shot JSON.
+- In Script Flow, media upload is embedded inside each shot card and writes validated media IDs into the shot JSON. Prompt popups that receive media show the saved media preview and metadata from the database-backed media record.
 - In Product Flow, media upload remains project-level for product analysis.
 
 ## 5.1. Kịch Bản Components

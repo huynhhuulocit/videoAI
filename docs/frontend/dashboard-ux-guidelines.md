@@ -168,6 +168,7 @@ Kịch bản page requirements:
 - AI Scenario generation calls the active prompt provider/model through the API. If the provider request fails, the UI shows a readable multi-line error directly below `Generate scenario with AI`, including stable error code, provider/model, env/status/request ID when available.
 - `Generate scenario with AI` shows `Prompt`, `Request` and `Response` buttons in the same action row. `Prompt` opens the full rendered Scenario generation prompt without calling AI. `Request` and `Response` stay disabled until a generation returns raw provider data, then open read-only popups.
 - Prompt, Request and Response popups include a header copy icon so the full rendered prompt or raw payload can be copied without selecting text manually.
+- Prompt popups that include uploaded image media show the persisted media preview and metadata. Prompt copy remains text-only; image binaries are not copied from the media card or prompt popup.
 - Scenario generation must not silently populate sample/fallback attributes after AI failure.
 - The visual editor shows numbered attributes and numbered option rows with editable `description` fields for each attribute and option.
 - The schema textarea uses optimized JSON as the primary format for normalized attributes/options: attributes and options use `id`, `name`, optional `description`, and nested `options`. Compact `attribute=option1,option2;` text remains accepted for compatibility.
