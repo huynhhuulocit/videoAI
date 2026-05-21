@@ -16,7 +16,7 @@ export class ShotsController {
         ownerUserId: defaultUserId,
         status: "active"
       },
-      orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }]
+      orderBy: { updatedAt: "desc" }
     });
     return ok(shotPlans.map(mapVideoShotPlan));
   }
@@ -58,6 +58,7 @@ export class ShotsController {
       where: { id: shotPlanId },
       data: {
         ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.durationSeconds !== undefined ? { durationSeconds: body.durationSeconds } : {}),
         ...(body.attributes !== undefined ? { attributes: this.toJson(body.attributes) } : {}),
         ...(body.shots !== undefined ? { shots: this.toJson(body.shots) } : {})
@@ -68,72 +69,15 @@ export class ShotsController {
 
   @Delete(":shotPlanId")
   async deleteShotPlan(@Param("shotPlanId") shotPlanId: string) {
-    const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.videoShotPlanRecord.findFirst({
-        where: {
-          id: shotPlanId,
-          ownerUserId: defaultUserId,
-          status: "active"
-        }
-      });
-      if (!existing) {
-        return { count: 0 };
-      }
-      const archived = await tx.videoShotPlanRecord.updateMany({
+    const result = await prisma.videoShotPlanRecord.updateMany({
         where: {
           id: shotPlanId,
           ownerUserId: defaultUserId,
           status: "active"
         },
         data: { isDefault: false, status: "archived" }
-      });
-      if (existing.isDefault) {
-        const nextDefault = await tx.videoShotPlanRecord.findFirst({
-          where: {
-            ownerUserId: defaultUserId,
-            status: "active"
-          },
-          orderBy: { updatedAt: "desc" }
-        });
-        if (nextDefault) {
-          await tx.videoShotPlanRecord.update({
-            where: { id: nextDefault.id },
-            data: { isDefault: true }
-          });
-        }
-      }
-      return archived;
     });
     return ok({ deleted: result.count > 0 });
-  }
-
-  @Post(":shotPlanId/default")
-  async setDefaultShotPlan(@Param("shotPlanId") shotPlanId: string) {
-    const shotPlan = await prisma.$transaction(async (tx) => {
-      const existing = await tx.videoShotPlanRecord.findFirst({
-        where: {
-          id: shotPlanId,
-          ownerUserId: defaultUserId,
-          status: "active"
-        }
-      });
-      if (!existing) {
-        return null;
-      }
-      await tx.videoShotPlanRecord.updateMany({
-        where: {
-          ownerUserId: defaultUserId,
-          status: "active"
-        },
-        data: { isDefault: false }
-      });
-      return tx.videoShotPlanRecord.update({
-        where: { id: shotPlanId },
-        data: { isDefault: true }
-      });
-    });
-
-    return ok(shotPlan ? mapVideoShotPlan(shotPlan) : null);
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

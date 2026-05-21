@@ -25,6 +25,10 @@ const messages = {
   "shell.docsNote":
     "Code changes should update related docs when behavior changes.",
   "shell.docsSynced": "Docs synced",
+  "shell.masterPromptScenario": "Scenario",
+  "shell.masterPromptShots": "Shots",
+  "shell.masterPromptStory": "Story Content",
+  "shell.oneClick": "One Click",
   "shell.projectWorkspace": "Projects",
   "shell.shotPrompt": "Master Prompt",
   "shell.shots": "Scripts",
@@ -92,6 +96,45 @@ const messages = {
   "projectCreate.scriptDescription":
     "Start from an idea or existing script, then let AI suggest stronger content.",
   "projectCreate.title": "Create new project",
+  "oneClick.backStep": "Back",
+  "oneClick.create": "Create One Click project",
+  "oneClick.createFailed": "Cannot create One Click project.",
+  "oneClick.description":
+    "Create a Script Flow project through a guided Story Content, Scenario and Shots wizard.",
+  "oneClick.errorName": "Enter a project name.",
+  "oneClick.name": "Project name",
+  "oneClick.namePlaceholder": "One Click video project",
+  "oneClick.nextStep": "Next",
+  "oneClick.openProject": "Open full project",
+  "oneClick.shortcutBadge": "Guided shortcut",
+  "oneClick.setupDescription": "Description",
+  "oneClick.startHelp":
+    "One Click creates a normal Script Flow project, then guides you through Story Content, Scenario analysis, and shot generation.",
+  "oneClick.startTitle": "Start One Click",
+  "oneClick.step1Short": "Story Content",
+  "oneClick.step2DefaultScenario": "Scenario catalog used for analysis: {name}",
+  "oneClick.step2FullPrompt": "Full One Click Scenario prompt",
+  "oneClick.step2FullPromptHelp":
+    "The exact Scenario master prompt after replacing placeholders present in it.",
+  "oneClick.step2Help":
+    "Use the Scenario master prompt and the selected Scenario attribute catalog to let AI select matching attributes for the story. One Click skips the scenario dropdown and saves the generated Scenario with the setup name and description.",
+  "oneClick.step2PromptHelp":
+    "This admin-managed Scenario master prompt can be edited temporarily for this One Click analysis; runtime data is included only through placeholders in this prompt.",
+  "oneClick.step2PromptLabel": "Scenario master prompt",
+  "oneClick.step2Short": "Scenario",
+  "oneClick.step2StoryHelp":
+    "This Story Content is analyzed against the Scenario attributes, then reused by the Shots master prompt in Step 3.",
+  "oneClick.step2Title": "Step 2 · Scenario",
+  "oneClick.step3Short": "Prompt Shots",
+  "oneClick.step3SavedShotPlan": "Project shot plan saved: {name}",
+  "oneClick.stepNumber": "Step {step}",
+  "oneClick.storySaved": "Story Content saved",
+  "oneClick.storySaveFailed": "Cannot save Story Content.",
+  "oneClick.storySaving": "Saving Story Content...",
+  "oneClick.title": "One Click",
+  "oneClick.wizardDescription":
+    "A guided Script Flow shortcut with Story Content, Scenario analysis, and editable shot generation.",
+  "oneClick.wizardTitle": "One Click Wizard",
   "projectDetail.defaultPrompt":
     "Create a short product introduction video in a friendly style, clearly stating the key benefit and why customers should care.",
   "projectDetail.description":
@@ -164,7 +207,7 @@ const messages = {
   "workspace.shotsHelp":
     "AI breaks the current content into video shots up to 8 seconds each for prompt generation.",
   "workspace.shotsMasterPromptHelp":
-    "This default prompt is managed by admin for shot generation. You can edit it temporarily for this generation; placeholders are supported but optional because the backend still appends runtime context.",
+    "This default prompt is managed by admin for shot generation. You can edit it temporarily for this generation; runtime data is included only through placeholders in this prompt.",
   "workspace.shotsMasterPromptLabel": "Shots master prompt",
   "workspace.shotsMasterPromptMissing":
     "Enter a shots master prompt before generating shots.",
@@ -175,6 +218,14 @@ const messages = {
   "workspace.shotsNone": "No shot plan exists for this project yet.",
   "workspace.shotsRemove": "Remove {title}",
   "workspace.shotsRemoveAttribute": "Remove attribute",
+  "workspace.shotsResultApplied": "Shots result applied",
+  "workspace.shotsResultApply": "Apply JSON",
+  "workspace.shotsResultHelp":
+    "Edit the normalized JSON returned from shot generation, then apply it to rebuild the shot cards below. Save shots persists the applied result.",
+  "workspace.shotsResultInvalid": "Shots result JSON is invalid.",
+  "workspace.shotsResultPlaceholder":
+    "Generate shots to fill this JSON, or paste a normalized shot plan JSON and apply it.",
+  "workspace.shotsResultTitle": "Shots result",
   "workspace.shotsSave": "Save shots",
   "workspace.shotsSaveFailed": "Shot save failed",
   "workspace.shotsSaved": "Shots saved",
@@ -210,7 +261,21 @@ const messages = {
   "workspace.shotPromptSource": "Source context",
   "workspace.shotPromptTemplate": "Selected scenario",
   "workspace.shotPromptTitle": "Complete prompt for this shot",
+  "workspace.shotPromptPopupHelp":
+    "Review the complete prompt for this shot. This popup is read-only and does not call AI.",
   "workspace.shotPromptTitleField": "Title",
+  "workspace.shotVideoCreate": "Create video",
+  "workspace.shotVideoCreating": "Creating video",
+  "workspace.shotVideoFailed": "Video generation failed",
+  "workspace.shotVideoMissingPrompt":
+    "A shot prompt is required before creating video.",
+  "workspace.shotVideoRawRequest": "Raw shot video request",
+  "workspace.shotVideoRawRequestHelp":
+    "The redacted request for creating video from this shot prompt.",
+  "workspace.shotVideoRawResponse": "Raw shot video response",
+  "workspace.shotVideoRawResponseHelp":
+    "The provider response or job error returned while creating video for this shot.",
+  "workspace.shotVideoSuccess": "Video generation request completed for this shot.",
   "workspace.shotMediaEmpty": "No reference media for this shot yet.",
   "workspace.shotMediaHelp":
     "Add images or videos for this shot so the prompt can follow the right context, camera angle, and visual style.",
@@ -291,7 +356,7 @@ const messages = {
     "This content is the shared source for scenario analysis, shot generation, and script creation in the following steps. You can enter it directly or use AI to normalize it into story content.",
   "workspace.storyInputLabel": "Story Content",
   "workspace.storyMasterPromptHelp":
-    "The admin-managed Scripts master prompt is used for Story Content generation. You can edit it temporarily for this run; placeholders are supported but optional because the backend still appends runtime context.",
+    "The admin-managed Story Content master prompt turns your source text into a richer story for later Scenario and Shots steps. You can edit it temporarily for this run; runtime data is included only through placeholders in this prompt.",
   "workspace.storyMasterPromptLabel": "Story Content master prompt",
   "workspace.storyMasterPromptMissing":
     "Enter a Story Content master prompt before generating content.",
@@ -307,25 +372,25 @@ const messages = {
   "workspace.rawResponseButton": "Response",
   "workspace.storyFullPrompt": "Full Story Content prompt",
   "workspace.storyFullPromptHelp":
-    "The prompt after replacing placeholders in the Scripts master prompt and appending the current runtime context.",
+    "The exact Story Content master prompt after replacing any placeholders present in it.",
   "workspace.storyRawRequest": "Raw Story Content request",
   "workspace.storyRawRequestHelp":
-    "The redacted provider payload with the master prompt, Story Content input, media, and selected context.",
+    "The redacted provider payload with the exact rendered master prompt sent to AI.",
   "workspace.storyRawResponse": "Raw Story Content response",
   "workspace.storyRawResponseHelp":
     "The provider response before the system writes the generated text back into Story Content.",
   "workspace.scenarioFullPrompt": "Full Scenario analysis prompt",
   "workspace.scenarioFullPromptHelp":
-    "The prompt after replacing {story}/{attributes} in the Scenario master prompt and appending the runtime catalog.",
+    "The exact Scenario master prompt after replacing any {story}/{attributes} placeholders present in it.",
   "workspace.scenarioRawRequest": "Raw Scenario analysis request",
   "workspace.scenarioRawRequestHelp":
-    "The redacted provider payload with the Scenario master prompt, Story Content, and attribute/option catalog.",
+    "The redacted provider payload with the exact rendered Scenario master prompt sent to AI.",
   "workspace.scenarioRawResponse": "Raw Scenario analysis response",
   "workspace.scenarioRawResponseHelp":
     "The provider response before the system normalizes it and selects matching options.",
   "workspace.shotsFullPrompt": "Full Shots prompt",
   "workspace.shotsFullPromptHelp":
-    "The prompt after replacing {story}/{attributes}/{durationSeconds} in the Shots master prompt and appending runtime context.",
+    "The exact Shots master prompt after replacing any {story}/{attributes}/{durationSeconds} placeholders present in it.",
   "workspace.productRawRequest": "Raw product analysis request",
   "workspace.productRawRequestHelp":
     "The request payload used for the current product analysis, with sensitive data removed.",
@@ -413,6 +478,7 @@ const messages = {
   "template.addOption": "Add option",
   "template.aiBuilder": "AI scenario builder",
   "template.attributeName": "Attribute name",
+  "template.attributeDescription": "Attribute description",
   "template.builder": "Scenario content",
   "template.description":
     "Create and save scenario attributes/options used to generate video prompts.",
@@ -429,7 +495,7 @@ const messages = {
   "template.generating": "Generating...",
   "template.generationFullPrompt": "Full Scenario generation prompt",
   "template.generationFullPromptHelp":
-    "The prompt after replacing {story}/{attributes} in the Scenario master prompt and appending the runtime output contract.",
+    "The exact Scenario master prompt after replacing any {story}/{attributes} placeholders present in it.",
   "template.generationRawRequest": "Raw Scenario generation request",
   "template.generationRawRequestHelp":
     "The redacted provider payload sent when the Scenario was generated.",
@@ -443,31 +509,24 @@ const messages = {
   "template.jsonApply": "Parse schema",
   "template.jsonEditor": "Attribute/option schema",
   "template.jsonHelp":
-    "Short format: videoPurpose=Storytelling,Commercial; genre=Folk Tale,Drama; optional descriptions can use key | Vietnamese | description = option | Vietnamese | description.",
+    "Use optimized JSON with id, name, description and options. Option name is stored as the processing label; description is helper text. Legacy label/value/translate JSON and compact key=value text are still supported.",
   "template.jsonInvalid": "Attribute/option schema is invalid.",
   "template.list": "Saved scenarios",
   "template.loading": "Loading scenarios...",
   "template.masterPromptLoadFailed": "Cannot load the Scenario master prompt.",
   "template.name": "Scenario name",
-  "template.translateAlreadyApplied": "Translate already applied",
-  "template.translateApplied": "Translate applied",
-  "template.translateApply": "Apply translate",
-  "template.translateEditor": "Vietnamese translate JSON",
-  "template.translateGenerate": "Build translate JSON",
-  "template.translateGenerated": "Translate JSON generated",
-  "template.translateHelp":
-    "JSON translation/explanation keyed by attributeId and optionId. It is saved into descriptions only; English labels/values remain the data used for prompt processing.",
-  "template.translateInvalid": "Translate JSON is invalid.",
   "template.new": "Add scenario",
   "template.newTitle": "Add scenario",
   "template.notFound": "Scenario not found.",
   "template.optionLabel": "Option label",
+  "template.optionDescription": "Option description",
   "template.save": "Save scenario",
   "template.saved": "Scenario saved",
   "template.saving": "Saving...",
   "template.scenarioMasterPrompt": "Scenario master prompt",
   "template.scenarioMasterPromptHelp":
-    "This admin-managed default prompt can be edited temporarily for this generation; {story}/{attributes} placeholders are supported, and the backend still appends runtime context.",
+    "This admin-managed default prompt can be edited temporarily for this generation; runtime data is included only through placeholders in this prompt.",
+  "template.scenarioMasterPromptMissing": "Enter a Scenario master prompt before generating with AI.",
   "template.scenarioMasterPromptPlaceholder": "Enter the Scenario master prompt for this generation.",
   "template.title": "Scenario",
   "template.attributeCount": "{count} attributes",
@@ -541,6 +600,7 @@ const messages = {
   "adminShotPrompt.useDefault": "Use default",
   "adminShotPrompt.valid": "Prompt includes all required placeholders.",
   "adminMasterPrompt.builtInReadOnly": "Built-in default prompt is read-only. Create a new prompt to edit.",
+  "adminMasterPrompt.builtInBadge": "Built-in",
   "adminMasterPrompt.content": "Prompt content",
   "adminMasterPrompt.defaultBadge": "Default",
   "adminMasterPrompt.defaultFailed": "Cannot set default",
@@ -550,9 +610,12 @@ const messages = {
   "adminMasterPrompt.deleteDefaultBlocked": "Cannot delete the default prompt. Set another prompt as default first.",
   "adminMasterPrompt.deleteFailed": "Cannot delete prompt",
   "adminMasterPrompt.description":
-    "Manage Scenario, Shots and Scripts master prompts. Each type has one active default prompt.",
+    "Manage Story Content, Scenario and Shots master prompts. Each type has one active default prompt.",
+  "adminMasterPrompt.edit": "Edit",
   "adminMasterPrompt.freeFormHelp":
-    "Placeholders are supported and recommended per group, but they are not required to save. The backend still appends structured runtime context after the selected prompt.",
+    "Placeholders are supported and recommended per group, but they are not required to save. Runtime data is included only through placeholders in the selected prompt.",
+  "adminMasterPrompt.listHelp": "This list only shows prompts for the selected Master Prompt child item.",
+  "adminMasterPrompt.menuTitle": "Master Prompt",
   "adminMasterPrompt.name": "Prompt name",
   "adminMasterPrompt.newPrompt": "New prompt",
   "adminMasterPrompt.prompts": "Prompt list",
@@ -560,6 +623,7 @@ const messages = {
   "adminMasterPrompt.save": "Save",
   "adminMasterPrompt.saved": "Prompt saved",
   "adminMasterPrompt.saveFailed": "Cannot save prompt",
+  "adminMasterPrompt.selectPromptHelp": "Select Edit on a prompt or create a new prompt to open the editor.",
   "adminMasterPrompt.sections": "Master prompt groups",
   "adminMasterPrompt.setDefault": "Set default",
   "adminMasterPrompt.title": "Master Prompt",

@@ -151,6 +151,8 @@ export class ShotPlansService {
     const provider = config.promptProvider;
     const model = config.promptModel;
     const sourceText = String(input.sourceText ?? "");
+    const requestedName = input.name?.trim();
+    const requestedDescription = input.description?.trim();
     const durationSeconds = this.clampDuration(input.durationSeconds ?? 8);
     const attributes = this.extractShotPlanAttributes(input);
     const prompt = this.buildShotGenerationPrompt(
@@ -208,6 +210,8 @@ export class ShotPlansService {
           attributes,
           provider,
           model,
+          ...(requestedName ? { requestedName } : {}),
+          ...(requestedDescription ? { requestedDescription } : {}),
           rawRequest
         },
         startedAt
@@ -282,6 +286,8 @@ export class ShotPlansService {
       attributes: VideoShotAttribute[];
       provider: Provider;
       model: string;
+      requestedName?: string;
+      requestedDescription?: string;
       rawRequest: ProviderRequest;
     },
     startedAt: number
@@ -297,8 +303,13 @@ export class ShotPlansService {
       durationSeconds: context.durationSeconds,
       attributes: context.attributes
     });
+    const finalShotPlan = {
+      ...shotPlan,
+      ...(context.requestedName ? { name: context.requestedName } : {}),
+      ...(context.requestedDescription ? { description: context.requestedDescription } : {})
+    };
     const result: GenerateShotsJobResult = {
-      shotPlan,
+      shotPlan: finalShotPlan,
       rawRequest: context.rawRequest,
       rawResponse,
       provider: context.provider,
@@ -306,23 +317,18 @@ export class ShotPlansService {
     };
 
     await prisma.$transaction(async (tx) => {
-      const activeShotPlanCount = await tx.videoShotPlanRecord.count({
-        where: {
-          ownerUserId: defaultUserId,
-          status: "active"
-        }
-      });
       await tx.videoShotPlanRecord.create({
         data: {
-          id: shotPlan.id,
+          id: finalShotPlan.id,
           projectId,
           ownerUserId: defaultUserId,
-          name: shotPlan.name,
-          sourceText: shotPlan.sourceText,
-          durationSeconds: shotPlan.durationSeconds,
-          attributes: this.toJson(shotPlan.attributes),
-          shots: this.toJson(shotPlan.shots),
-          isDefault: activeShotPlanCount === 0,
+          name: finalShotPlan.name,
+          description: finalShotPlan.description ?? null,
+          sourceText: finalShotPlan.sourceText,
+          durationSeconds: finalShotPlan.durationSeconds,
+          attributes: this.toJson(finalShotPlan.attributes),
+          shots: this.toJson(finalShotPlan.shots),
+          isDefault: false,
           status: "active"
         }
       });
@@ -366,50 +372,7 @@ export class ShotPlansService {
       durationSeconds: String(durationSeconds)
     });
 
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      `Story: ${sourceText}`,
-      "",
-      "Scenario/plan attributes:",
-      attributeText,
-      "",
-      `Target seconds per shot: ${durationSeconds}`,
-      "",
-      "Provider output contract:",
-      "- Return only strict JSON. Do not include markdown, comments, or prose outside JSON.",
-      "- Every shot must include attributes named exactly Start state, End state, and Dialogue.",
-      "- The Start state of shot 2+ must continue from the previous shot's End state.",
-      "- Dialogue should be short, natural spoken dialogue, narration, or voiceover for that exact shot.",
-      "- Keep each duration between 1 and the requested duration, never more than 8 seconds.",
-      "",
-      "Required JSON shape:",
-      JSON.stringify(
-        {
-          name: "Shot plan name",
-          durationSeconds,
-          shots: [
-            {
-              title: "Shot 1: Hook",
-              description: "Filmable description of the moment.",
-              durationSeconds,
-              attributes: [
-                { name: "Start state", value: "How the shot begins." },
-                { name: "End state", value: "How the shot ends." },
-                { name: "Dialogue", value: "Short spoken line or voiceover for this shot." },
-                { name: "Camera", value: "Camera movement and framing." },
-                { name: "Visual", value: "Lighting, composition, production details." },
-                { name: "Action", value: "Primary action in the shot." },
-                { name: "Transition", value: "How this shot connects to the next one." }
-              ]
-            }
-          ]
-        },
-        null,
-        2
-      )
-    ].join("\n");
+    return renderedPrompt;
   }
 
   private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {

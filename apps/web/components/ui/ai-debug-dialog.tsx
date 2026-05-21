@@ -1,6 +1,7 @@
 "use client";
 
-import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Copy, X } from "lucide-react";
 
 export type AiDebugDialogData = {
   title: string;
@@ -26,9 +27,44 @@ type AiDebugDialogProps = {
   onClose: () => void;
 };
 
+function copyWithHiddenTextarea(value: string) {
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 export function AiDebugDialog({ data, closeLabel, onClose }: AiDebugDialogProps) {
+  const [isCopied, setIsCopied] = useState(false);
+
+  useEffect(() => {
+    setIsCopied(false);
+  }, [data]);
+
   if (!data) {
     return null;
+  }
+
+  const renderedValue = formatAiDebugValue(data.value);
+
+  async function copyValue() {
+    let copied = copyWithHiddenTextarea(renderedValue);
+    if (!copied && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(renderedValue);
+      copied = true;
+    }
+    if (copied) {
+      setIsCopied(true);
+    }
   }
 
   return (
@@ -51,18 +87,29 @@ export function AiDebugDialog({ data, closeLabel, onClose }: AiDebugDialogProps)
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">{data.help}</p>
           </div>
-          <button
-            type="button"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
-            onClick={onClose}
-            aria-label={closeLabel}
-          >
-            <X size={16} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+              onClick={() => void copyValue()}
+              aria-label={isCopied ? "Copied" : "Copy"}
+              title={isCopied ? "Copied" : "Copy"}
+            >
+              {isCopied ? <Check size={16} /> : <Copy size={16} />}
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+              onClick={onClose}
+              aria-label={closeLabel}
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
         <div className="overflow-y-auto p-5">
           <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-4 text-xs leading-5 text-slate-50">
-            {formatAiDebugValue(data.value)}
+            {renderedValue}
           </pre>
         </div>
       </div>

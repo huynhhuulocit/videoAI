@@ -1,22 +1,15 @@
 import {
   BarChart3,
   FileText,
-  Film,
-  FolderOpen,
   KeyRound,
-  LayoutDashboard,
-  LayoutTemplate,
   LogOut,
-  Logs,
-  Settings
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import type { PropsWithChildren, ReactNode } from "react";
 import { I18nText } from "../i18n/i18n-text";
 import { logoutAction } from "../../lib/auth/actions";
 import { BackButton } from "../ui/back-button";
-import type { TranslationKey } from "../../lib/i18n/dictionary";
+import { DashboardNav } from "./dashboard-nav";
 
 type DashboardShellProps = PropsWithChildren<{
   role: "user" | "admin";
@@ -25,27 +18,7 @@ type DashboardShellProps = PropsWithChildren<{
   backHref?: string;
 }>;
 
-type NavItem = {
-  href: string;
-  label: TranslationKey;
-  icon: LucideIcon;
-};
-
-const userNav: NavItem[] = [
-  { href: "/dashboard", label: "shell.dashboard", icon: LayoutDashboard },
-  { href: "/projects", label: "shell.projectWorkspace", icon: FolderOpen },
-  { href: "/shots", label: "shell.shots", icon: Film },
-  { href: "/templates", label: "shell.templates", icon: LayoutTemplate }
-];
-
-const adminNav: NavItem[] = [
-  { href: "/admin/ai-config", label: "shell.aiConfig", icon: Settings },
-  { href: "/admin/shot-prompt", label: "shell.shotPrompt", icon: FileText },
-  { href: "/admin/ai-logs", label: "shell.aiLogs", icon: Logs }
-];
-
 export function DashboardShell({ role, title, description, backHref, children }: DashboardShellProps) {
-  const nav = role === "admin" ? adminNav : userNav;
   const fallbackHref = backHref ?? (role === "admin" ? "/admin/ai-config" : "/dashboard");
 
   return (
@@ -57,18 +30,7 @@ export function DashboardShell({ role, title, description, backHref, children }:
           </span>
           VideoAI
         </Link>
-        <nav className="space-y-1">
-          {nav.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <item.icon size={16} />
-              <I18nText id={item.label} />
-            </Link>
-          ))}
-        </nav>
+        <DashboardNav role={role} />
         <div className="absolute bottom-4 left-4 right-4 rounded-lg border border-border bg-muted p-3 text-xs text-muted-foreground">
           <div className="mb-1 flex items-center gap-2 font-medium text-foreground">
             <FileText size={14} />

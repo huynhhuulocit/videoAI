@@ -9,7 +9,7 @@ import {
   type MasterPromptConfig,
   type MasterPromptType
 } from "@videoai/contracts";
-import { CheckCircle2, Loader2, Plus, Save, Star, Trash2 } from "lucide-react";
+import { CheckCircle2, Loader2, Pencil, Plus, Save, Star, Trash2 } from "lucide-react";
 import { useI18n } from "../i18n/language-provider";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -23,10 +23,11 @@ type ApiSuccess<T> = {
   data: T;
 };
 
-const promptTypes = ["scenario", "shots", "scripts"] as const satisfies readonly MasterPromptType[];
+const promptTypes = ["scripts", "scenario", "shots"] as const satisfies readonly MasterPromptType[];
 
 type ShotPromptFormProps = {
   config: MasterPromptConfig;
+  initialType?: MasterPromptType;
 };
 
 function typeTitle(type: MasterPromptType) {
@@ -36,7 +37,7 @@ function typeTitle(type: MasterPromptType) {
   if (type === "shots") {
     return "Shots";
   }
-  return "Scripts";
+  return "Story Content";
 }
 
 function defaultPromptTemplate(type: MasterPromptType) {
@@ -55,14 +56,15 @@ function defaultSelection(config: MasterPromptConfig) {
   ) as Record<MasterPromptType, string>;
 }
 
-export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
+export function ShotPromptForm({ config: initialConfig, initialType = "scripts" }: ShotPromptFormProps) {
   const { t } = useI18n();
   const [config, setConfig] = useState(initialConfig);
-  const [activeType, setActiveType] = useState<MasterPromptType>("scenario");
+  const [activeType, setActiveType] = useState<MasterPromptType>(initialType);
   const [selectedIds, setSelectedIds] = useState<Record<MasterPromptType, string>>(
     defaultSelection(initialConfig),
   );
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [draftContent, setDraftContent] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -107,15 +109,25 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
     return payload.data;
   }
 
-  function selectPrompt(prompt: MasterPrompt) {
+  function changeActiveType(type: MasterPromptType) {
+    setActiveType(type);
+    setIsCreating(false);
+    setIsEditorOpen(false);
+    setStatusMessage("");
+    setErrorMessage("");
+  }
+
+  function openEditor(prompt: MasterPrompt) {
     setSelectedIds((current) => ({ ...current, [activeType]: prompt.id }));
     setIsCreating(false);
+    setIsEditorOpen(true);
     setStatusMessage("");
     setErrorMessage("");
   }
 
   function startCreate() {
     setIsCreating(true);
+    setIsEditorOpen(true);
     setDraftName(`${typeTitle(activeType)} master prompt`);
     setDraftContent(defaultPromptTemplate(activeType));
     setStatusMessage("");
@@ -159,6 +171,7 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
       const payload = (await response.json()) as ApiSuccess<MasterPrompt>;
       await refreshConfig(payload.data.id);
       setIsCreating(false);
+      setIsEditorOpen(true);
       setStatusMessage(t("adminMasterPrompt.saved"));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t("adminMasterPrompt.saveFailed"));
@@ -167,11 +180,11 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
     }
   }
 
-  async function deletePrompt() {
-    if (selectedPrompt.isBuiltIn) {
+  async function deletePrompt(prompt = selectedPrompt) {
+    if (prompt.isBuiltIn) {
       return;
     }
-    if (selectedPrompt.isDefault) {
+    if (prompt.isDefault) {
       setErrorMessage(t("adminMasterPrompt.deleteDefaultBlocked"));
       return;
     }
@@ -182,7 +195,7 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
 
     try {
       const response = await fetch(
-        `${apiBaseUrl}/api/v1/admin/master-prompts/${encodeURIComponent(selectedPrompt.id)}`,
+        `${apiBaseUrl}/api/v1/admin/master-prompts/${encodeURIComponent(prompt.id)}`,
         {
           method: "DELETE",
           headers: { "x-request-id": `web-${Date.now()}` },
@@ -194,6 +207,10 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
       }
 
       await refreshConfig();
+      if (prompt.id === selectedPrompt.id) {
+        setIsEditorOpen(false);
+        setIsCreating(false);
+      }
       setStatusMessage(t("adminMasterPrompt.deleted"));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t("adminMasterPrompt.deleteFailed"));
@@ -202,8 +219,8 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
     }
   }
 
-  async function setDefaultPrompt() {
-    if (selectedPrompt.isBuiltIn || selectedPrompt.isDefault) {
+  async function setDefaultPrompt(prompt = selectedPrompt) {
+    if (prompt.isBuiltIn || prompt.isDefault) {
       return;
     }
 
@@ -213,7 +230,7 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
 
     try {
       const response = await fetch(
-        `${apiBaseUrl}/api/v1/admin/master-prompts/${encodeURIComponent(selectedPrompt.id)}/default`,
+        `${apiBaseUrl}/api/v1/admin/master-prompts/${encodeURIComponent(prompt.id)}/default`,
         {
           method: "POST",
           headers: { "x-request-id": `web-${Date.now()}` },
@@ -235,140 +252,113 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
   }
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-      <div className="space-y-5">
-        <Card title={t("adminMasterPrompt.sections")}>
-          <div className="grid gap-2">
-            {promptTypes.map((type) => {
-              const group = config.groups.find((candidate) => candidate.type === type);
-              const isActive = type === activeType;
-              return (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => {
-                    setActiveType(type);
-                    setIsCreating(false);
-                    setStatusMessage("");
-                    setErrorMessage("");
-                  }}
-                  className={`rounded-md border p-3 text-left transition ${
-                    isActive
-                      ? "border-sky-300 bg-sky-50"
-                      : "border-border bg-white hover:bg-muted"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium">{typeTitle(type)}</span>
-                    <Badge variant="info">{group?.prompts.length ?? 0}</Badge>
-                  </div>
-                  <div className="mt-1 truncate text-xs text-muted-foreground">
-                    {group?.defaultPrompt.name}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </Card>
-
-        <Card title={t("adminMasterPrompt.prompts")}>
-          <div className="space-y-2">
-            {activeGroup.prompts.map((prompt) => (
-              <button
-                key={prompt.id}
-                type="button"
-                onClick={() => selectPrompt(prompt)}
-                className={`w-full rounded-md border p-3 text-left transition ${
-                  selectedPrompt.id === prompt.id && !isCreating
-                    ? "border-sky-300 bg-sky-50"
-                    : "border-border bg-white hover:bg-muted"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate font-medium">{prompt.name}</span>
-                  {prompt.isDefault ? (
-                    <Badge variant="success">{t("adminMasterPrompt.defaultBadge")}</Badge>
-                  ) : null}
-                </div>
-                <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                  {prompt.isBuiltIn ? t("adminMasterPrompt.builtInReadOnly") : prompt.updatedAt}
-                </div>
-              </button>
-            ))}
-            <Button type="button" variant="secondary" className="w-full gap-2" onClick={startCreate}>
-              <Plus size={16} />
-              {t("adminMasterPrompt.newPrompt")}
-            </Button>
-          </div>
-        </Card>
+    <div className="space-y-5">
+      <div className="grid gap-2 rounded-lg border border-border bg-white p-3 md:hidden">
+        <div className="text-sm font-semibold">{t("adminMasterPrompt.menuTitle")}</div>
+        {promptTypes.map((type) => {
+          const group = config.groups.find((candidate) => candidate.type === type);
+          const isActive = type === activeType;
+          return (
+            <button
+              key={type}
+              type="button"
+              onClick={() => changeActiveType(type)}
+              className={`rounded-md border p-3 text-left transition ${
+                isActive
+                  ? "border-sky-300 bg-sky-50"
+                  : "border-border bg-white hover:bg-muted"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">{typeTitle(type)}</span>
+                <Badge variant="info">{group?.prompts.length ?? 0}</Badge>
+              </div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">
+                {group?.defaultPrompt.name}
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       <div className="space-y-5">
         <Card
-          title={isCreating ? t("adminMasterPrompt.newPrompt") : selectedPrompt.name}
+          title={`${typeTitle(activeType)} ${t("adminMasterPrompt.prompts")}`}
           action={
-            selectedPrompt.isDefault && !isCreating ? (
-              <Badge variant="success">{t("adminMasterPrompt.defaultBadge")}</Badge>
-            ) : null
+            <Button type="button" variant="secondary" className="h-9 gap-2 px-3" onClick={startCreate}>
+              <Plus size={16} />
+              {t("adminMasterPrompt.newPrompt")}
+            </Button>
           }
         >
-          <div className="space-y-4">
-            <label className="block text-sm">
-              <span className="font-medium">{t("adminMasterPrompt.name")}</span>
-              <input
-                value={draftName}
-                onChange={(event) => setDraftName(event.target.value)}
-                disabled={selectedPrompt.isBuiltIn && !isCreating}
-                className="mt-2 h-10 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200 disabled:bg-muted disabled:text-muted-foreground"
-              />
-            </label>
-            <MasterPromptField
-              id="adminMasterPromptContent"
-              label={t("adminMasterPrompt.content")}
-              rows={18}
-              value={draftContent}
-              onChange={(event) => setDraftContent(event.target.value)}
-              disabled={selectedPrompt.isBuiltIn && !isCreating}
-              className="min-h-[420px] resize-y"
-            />
-            {selectedPrompt.isBuiltIn && !isCreating ? (
-              <p className="text-sm text-muted-foreground">{t("adminMasterPrompt.builtInReadOnly")}</p>
-            ) : null}
-            <p className="text-sm text-muted-foreground">{t("adminMasterPrompt.freeFormHelp")}</p>
+          <div className="mb-4 text-sm text-muted-foreground">
+            {t("adminMasterPrompt.listHelp")}
+          </div>
+          <div className="space-y-3">
+            {activeGroup.prompts.map((prompt) => (
+              <div
+                key={prompt.id}
+                className={`rounded-md border p-4 transition ${
+                  selectedPrompt.id === prompt.id && !isCreating && isEditorOpen
+                    ? "border-sky-300 bg-sky-50"
+                    : "border-border bg-white hover:bg-muted"
+                }`}
+              >
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{prompt.name}</span>
+                      {prompt.isDefault ? (
+                        <Badge variant="success">{t("adminMasterPrompt.defaultBadge")}</Badge>
+                      ) : null}
+                      {prompt.isBuiltIn ? (
+                        <Badge variant="info">{t("adminMasterPrompt.builtInBadge")}</Badge>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {prompt.isBuiltIn ? t("adminMasterPrompt.builtInReadOnly") : prompt.updatedAt}
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{prompt.content}</p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="h-9 gap-2 px-3"
+                      onClick={() => openEditor(prompt)}
+                    >
+                      <Pencil size={15} />
+                      {t("adminMasterPrompt.edit")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="h-9 gap-2 px-3"
+                      disabled={isSettingDefault || prompt.isBuiltIn || prompt.isDefault}
+                      onClick={() => void setDefaultPrompt(prompt)}
+                    >
+                      {isSettingDefault ? <Loader2 size={15} className="animate-spin" /> : <Star size={15} />}
+                      {t("adminMasterPrompt.setDefault")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={prompt.isBuiltIn || prompt.isDefault ? "secondary" : "destructive"}
+                      className="h-9 gap-2 px-3"
+                      disabled={isDeleting || prompt.isBuiltIn}
+                      onClick={() => void deletePrompt(prompt)}
+                    >
+                      {isDeleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                      {t("adminMasterPrompt.delete")}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </Card>
 
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              className="gap-2"
-              disabled={isSaving || (selectedPrompt.isBuiltIn && !isCreating)}
-              onClick={() => void savePrompt()}
-            >
-              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              {t("adminMasterPrompt.save")}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              className="gap-2"
-              disabled={isSettingDefault || selectedPrompt.isBuiltIn || selectedPrompt.isDefault || isCreating}
-              onClick={() => void setDefaultPrompt()}
-            >
-              {isSettingDefault ? <Loader2 size={16} className="animate-spin" /> : <Star size={16} />}
-              {t("adminMasterPrompt.setDefault")}
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              className="gap-2"
-              disabled={isDeleting || selectedPrompt.isBuiltIn || isCreating}
-              onClick={() => void deletePrompt()}
-            >
-              {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-              {t("adminMasterPrompt.delete")}
-            </Button>
+        {(statusMessage || errorMessage) ? (
+          <div className="space-y-2">
             {statusMessage ? (
               <Badge variant="success">
                 <span className="inline-flex items-center gap-1">
@@ -377,9 +367,85 @@ export function ShotPromptForm({ config: initialConfig }: ShotPromptFormProps) {
                 </span>
               </Badge>
             ) : null}
+            {errorMessage ? <p className="text-sm text-red-600">{errorMessage}</p> : null}
           </div>
-          {errorMessage ? <p className="text-sm text-red-600">{errorMessage}</p> : null}
-        </div>
+        ) : null}
+
+        {isEditorOpen ? (
+          <>
+            <Card
+              title={isCreating ? t("adminMasterPrompt.newPrompt") : selectedPrompt.name}
+              action={
+                selectedPrompt.isDefault && !isCreating ? (
+                  <Badge variant="success">{t("adminMasterPrompt.defaultBadge")}</Badge>
+                ) : null
+              }
+            >
+              <div className="space-y-4">
+                <label className="block text-sm">
+                  <span className="font-medium">{t("adminMasterPrompt.name")}</span>
+                  <input
+                    value={draftName}
+                    onChange={(event) => setDraftName(event.target.value)}
+                    disabled={selectedPrompt.isBuiltIn && !isCreating}
+                    className="mt-2 h-10 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200 disabled:bg-muted disabled:text-muted-foreground"
+                  />
+                </label>
+                <MasterPromptField
+                  id="adminMasterPromptContent"
+                  label={t("adminMasterPrompt.content")}
+                  rows={18}
+                  value={draftContent}
+                  onChange={(event) => setDraftContent(event.target.value)}
+                  disabled={selectedPrompt.isBuiltIn && !isCreating}
+                  className="min-h-[420px] resize-y"
+                />
+                {selectedPrompt.isBuiltIn && !isCreating ? (
+                  <p className="text-sm text-muted-foreground">{t("adminMasterPrompt.builtInReadOnly")}</p>
+                ) : null}
+                <p className="text-sm text-muted-foreground">{t("adminMasterPrompt.freeFormHelp")}</p>
+              </div>
+            </Card>
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  className="gap-2"
+                  disabled={isSaving || (selectedPrompt.isBuiltIn && !isCreating)}
+                  onClick={() => void savePrompt()}
+                >
+                  {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  {t("adminMasterPrompt.save")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="gap-2"
+                  disabled={isSettingDefault || selectedPrompt.isBuiltIn || selectedPrompt.isDefault || isCreating}
+                  onClick={() => void setDefaultPrompt()}
+                >
+                  {isSettingDefault ? <Loader2 size={16} className="animate-spin" /> : <Star size={16} />}
+                  {t("adminMasterPrompt.setDefault")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="gap-2"
+                  disabled={isDeleting || selectedPrompt.isBuiltIn || isCreating}
+                  onClick={() => void deletePrompt()}
+                >
+                  {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                  {t("adminMasterPrompt.delete")}
+                </Button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-muted/40 p-6 text-sm text-muted-foreground">
+            {t("adminMasterPrompt.selectPromptHelp")}
+          </div>
+        )}
       </div>
     </div>
   );

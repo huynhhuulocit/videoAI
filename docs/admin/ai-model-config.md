@@ -32,9 +32,9 @@ Yêu cầu:
 - ChatGPT Plus là quyền dùng giao diện ChatGPT, không thay thế OpenAI API key cho app. Khi dùng provider `chatgpt`/`openai`, admin vẫn cần lưu OpenAI API key hoặc cấu hình `OPENAI_API_KEY`.
 - Khi user gọi `Generate`, hệ thống dùng provider/model đang được admin cấu hình.
 - Khi user gọi `Generate shots`, hệ thống dùng provider/model prompt đang được admin cấu hình và đọc key theo thứ tự: key đã lưu, sau đó fallback env.
-- Khi user bấm `Generate scenario with AI` trong trang thêm/sửa Scenario hoặc bấm `Phân tích kịch bản` trong project workspace, hệ thống dùng default `Scenario` master prompt do admin quản lý; user có thể sửa tạm master prompt cho một lần gọi AI. Backend luôn nối thêm runtime context có cấu trúc sau master prompt.
-- Khi user gọi `Generate shots`, hệ thống dùng default `Shots` master prompt do admin quản lý, nối thêm story, attribute và duration context có cấu trúc, rồi gọi provider/model prompt đang active. Provider contract luôn yêu cầu mỗi shot có `Start state`, `End state` và `Dialogue` để UI có thể hiển thị textarea lời thoại riêng.
-- Khi user bấm `Generate` trong Script Flow để tạo prompt/content, hệ thống dùng default `Scripts` master prompt do admin quản lý và nối thêm input, media, shot selection và scenario selection context có cấu trúc.
+- Khi user bấm `Generate scenario with AI` trong trang thêm/sửa Scenario hoặc bấm `Phân tích kịch bản` trong project workspace, hệ thống dùng default `Scenario` master prompt do admin quản lý; user có thể sửa tạm master prompt cho một lần gọi AI. Backend chỉ replace placeholder có trong prompt và không tự nối runtime context ẩn.
+- Khi user gọi `Generate shots`, hệ thống dùng default `Shots` master prompt do admin quản lý, replace placeholder có trong prompt, rồi gọi provider/model prompt đang active. Provider schema/normalization vẫn yêu cầu mỗi shot có `Start state`, `End state` và `Dialogue` để UI có thể hiển thị textarea lời thoại riêng.
+- Khi user bấm `Generate Story Content` trong Script Flow hoặc One Click, hệ thống dùng default `Story Content` master prompt do admin quản lý và chỉ đưa input, media, shot selection hoặc scenario selection vào prompt nếu prompt có placeholder tương ứng. API vẫn dùng type key `scripts` cho nhóm này để tương thích dữ liệu hiện tại.
 - Khi user bấm `Tạo Prompt` trong từng shot, hệ thống dùng prompt composer tương thích legacy để render prompt cục bộ từ source, thông tin shot, lời thoại, attribute, kịch bản đã chọn và media. Hành động này không gọi AI.
 - Nếu provider/model chưa được cấu hình, hệ thống phải hiển thị lỗi cấu hình thiếu hoặc dùng default an toàn được định nghĩa trong FSD/TSD.
 - Nếu thiếu key môi trường của provider đang active, job `shot_generation` phải failed với `AI_CONFIG_MISSING` và không được tạo dữ liệu shot giả.
@@ -46,7 +46,9 @@ Admin có thể mở menu `Master Prompt` trong dashboard admin để quản lý
 
 - `Scenario`: workflow `template_generation` để tạo kịch bản/scenario từ video idea và workflow `template_selection` để phân tích kịch bản và chọn option phù hợp.
 - `Shots`: workflow `shot_generation` và API `/shots` để tạo shot plan.
-- `Scripts`: Script Flow prompt/content generation.
+- `Story Content` (`scripts` type key): transforms the user's rough source text into richer Story Content for Scenario and Shots steps.
+
+Admin UI renders these groups as child menu items under `Master Prompt`. Clicking a child item navigates to a dedicated route and switches the page to a list-only CRUD view for that prompt type; the editor opens only after `New prompt` or `Edit` is selected. Canonical child routes are `/admin/shot-prompt/story-content`, `/admin/shot-prompt/scenario` and `/admin/shot-prompt/shots`; `/admin/shot-prompt` remains a compatibility redirect.
 
 Yêu cầu:
 
@@ -54,8 +56,8 @@ Yêu cầu:
 - Admin có thể tạo, sửa, archive/xóa và `Set default` từng prompt trong mỗi nhóm.
 - Không được xóa prompt đang là default; admin phải chọn prompt khác làm default trước.
 - Master prompt vẫn giữ format placeholder để admin dễ đọc và tái sử dụng, nhưng placeholder không bắt buộc khi lưu.
-- Placeholder khuyến nghị theo nhóm: `Scenario` dùng `{story}`, `{attributes}`; `Shots` dùng `{story}`, `{attributes}`, `{durationSeconds}`; `Scripts` dùng `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`.
-- Backend replace placeholder nếu có, rồi luôn nối runtime context có cấu trúc sau master prompt được chọn để provider request không phụ thuộc placeholder.
+- Placeholder khuyến nghị theo nhóm: `Story Content` dùng `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `Scenario` dùng `{story}`, `{attributes}`; `Shots` dùng `{story}`, `{attributes}`, `{durationSeconds}`.
+- Backend replace placeholder nếu có và không tự nối runtime context ẩn sau master prompt. Runtime data chỉ xuất hiện trong prompt khi prompt có placeholder tương ứng.
 - Nếu chưa có prompt trong bảng `config.master_prompts`, backend dùng built-in default read-only cho nhóm tương ứng. Các cột prompt legacy trong `config.ai_site_configs` vẫn được đọc làm fallback trong giai đoạn migration.
 - User page `/shots` chỉ hiển thị tóm tắt prompt cố định, không cho user chỉnh prompt site-wide.
 
@@ -79,6 +81,7 @@ Yêu cầu:
 - Admin có thể nhập bất kỳ model tạo video nào, kèm chip gợi ý cho model phổ biến.
 - Admin có thể dùng `Test connect`; provider có adapter thì test live, provider chưa có adapter thì xác nhận key source.
 - Khi user click `Tạo video`, hệ thống dùng provider/model/API key đang được admin cấu hình.
+- Khi user click `Create video` trong từng shot card của project workspace, API gửi prompt cục bộ đã compose cho shot đó tới provider/model video đang active, lưu raw request/response đã redact và hiển thị lỗi chi tiết nếu provider/key/model thất bại. Không được trả fake success/fallback video data.
 - Nếu thiếu API key hoặc model, hệ thống phải chặn tạo video và hiển thị lỗi cấu hình rõ ràng.
 
 ## 4. Cấu hình chế độ user

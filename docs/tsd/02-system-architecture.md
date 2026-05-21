@@ -218,6 +218,7 @@ Initial deployment:
 - One Redis instance.
 - One shared storage volume or mounted local storage.
 - The current single-tester VPS deployment guide lives in `deploy/README.md`. It uses Caddy, Next.js, the API Gateway, PostgreSQL and Redis on one server, and should be treated as a pragmatic test deployment rather than the final scaled topology.
+- For short customer tests from a developer machine, `deploy/cloudflare-tunnel/README.md` documents a Cloudflare Tunnel mode that publishes the local web app and API through one protected hostname without opening local inbound ports.
 
 Production direction:
 

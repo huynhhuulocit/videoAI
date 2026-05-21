@@ -122,7 +122,7 @@ Fields:
 - `id`
 - `project_id`
 - `owner_user_id`
-- `source_type`: `script_flow`, `product_flow`
+- `source_type`: `script_flow`, `product_flow`, `story_content`
 - `input_text`
 - `product_url`
 - `media_asset_ids`
@@ -139,6 +139,11 @@ Use JSONB for:
 - Provider-specific metadata.
 - Parsed product attributes.
 - Media analysis summary.
+
+Rules:
+
+- `script_flow` rows store AI-generated Story Content from the provider workflow.
+- `story_content` rows store manually edited One Click Story Content without calling a provider; `input_text` and `generated_prompt` contain the same persisted user text so later One Click steps can reload the database-backed Story Content.
 
 ### 3.5. `content.scripts`
 
@@ -169,7 +174,7 @@ Fields:
 - `description`
 - `idea`
 - `attributes`: JSONB list of attribute/option definitions
-- `is_default`: user-level default scenario shown first in lists and project selectors
+- `is_default`: legacy compatibility flag; user-facing Scenario default selection is removed
 - `status`: `active`, `archived`
 - `created_at`
 - `updated_at`
@@ -185,8 +190,8 @@ JSON shape:
     "options": [
       {
         "id": "mood-warm",
-        "label": "Warm",
-        "value": "Warm"
+        "name": "Warm",
+        "description": "Warm and friendly tone."
       }
     ]
   }
@@ -198,9 +203,11 @@ Rules:
 - Template JSON is stored in PostgreSQL and must not be source-code sample data.
 - User can add attributes and options manually.
 - AI-generated template drafts use the same JSON shape.
+- Scenario editor JSON uses compact option `name`; the API stores it internally as option `label`/`value` for existing prompt-processing compatibility.
+- Attribute and option `description` values are user-facing helper text and stay synchronized between the JSON textarea and visual editor fields.
 - A project generation request can select multiple options per attribute.
 - Template selections used for prompt generation should be persisted in AI request payload and prompt provider metadata.
-- Exactly one active template per user may be marked `is_default`; if the current default is archived, the newest remaining active template becomes default.
+- Scenario lists are ordered by latest update. One Click Step 2 can save an AI-analyzed scenario using the One Click setup name and description.
 
 ### 3.5.2. `content.video_shot_plans`
 
@@ -212,11 +219,12 @@ Fields:
 - `owner_user_id`
 - `project_id`: nullable legacy/source project reference; user-level shot plans use `null`
 - `name`
+- `description`: optional user-facing description; One Click Step 3 stores the One Click setup description here
 - `source_text`
 - `duration_seconds`: default project shot duration, 1-8 seconds
 - `attributes`: JSONB list of plan-level attributes applied to every shot in the plan
 - `shots`: JSONB list of shot definitions
-- `is_default`: user-level default script/shot plan shown first in lists and project selectors
+- `is_default`: legacy compatibility flag; user-facing Scripts default selection is removed
 - `status`: `active`, `archived`
 - `created_at`
 - `updated_at`
@@ -276,7 +284,7 @@ Rules:
 
 - Only one active config should exist at a time.
 - `shot_generation_prompt` and `template_selection_prompt` remain fallback/read compatibility columns during migration to `config.master_prompts`.
-- Runtime master prompts keep a recommended placeholder format, but placeholder replacement is optional compatibility; backend appends structured runtime context after the selected prompt.
+- Runtime master prompts keep a recommended placeholder format, but placeholder replacement is optional compatibility; backend does not append hidden runtime context to the selected prompt.
 - Config updates should create audit records.
 
 ### 3.7. `config.master_prompts`
@@ -307,7 +315,7 @@ Rules:
 - Deleting/archiving the current default is blocked until another active prompt of the same type is set as default.
 - If no active prompt exists for a type, runtime uses the built-in default read-only prompt; legacy `ai_site_configs` prompt columns may be used as fallback during migration.
 - Prompt content is required but placeholders are optional.
-- Recommended placeholders by type: `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{durationSeconds}`; `scripts` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{durationSeconds}`.
 
 ### 3.8. `config.ai_provider_keys`
 

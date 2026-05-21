@@ -1,0 +1,8 @@
+.env
+generated/
+*.log
+*.pem
+*.json
+cert.pem
+credentials.json
+.cloudflared/

@@ -28,6 +28,10 @@ services:
       API_GATEWAY_URL: http://api:4000
       NEXTAUTH_URL: ${PUBLIC_WEB_ORIGIN}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      SITE_GATE_ENABLED: ${SITE_GATE_ENABLED:-false}
+      SITE_GATE_USERNAME: ${SITE_GATE_USERNAME:-videoai}
+      SITE_GATE_PASSWORD: ${SITE_GATE_PASSWORD:-}
+      SITE_GATE_SECRET: ${SITE_GATE_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

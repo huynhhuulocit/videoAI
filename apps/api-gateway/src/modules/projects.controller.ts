@@ -12,6 +12,7 @@ import {
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
   GeneratePromptRequestSchema,
   GenerateShotsRequestSchema,
+  SaveProjectStoryContentRequestSchema,
   SaveProjectTemplateSelectionRequestSchema,
   ShotSelectionSchema,
   TemplateAttributeSchema,
@@ -333,6 +334,7 @@ export class ProjectsController {
       where: { id: shotPlanId },
       data: {
         ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.durationSeconds !== undefined ? { durationSeconds: body.durationSeconds } : {}),
         ...(body.attributes !== undefined ? { attributes: this.toJson(body.attributes) } : {}),
         ...(body.shots !== undefined ? { shots: this.toJson(body.shots) } : {})
@@ -359,6 +361,69 @@ export class ProjectsController {
   async generatePrompt(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
     const body = GeneratePromptRequestSchema.parse(rawBody);
     return ok(await this.createJob("prompt_generation", projectId, body));
+  }
+
+  @Get(":projectId/story-content")
+  async getStoryContent(@Param("projectId") projectId: string) {
+    const project = await prisma.projectRecord.findFirst({
+      where: {
+        id: projectId,
+        ownerUserId: defaultUserId,
+        status: "active"
+      }
+    });
+    if (!project) {
+      return ok({ storyContent: "" });
+    }
+
+    const prompt = await prisma.promptRecord.findFirst({
+      where: {
+        projectId,
+        ownerUserId: defaultUserId,
+        sourceType: { in: ["script_flow", "story_content"] },
+        status: "succeeded"
+      },
+      orderBy: { updatedAt: "desc" }
+    });
+
+    return ok({ storyContent: prompt?.generatedPrompt ?? "" });
+  }
+
+  @Patch(":projectId/story-content")
+  async saveStoryContent(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+    const body = SaveProjectStoryContentRequestSchema.parse(rawBody);
+    const project = await prisma.projectRecord.findFirst({
+      where: {
+        id: projectId,
+        ownerUserId: defaultUserId,
+        status: "active"
+      }
+    });
+    if (!project) {
+      return ok({ saved: false, storyContent: body.storyContent });
+    }
+
+    const config = await getActiveAiConfig();
+    await prisma.promptRecord.create({
+      data: {
+        id: `story_content_${Date.now()}`,
+        projectId,
+        ownerUserId: defaultUserId,
+        sourceType: "story_content",
+        inputText: body.storyContent,
+        productUrl: null,
+        mediaAssetIds: this.toJson([]),
+        generatedPrompt: body.storyContent,
+        finalPrompt: null,
+        provider: config.promptProvider,
+        model: config.promptModel,
+        status: "succeeded",
+        mediaAnalysisSummary: this.toJson([]),
+        providerMetadata: this.toJson({ savedFrom: "one_click_step_1" })
+      }
+    });
+
+    return ok({ saved: true, storyContent: body.storyContent });
   }
 
   @Post(":projectId/products/analyze")
@@ -601,23 +666,18 @@ export class ProjectsController {
       if (type === "shot_generation") {
         const resultRecord = this.toRecord(result);
         const shotPlan = this.toRecord(resultRecord.shotPlan);
-        const activeShotPlanCount = await tx.videoShotPlanRecord.count({
-          where: {
-            ownerUserId: defaultUserId,
-            status: "active"
-          }
-        });
         await tx.videoShotPlanRecord.create({
           data: {
             id: String(shotPlan.id),
             projectId,
             ownerUserId: defaultUserId,
             name: String(shotPlan.name),
+            description: shotPlan.description ? String(shotPlan.description) : null,
             sourceText: String(shotPlan.sourceText),
             durationSeconds: Number(shotPlan.durationSeconds),
             attributes: this.toJson(shotPlan.attributes ?? []),
             shots: this.toJson(shotPlan.shots ?? []),
-            isDefault: activeShotPlanCount === 0,
+            isDefault: false,
             status: "active"
           }
         });
@@ -699,7 +759,16 @@ export class ProjectsController {
       const inputText = String(payload.inputText ?? "");
       const templateId = String(payload.templateId ?? "");
       const masterPrompt = payload.masterPrompt ? String(payload.masterPrompt) : undefined;
-      return this.createTemplateSelectionWithAi(projectId, inputText, templateId, config, masterPrompt);
+      return this.createTemplateSelectionWithAi(
+        projectId,
+        inputText,
+        templateId,
+        config,
+        masterPrompt,
+        Boolean(payload.saveAsTemplate),
+        payload.templateName ? String(payload.templateName) : undefined,
+        payload.templateDescription ? String(payload.templateDescription) : undefined
+      );
     }
 
     if (type === "prompt_generation") {
@@ -746,16 +815,170 @@ export class ProjectsController {
     }
 
     if (type === "video_generation") {
+      const finalPrompt = String(payload.finalPrompt ?? "").trim();
+      if (!finalPrompt) {
+        throw new AiJobError(
+          "VALIDATION_ERROR",
+          "Final prompt is required before creating video.",
+          { provider: config.videoProvider, model: config.videoModel }
+        );
+      }
+      const rawRequest = this.buildVideoProviderRequest(
+        config.videoProvider,
+        config.videoModel,
+        finalPrompt
+      );
+      const rawResponse = await this.callVideoProvider(
+        config.videoProvider,
+        config.videoModel,
+        rawRequest
+      );
       return {
         videoGenerationId: videoGenerationId ?? `video_gen_${Date.now()}`,
         projectId,
         status: "succeeded",
         provider: config.videoProvider,
-        model: config.videoModel
+        model: config.videoModel,
+        rawRequest,
+        rawResponse
       };
     }
 
     return { projectId, input: this.toRecord(input) };
+  }
+
+  private buildVideoProviderRequest(provider: Provider, model: string, finalPrompt: string): ProviderRequest {
+    if (this.isGeminiVideoProvider(provider)) {
+      return {
+        provider,
+        model,
+        method: "POST",
+        url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": "[REDACTED]"
+        },
+        body: {
+          contents: [
+            {
+              parts: [{ text: finalPrompt }]
+            }
+          ]
+        }
+      };
+    }
+
+    if (this.isOpenAiProvider(provider)) {
+      return {
+        provider,
+        model,
+        method: "POST",
+        url: "https://api.openai.com/v1/responses",
+        headers: {
+          authorization: "Bearer [REDACTED]",
+          "content-type": "application/json"
+        },
+        body: {
+          model,
+          input: finalPrompt
+        }
+      };
+    }
+
+    throw new AiJobError(
+      "AI_PROVIDER_FAILED",
+      `Provider ${provider} cannot create video because no VideoAI adapter is configured for it.`,
+      { provider, model }
+    );
+  }
+
+  private async callVideoProvider(provider: Provider, model: string, rawRequest: ProviderRequest) {
+    if (this.isGeminiVideoProvider(provider)) {
+      return this.callGeminiForVideo(provider, model, rawRequest);
+    }
+
+    if (this.isOpenAiProvider(provider)) {
+      return this.callOpenAiForVideo(provider, model, rawRequest);
+    }
+
+    throw new AiJobError(
+      "AI_PROVIDER_FAILED",
+      `Provider ${provider} cannot create video because no VideoAI adapter is configured for it.`,
+      { provider, model },
+      rawRequest
+    );
+  }
+
+  private async callGeminiForVideo(provider: Provider, model: string, rawRequest: ProviderRequest) {
+    const resolvedKey = await resolveProviderApiKey(provider);
+    const apiKey = resolvedKey.apiKey;
+    if (!apiKey) {
+      throw new AiJobError(
+        "AI_CONFIG_MISSING",
+        `Missing API key for ${provider} video generation. Save a provider key or set ${resolvedKey.envName}.`,
+        { provider, model, env: resolvedKey.envName },
+        rawRequest
+      );
+    }
+
+    const response = await fetch(rawRequest.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      body: JSON.stringify(rawRequest.body)
+    });
+
+    const providerPayload = await this.readProviderPayload(response);
+    if (!response.ok) {
+      throw new AiJobError(
+        response.status === 429 ? "AI_RATE_LIMITED" : "AI_PROVIDER_FAILED",
+        response.status === 429
+          ? `${provider} video generation is rate limited or out of quota (status ${response.status}).`
+          : `${provider} video generation failed with status ${response.status}.`,
+        { provider, model, status: response.status },
+        providerPayload
+      );
+    }
+
+    return providerPayload;
+  }
+
+  private async callOpenAiForVideo(provider: Provider, model: string, rawRequest: ProviderRequest) {
+    const resolvedKey = await resolveProviderApiKey(provider);
+    const apiKey = resolvedKey.apiKey;
+    if (!apiKey) {
+      throw new AiJobError(
+        "AI_CONFIG_MISSING",
+        `Missing API key for ${provider} video generation. Save a provider key or set ${resolvedKey.envName}.`,
+        { provider, model, env: resolvedKey.envName },
+        rawRequest
+      );
+    }
+
+    const response = await fetch(rawRequest.url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(rawRequest.body)
+    });
+
+    const providerPayload = await this.readProviderPayload(response);
+    if (!response.ok) {
+      throw new AiJobError(
+        response.status === 429 ? "AI_RATE_LIMITED" : "AI_PROVIDER_FAILED",
+        response.status === 429
+          ? `ChatGPT video generation is rate limited or out of quota (status ${response.status}).`
+          : `ChatGPT video generation failed with status ${response.status}.`,
+        { provider, model, status: response.status },
+        providerPayload
+      );
+    }
+
+    return providerPayload;
   }
 
   private async createTemplateSelectionWithAi(
@@ -763,7 +986,10 @@ export class ProjectsController {
     inputText: string,
     templateId: string,
     config: AiConfig,
-    masterPrompt?: string
+    masterPrompt?: string,
+    saveAsTemplate?: boolean,
+    templateNameOverride?: string,
+    templateDescriptionOverride?: string
   ): Promise<TemplateSelectionAnalysisResult> {
     const template = await prisma.videoTemplateRecord.findFirst({
       where: {
@@ -791,11 +1017,43 @@ export class ProjectsController {
     );
     const rawRequest = this.buildTemplateSelectionProviderRequest(provider, model, prompt);
     const rawResponse = await this.callTemplateSelectionProvider(provider, model, rawRequest);
-    const templateSelection = this.normalizeTemplateSelection(rawResponse, {
+    let templateSelection = this.normalizeTemplateSelection(rawResponse, {
       templateId: template.id,
       templateName: template.name,
       attributes
     });
+
+    if (saveAsTemplate) {
+      const project = await prisma.projectRecord.findFirst({
+        where: {
+          id: projectId,
+          ownerUserId: defaultUserId,
+          status: "active"
+        }
+      });
+      const name = this.cleanText(templateNameOverride, project?.name ?? template.name).slice(0, 120);
+      const description = this.cleanText(
+        templateDescriptionOverride,
+        project?.description ?? template.description ?? ""
+      ).slice(0, 500);
+      const savedTemplate = await prisma.videoTemplateRecord.create({
+        data: {
+          id: `template_${Date.now()}`,
+          ownerUserId: defaultUserId,
+          name,
+          description: description || null,
+          idea: inputText,
+          attributes: this.toJson(templateSelection.attributes),
+          isDefault: false,
+          status: "active"
+        }
+      });
+      templateSelection = {
+        ...templateSelection,
+        templateId: savedTemplate.id,
+        templateName: savedTemplate.name
+      };
+    }
 
     return {
       projectId,
@@ -832,23 +1090,16 @@ export class ProjectsController {
       null,
       2
     );
+    const promptTemplate = masterPrompt.trim() || DEFAULT_TEMPLATE_SELECTION_PROMPT;
     const renderedPrompt = this.renderOptionalPromptPlaceholders(
-      masterPrompt.trim() || DEFAULT_TEMPLATE_SELECTION_PROMPT,
+      promptTemplate,
       {
         story: inputText,
         attributes: attributeCatalogText
       }
     );
 
-    return [
-      renderedPrompt,
-      "",
-      "Scenario catalog:",
-      attributeCatalogText,
-      "",
-      "User story/script:",
-      inputText
-    ].join("\n");
+    return renderedPrompt;
   }
 
   private buildScriptGenerationPrompt(
@@ -871,26 +1122,7 @@ export class ProjectsController {
       shotSelection,
       scenarioSelection
     });
-
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      "User source text:",
-      inputText,
-      "",
-      "Reference media:",
-      mediaSummary,
-      "",
-      "Shot selection:",
-      shotSelection,
-      "",
-      "Scenario selection:",
-      scenarioSelection,
-      "",
-      "Output format:",
-      "Return readable sections with concise bullets for direction, visual style, and script/prompt content."
-    ].join("\n");
+    return renderedPrompt;
   }
 
   private async createStoryContentWithAi(
@@ -1447,6 +1679,10 @@ export class ProjectsController {
     return provider === "gemini" || provider === "google";
   }
 
+  private isGeminiVideoProvider(provider: Provider) {
+    return this.isGeminiProvider(provider) || provider === "veo";
+  }
+
   private isOpenAiProvider(provider: Provider) {
     return provider === "chatgpt" || provider === "openai";
   }
@@ -1461,62 +1697,16 @@ export class ProjectsController {
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
       .map((attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`)
       .join("\n") || "none=No extra plan-level attributes provided;";
+    const masterPrompt = configuredPrompt?.trim() || DEFAULT_SHOT_GENERATION_PROMPT;
     const renderedPrompt = this.renderOptionalPromptPlaceholders(
-      configuredPrompt?.trim() || DEFAULT_SHOT_GENERATION_PROMPT,
+      masterPrompt,
       {
         story: sourceText,
         attributes: attributeText,
         durationSeconds: String(durationSeconds)
       }
     );
-
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      "Source content:",
-      sourceText,
-      "",
-      "Shot plan attributes to apply to the whole plan in compact format attribute=option1,option2;:",
-      attributeText,
-      "",
-      `Target seconds per shot: ${durationSeconds}`,
-      "",
-      "Provider output contract:",
-      "- Every shot must have attributes named exactly Start state, End state, and Dialogue.",
-      "- The Start state of shot 2+ must continue from the previous shot's End state.",
-      "- Use the last-state / end-state principle so the video can be generated as continuous short clips.",
-      "- Dialogue should be short, natural spoken dialogue, narration, or voiceover for that exact shot.",
-      `- Each shot duration must be between 1 and ${durationSeconds} seconds, never more than 8 seconds.`,
-      "- Keep visuals concrete, filmable, emotionally clear, and free from abrupt continuity jumps.",
-      "- Return only strict JSON. Do not include markdown, comments, or prose outside JSON.",
-      "",
-      "Required JSON shape:",
-      JSON.stringify(
-        {
-          name: "Shot plan name",
-          durationSeconds,
-          shots: [
-            {
-              title: "Shot 1: Hook",
-              description: "Filmable description of the moment.",
-              durationSeconds,
-              attributes: [
-                { name: "Start state", value: "How the shot begins." },
-                { name: "End state", value: "How the shot ends." },
-                { name: "Dialogue", value: "Short spoken line or voiceover for this shot." },
-                { name: "Camera", value: "Camera movement and framing." },
-                { name: "Visual", value: "Lighting, composition, production details." },
-                { name: "Action", value: "Primary action in the shot." },
-                { name: "Transition", value: "How this shot connects to the next one." }
-              ]
-            }
-          ]
-        },
-        null,
-        2
-      ),
-    ].join("\n");
+    return renderedPrompt;
   }
 
   private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {

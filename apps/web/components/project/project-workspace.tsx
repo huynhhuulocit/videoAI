@@ -24,6 +24,7 @@ import {
   DEFAULT_SHOT_GENERATION_PROMPT,
   DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
+  TemplateAttributeSchema,
 } from "@videoai/contracts";
 import {
   AlertCircle,
@@ -47,7 +48,7 @@ import {
   X,
 } from "lucide-react";
 import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
+import { Button, LinkButton } from "../ui/button";
 import { Card } from "../ui/card";
 import { MasterPromptField } from "../ui/master-prompt-field";
 import { TextareaWithCounter } from "../ui/textarea-with-counter";
@@ -89,7 +90,10 @@ type MediaItem = {
 
 type ProjectWorkspaceProps = {
   projectId: string;
+  projectName?: string | undefined;
+  projectDescription?: string | null | undefined;
   flowType: ProjectFlow;
+  workspaceMode?: "project" | "one-click";
   savedTemplateSelection?: TemplateSelection | null;
   defaultPrompt: string;
   defaultProductUrl: string;
@@ -123,6 +127,16 @@ type ScriptResult = {
   finalPrompt: string;
 };
 
+type VideoGenerationResult = {
+  videoGenerationId: string;
+  projectId: string;
+  status: string;
+  provider: string;
+  model: string;
+  rawRequest?: unknown;
+  rawResponse?: unknown;
+};
+
 type ApiSuccess<T> = {
   data: T;
 };
@@ -136,6 +150,15 @@ type RawDataModalState = {
   title: string;
   help: string;
   value: unknown;
+};
+
+type ProjectStoryContentResponse = {
+  storyContent: string;
+};
+
+type SaveProjectStoryContentResponse = {
+  saved: boolean;
+  storyContent: string;
 };
 
 class JobFailureError extends Error {
@@ -323,6 +346,17 @@ function formatStoryGenerationError(error: unknown, t: Translate) {
 
 function formatShotGenerationError(error: unknown, t: Translate) {
   const fallbackLabel = t("workspace.shotsGenerateFailed");
+  if (error instanceof JobFailureError) {
+    return formatJobFailureMessage(error.job, fallbackLabel, t);
+  }
+  if (error instanceof Error) {
+    return [fallbackLabel, error.message].join("\n");
+  }
+  return fallbackLabel;
+}
+
+function formatVideoGenerationError(error: unknown, t: Translate) {
+  const fallbackLabel = t("workspace.shotVideoFailed");
   if (error instanceof JobFailureError) {
     return formatJobFailureMessage(error.job, fallbackLabel, t);
   }
@@ -764,6 +798,138 @@ function createLocalShotAttribute(): VideoShotAttribute {
   };
 }
 
+function toPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readPlainString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function formatShotPlanResultText(shotPlan: VideoShotPlan) {
+  return JSON.stringify(
+    {
+      name: shotPlan.name,
+      ...(shotPlan.description ? { description: shotPlan.description } : {}),
+      durationSeconds: shotPlan.durationSeconds,
+      attributes: shotPlan.attributes,
+      shots: shotPlan.shots.map((shot) => ({
+        id: shot.id,
+        title: shot.title,
+        description: shot.description,
+        durationSeconds: shot.durationSeconds,
+        attributes: shot.attributes,
+        mediaIds: shot.mediaIds ?? [],
+      })),
+    },
+    null,
+    2,
+  );
+}
+
+function parseShotResultAttributes(value: unknown): VideoShotAttribute[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index) => {
+      const record = toPlainRecord(item);
+      const name = readPlainString(record.name);
+      const attributeValue = readPlainString(record.value);
+      if (!name || !attributeValue) {
+        return null;
+      }
+
+      return {
+        id:
+          readPlainString(record.id) ||
+          `attr_json_${Date.now()}_${index + 1}`,
+        name,
+        value: attributeValue,
+      };
+    })
+    .filter((attribute): attribute is VideoShotAttribute =>
+      Boolean(attribute),
+    );
+}
+
+function parseShotResultShots(value: unknown, fallbackDurationSeconds: number) {
+  if (!Array.isArray(value)) {
+    throw new Error("Shots result JSON must include a shots array.");
+  }
+
+  const shots = value
+    .map((item, index) => {
+      const record = toPlainRecord(item);
+      const title = readPlainString(record.title);
+      const description = readPlainString(record.description);
+      if (!title || !description) {
+        return null;
+      }
+
+      const rawMediaIds = Array.isArray(record.mediaIds) ? record.mediaIds : [];
+      return {
+        id:
+          readPlainString(record.id) ||
+          `shot_json_${Date.now()}_${index + 1}`,
+        title,
+        description,
+        durationSeconds: clampShotDuration(
+          Number(record.durationSeconds ?? fallbackDurationSeconds),
+        ),
+        attributes: parseShotResultAttributes(record.attributes),
+        mediaIds: rawMediaIds
+          .map((mediaId) => readPlainString(mediaId))
+          .filter(Boolean),
+      };
+    })
+    .filter((shot): shot is VideoShot => Boolean(shot));
+
+  if (shots.length === 0) {
+    throw new Error(
+      "Shots result JSON must include at least one shot with title and description.",
+    );
+  }
+
+  return shots;
+}
+
+function parseShotPlanResultText(
+  value: string,
+  currentShotPlan: VideoShotPlan,
+  fallbackDurationSeconds: number,
+): VideoShotPlan {
+  const parsed = JSON.parse(value) as unknown;
+  const root = Array.isArray(parsed) ? { shots: parsed } : toPlainRecord(parsed);
+  const shotPlanRoot = toPlainRecord(root.shotPlan);
+  const resultRoot = Object.keys(shotPlanRoot).length > 0 ? shotPlanRoot : root;
+  const durationSeconds = clampShotDuration(
+    Number(resultRoot.durationSeconds ?? fallbackDurationSeconds),
+  );
+  const shots =
+    resultRoot.shots === undefined
+      ? currentShotPlan.shots
+      : parseShotResultShots(resultRoot.shots, durationSeconds);
+
+  return {
+    ...currentShotPlan,
+    name: readPlainString(resultRoot.name) || currentShotPlan.name,
+    description:
+      resultRoot.description === undefined
+        ? currentShotPlan.description
+        : readPlainString(resultRoot.description) || undefined,
+    durationSeconds,
+    attributes:
+      resultRoot.attributes === undefined
+        ? currentShotPlan.attributes
+        : parseShotResultAttributes(resultRoot.attributes),
+    shots,
+  };
+}
+
 function isDialogueAttribute(attribute: VideoShotAttribute) {
   return attribute.name.trim().toLowerCase() === "dialogue";
 }
@@ -807,22 +973,353 @@ function renderPromptTemplate(
   );
 }
 
+function makeScenarioEditorId(prefix: string) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function normalizeScenarioIdentifier(value: string, fallback: string) {
+  const normalized = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return normalized || fallback;
+}
+
+function humanizeScenarioKey(value: string) {
+  return value
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function splitUnescapedScenarioText(value: string, separator: string) {
+  const parts: string[] = [];
+  let current = "";
+  let escaped = false;
+
+  for (const character of value) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (character === separator) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+
+    current += character;
+  }
+
+  parts.push(current);
+  return parts;
+}
+
+function findUnescapedScenarioText(value: string, target: string) {
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (character === target) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function splitScenarioDetailParts(value: string) {
+  return splitUnescapedScenarioText(value, "|").map((part) => part.trim());
+}
+
+function joinScenarioDetailDescription(parts: string[]) {
+  return parts.filter(Boolean).join(" - ");
+}
+
+function optionFromScenarioLabel(label: string): ScenarioOption {
+  return {
+    id: makeScenarioEditorId("option"),
+    label,
+    value: label,
+  };
+}
+
+function formatScenarioAttributesText(attributes: ScenarioAttribute[]) {
+  return JSON.stringify(
+    {
+      attributes: attributes.map((attribute) => {
+        const attributeDetails = readScenarioHelperDetails(attribute.description);
+
+        return {
+          id: attribute.id,
+          name: attribute.name,
+          translate: attributeDetails.translate,
+          description: attributeDetails.description,
+          options: attribute.options.map((option) => {
+            const optionDetails = readScenarioHelperDetails(option.description);
+
+            return {
+              id: option.id,
+              label: option.label,
+              value: option.value || option.label,
+              translate: optionDetails.translate,
+              description: optionDetails.description,
+            };
+          }),
+        };
+      }),
+    },
+    null,
+    2,
+  );
+}
+
+function descriptionFromScenarioTranslateAndDetail(
+  translate: string,
+  detail: string,
+) {
+  return [
+    translate ? `Translate: ${translate}` : "",
+    detail ? `Description: ${detail}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseScenarioAttributesCompactText(value: string) {
+  const attributes = splitUnescapedScenarioText(value, ";")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry, attributeIndex): ScenarioAttribute | null => {
+      const separatorIndex = findUnescapedScenarioText(entry, "=");
+      if (separatorIndex < 1) {
+        return null;
+      }
+
+      const keyParts = splitScenarioDetailParts(entry.slice(0, separatorIndex));
+      const rawKey = keyParts[0] ?? "";
+      const attributeDescription = joinScenarioDetailDescription(
+        keyParts.slice(1),
+      );
+      const optionEntries = splitUnescapedScenarioText(
+        entry.slice(separatorIndex + 1),
+        ",",
+      )
+        .map((option) => splitScenarioDetailParts(option))
+        .flatMap((parts) => {
+          const label = parts[0];
+          return label
+            ? [
+                {
+                  label,
+                  description: joinScenarioDetailDescription(parts.slice(1)),
+                },
+              ]
+            : [];
+        });
+
+      if (!rawKey || optionEntries.length === 0) {
+        return null;
+      }
+
+      const attributeId = normalizeScenarioIdentifier(
+        rawKey,
+        `attribute-${attributeIndex + 1}`,
+      );
+      return {
+        id: attributeId,
+        name: humanizeScenarioKey(rawKey),
+        ...(attributeDescription ? { description: attributeDescription } : {}),
+        options: optionEntries.map((optionEntry, optionIndex) => ({
+          id: `${attributeId}-${normalizeScenarioIdentifier(optionEntry.label, `option-${optionIndex + 1}`)}`,
+          label: optionEntry.label,
+          value: optionEntry.label,
+          ...(optionEntry.description
+            ? { description: optionEntry.description }
+            : {}),
+        })),
+      };
+    })
+    .filter((attribute): attribute is ScenarioAttribute => Boolean(attribute));
+
+  const validated = TemplateAttributeSchema.array().min(1).safeParse(attributes);
+  if (!validated.success) {
+    throw new Error("Invalid Scenario attributes.");
+  }
+
+  return validated.data;
+}
+
+function parseScenarioAttributesJson(value: string) {
+  const parsed = JSON.parse(value) as unknown;
+  const root =
+    parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const inputAttributes = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(root.attributes)
+      ? root.attributes
+      : null;
+
+  if (!inputAttributes) {
+    throw new Error("Invalid Scenario attributes.");
+  }
+
+  const attributes = inputAttributes
+    .map((attributeInput, attributeIndex): ScenarioAttribute | null => {
+      const attribute =
+        attributeInput && typeof attributeInput === "object"
+          ? (attributeInput as Record<string, unknown>)
+          : {};
+      const name = String(attribute.name ?? "").trim();
+      const optionsInput = Array.isArray(attribute.options)
+        ? attribute.options
+        : [];
+      const options = optionsInput
+        .map((optionInput, optionIndex): ScenarioOption | null => {
+          const option =
+            optionInput && typeof optionInput === "object"
+              ? (optionInput as Record<string, unknown>)
+              : {};
+          const label =
+            typeof optionInput === "string"
+              ? optionInput.trim()
+              : String(option.label ?? option.value ?? "").trim();
+          const optionTranslate = String(
+            option.translate ??
+              option.vietnamese ??
+              option.vi ??
+              option.translation ??
+              "",
+          ).trim();
+          const optionDetail = String(
+            option.description ?? option.explanation ?? option.detail ?? "",
+          ).trim();
+          const optionDescription = descriptionFromScenarioTranslateAndDetail(
+            optionTranslate,
+            optionDetail,
+          );
+          if (!label) {
+            return null;
+          }
+          const attributeId = normalizeScenarioIdentifier(
+            name,
+            `attribute-${attributeIndex + 1}`,
+          );
+          return {
+            id:
+              String(option.id ?? "").trim() ||
+              `${attributeId}-${normalizeScenarioIdentifier(label, `option-${optionIndex + 1}`)}`,
+            label,
+            value: String(option.value ?? "").trim() || label,
+            ...(optionDescription
+              ? { description: optionDescription }
+              : {}),
+          };
+        })
+        .filter((option): option is ScenarioOption => Boolean(option));
+
+      if (!name || options.length === 0) {
+        return null;
+      }
+      const attributeDescription = descriptionFromScenarioTranslateAndDetail(
+        String(
+          attribute.translate ??
+            attribute.vietnamese ??
+            attribute.vi ??
+            attribute.translation ??
+            "",
+        ).trim(),
+        String(
+          attribute.description ??
+            attribute.explanation ??
+            attribute.detail ??
+            "",
+        ).trim(),
+      );
+
+      return {
+        id:
+          String(attribute.id ?? "").trim() ||
+          normalizeScenarioIdentifier(name, `attribute-${attributeIndex + 1}`),
+        name,
+        ...(attributeDescription
+          ? { description: attributeDescription }
+          : {}),
+        options,
+      };
+    })
+    .filter((attribute): attribute is ScenarioAttribute => Boolean(attribute));
+
+  const validated = TemplateAttributeSchema.array().min(1).safeParse(attributes);
+  if (!validated.success) {
+    throw new Error("Invalid Scenario attributes.");
+  }
+
+  return validated.data;
+}
+
+function parseScenarioAttributesText(value: string) {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    throw new Error("Invalid Scenario attributes.");
+  }
+
+  return trimmedValue.startsWith("[") || trimmedValue.startsWith("{")
+    ? parseScenarioAttributesJson(trimmedValue)
+    : parseScenarioAttributesCompactText(trimmedValue);
+}
+
 export function ProjectWorkspace({
   projectId,
+  projectName,
+  projectDescription,
   flowType,
+  workspaceMode = "project",
   savedTemplateSelection,
   defaultPrompt,
   defaultProductUrl,
 }: ProjectWorkspaceProps) {
   const { t } = useI18n();
+  const isOneClickMode = workspaceMode === "one-click";
+  const oneClickRecordName = projectName?.trim() || t("oneClick.namePlaceholder");
+  const oneClickRecordDescription =
+    projectDescription?.trim() || t("oneClick.wizardDescription");
   const [promptText, setPromptText] = useState(
-    defaultPrompt || t("projectDetail.defaultPrompt"),
+    defaultPrompt || (isOneClickMode ? "" : t("projectDetail.defaultPrompt")),
   );
   const [productUrl, setProductUrl] = useState(defaultProductUrl);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [shotPlans, setShotPlans] = useState<VideoShotPlan[]>([]);
   const [selectedShotPlanId, setSelectedShotPlanId] = useState("");
   const [selectedShotIds, setSelectedShotIds] = useState<string[]>([]);
+  const [shotsResultText, setShotsResultText] = useState("");
+  const [isEditingShotsResultJson, setIsEditingShotsResultJson] =
+    useState(false);
+  const [shotsResultJsonError, setShotsResultJsonError] = useState("");
   const [shotDurationSeconds, setShotDurationSeconds] = useState(8);
   const [rawShotRequest, setRawShotRequest] = useState<unknown>(null);
   const [rawShotResponse, setRawShotResponse] = useState<unknown>(null);
@@ -834,7 +1331,15 @@ export function ProjectWorkspace({
   const [rawProductResponse, setRawProductResponse] = useState<unknown>(null);
   const [rawDataModal, setRawDataModal] =
     useState<RawDataModalState | null>(null);
+  const [isRawDataCopied, setIsRawDataCopied] = useState(false);
   const [templates, setTemplates] = useState<VideoTemplate[]>([]);
+  const [oneClickScenarioName, setOneClickScenarioName] = useState("");
+  const [oneClickScenarioDescription, setOneClickScenarioDescription] =
+    useState("");
+  const [oneClickScenarioAttributesText, setOneClickScenarioAttributesText] =
+    useState("");
+  const [isEditingOneClickScenarioSchema, setIsEditingOneClickScenarioSchema] =
+    useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [selectedOptionIds, setSelectedOptionIds] = useState<
     Record<string, string[]>
@@ -842,6 +1347,21 @@ export function ProjectWorkspace({
   const [templateAnalysisCompact, setTemplateAnalysisCompact] = useState("");
   const [generatedShotPrompts, setGeneratedShotPrompts] = useState<
     Record<string, string>
+  >({});
+  const [creatingVideoShotIds, setCreatingVideoShotIds] = useState<
+    Record<string, boolean>
+  >({});
+  const [shotVideoMessages, setShotVideoMessages] = useState<
+    Record<string, string>
+  >({});
+  const [shotVideoErrors, setShotVideoErrors] = useState<
+    Record<string, string>
+  >({});
+  const [rawShotVideoRequests, setRawShotVideoRequests] = useState<
+    Record<string, unknown>
+  >({});
+  const [rawShotVideoResponses, setRawShotVideoResponses] = useState<
+    Record<string, unknown>
   >({});
   const [shotComposerPromptTemplate, setShotComposerPromptTemplate] = useState(
     DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
@@ -883,6 +1403,10 @@ export function ProjectWorkspace({
     useState("");
   const [shotGenerationSuccessMessage, setShotGenerationSuccessMessage] =
     useState("");
+  const [oneClickScenarioEditorMessage, setOneClickScenarioEditorMessage] =
+    useState("");
+  const [oneClickScenarioEditorError, setOneClickScenarioEditorError] =
+    useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingShots, setIsGeneratingShots] = useState(false);
   const [isSavingShots, setIsSavingShots] = useState(false);
@@ -890,9 +1414,16 @@ export function ProjectWorkspace({
   const [isAnalyzingTemplate, setIsAnalyzingTemplate] = useState(false);
   const [isSavingTemplateSelection, setIsSavingTemplateSelection] =
     useState(false);
+  const [isSavingStoryContent, setIsSavingStoryContent] = useState(false);
+  const [isSavingOneClickScenario, setIsSavingOneClickScenario] =
+    useState(false);
   const [isCreatingScript, setIsCreatingScript] = useState(false);
   const [isPromptPreviewOpen, setIsPromptPreviewOpen] = useState(false);
+  const [isPromptPreviewCopied, setIsPromptPreviewCopied] = useState(false);
+  const [oneClickStep, setOneClickStep] = useState<1 | 2 | 3>(1);
   const previewUrlsRef = useRef<string[]>([]);
+  const hasUserEditedStoryContentRef = useRef(false);
+  const lastSyncedOneClickScenarioIdRef = useRef("");
 
   const validMediaItems = mediaItems.filter(
     (item) => item.status === "validated",
@@ -907,6 +1438,44 @@ export function ProjectWorkspace({
   const selectedShotPlan =
     shotPlans.find((shotPlan) => shotPlan.id === selectedShotPlanId) ?? null;
   const shotSelection = buildShotSelection(selectedShotPlan, selectedShotIds);
+
+  useEffect(() => {
+    if (isEditingShotsResultJson) {
+      return;
+    }
+
+    setShotsResultText(
+      selectedShotPlan ? formatShotPlanResultText(selectedShotPlan) : "",
+    );
+    setShotsResultJsonError("");
+  }, [isEditingShotsResultJson, selectedShotPlan]);
+
+  useEffect(() => {
+    if (!isOneClickMode || !selectedTemplate) {
+      lastSyncedOneClickScenarioIdRef.current = "";
+      setOneClickScenarioName("");
+      setOneClickScenarioDescription("");
+      setOneClickScenarioAttributesText("");
+      setOneClickScenarioEditorMessage("");
+      setOneClickScenarioEditorError("");
+      setIsEditingOneClickScenarioSchema(false);
+      return;
+    }
+
+    if (lastSyncedOneClickScenarioIdRef.current === selectedTemplate.id) {
+      return;
+    }
+
+    lastSyncedOneClickScenarioIdRef.current = selectedTemplate.id;
+    setOneClickScenarioName(selectedTemplate.name);
+    setOneClickScenarioDescription(selectedTemplate.description ?? "");
+    setOneClickScenarioAttributesText(
+      formatScenarioAttributesText(selectedTemplate.attributes),
+    );
+    setOneClickScenarioEditorMessage("");
+    setOneClickScenarioEditorError("");
+    setIsEditingOneClickScenarioSchema(false);
+  }, [isOneClickMode, selectedTemplate]);
 
   function getShotMediaItems(shot: VideoShot) {
     const shotMediaIds = new Set(shot.mediaIds ?? []);
@@ -937,6 +1506,10 @@ export function ProjectWorkspace({
       });
     };
   }, []);
+
+  useEffect(() => {
+    hasUserEditedStoryContentRef.current = false;
+  }, [projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -971,6 +1544,39 @@ export function ProjectWorkspace({
     let cancelled = false;
 
     if (flowType !== "script") {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadStoryContent() {
+      try {
+        const saved = await apiGet<ProjectStoryContentResponse>(
+          `/projects/${projectId}/story-content`,
+        );
+        if (!cancelled && saved.storyContent.trim()) {
+          setPromptText((current) =>
+            hasUserEditedStoryContentRef.current
+              ? current
+              : saved.storyContent,
+          );
+        }
+      } catch {
+        // Story Content is optional for new Script Flow projects.
+      }
+    }
+
+    void loadStoryContent();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [flowType, projectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (flowType !== "script") {
       setShotPlans([]);
       setSelectedShotPlanId("");
       setSelectedShotIds([]);
@@ -983,7 +1589,9 @@ export function ProjectWorkspace({
 
     async function loadShotPlans() {
       try {
-        const loadedShotPlans = await apiGet<VideoShotPlan[]>("/shots");
+        const loadedShotPlans = await apiGet<VideoShotPlan[]>(
+          isOneClickMode ? `/projects/${projectId}/shots` : "/shots",
+        );
         if (!cancelled) {
           setShotPlans(loadedShotPlans);
           setSelectedShotPlanId(
@@ -1010,7 +1618,7 @@ export function ProjectWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [flowType, projectId]);
+  }, [flowType, isOneClickMode, projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1128,7 +1736,15 @@ export function ProjectWorkspace({
   }, [isPromptPreviewOpen, rawDataModal]);
 
   useEffect(() => {
-    if (defaultPrompt) {
+    setIsRawDataCopied(false);
+  }, [rawDataModal]);
+
+  useEffect(() => {
+    setIsPromptPreviewCopied(false);
+  }, [isPromptPreviewOpen]);
+
+  useEffect(() => {
+    if (defaultPrompt || isOneClickMode) {
       return;
     }
     const defaultPrompts: string[] = [translate("projectDetail.defaultPrompt")];
@@ -1137,7 +1753,23 @@ export function ProjectWorkspace({
         ? t("projectDetail.defaultPrompt")
         : current,
     );
-  }, [defaultPrompt, t]);
+  }, [defaultPrompt, isOneClickMode, t]);
+
+  useEffect(() => {
+    if (!isOneClickMode) {
+      return;
+    }
+
+    if (oneClickStep === 1) {
+      setIsStoryStepOpen(true);
+    }
+    if (oneClickStep === 2) {
+      setIsTemplateStepOpen(true);
+    }
+    if (oneClickStep === 3) {
+      setIsShotsStepOpen(true);
+    }
+  }, [isOneClickMode, oneClickStep]);
 
   async function pollJob(jobId: string) {
     let latest = await apiGet<Job>(`/jobs/${jobId}`);
@@ -1512,12 +2144,21 @@ export function ProjectWorkspace({
     setStatus({ label: t("workspace.shotsGenerating"), tone: "info" });
 
     try {
-      const queuedJob = await apiPost<Job>("/shots/generate", {
-        sourceText,
-        durationSeconds: shotDurationSeconds,
-        attributes: templateSelectionToShotAttributes(templateSelection),
-        masterPrompt,
-      });
+      const queuedJob = await apiPost<Job>(
+        `/projects/${projectId}/shots/generate`,
+        {
+          sourceText,
+          durationSeconds: shotDurationSeconds,
+          attributes: templateSelectionToShotAttributes(templateSelection),
+          masterPrompt,
+          ...(isOneClickMode
+            ? {
+                name: oneClickRecordName,
+                description: oneClickRecordDescription,
+              }
+            : {}),
+        },
+      );
       const completedJob = await pollJob(queuedJob.jobId);
       const result = getJobResult<GenerateShotsJobResult>(completedJob);
       const shotPlan = result.shotPlan;
@@ -1530,6 +2171,9 @@ export function ProjectWorkspace({
       setSelectedShotPlanId(shotPlan.id);
       setSelectedShotIds(shotPlan.shots.map((shot) => shot.id));
       setShotDurationSeconds(shotPlan.durationSeconds);
+      setShotsResultText(formatShotPlanResultText(shotPlan));
+      setIsEditingShotsResultJson(false);
+      setShotsResultJsonError("");
       setShotGenerationSuccessMessage(
         t("workspace.shotsGeneratedDetail", {
           count: shotPlan.shots.length,
@@ -1545,6 +2189,38 @@ export function ProjectWorkspace({
       setStatus({ label: t("workspace.shotsGenerateFailed"), tone: "danger" });
     } finally {
       setIsGeneratingShots(false);
+    }
+  }
+
+  function applyShotsResultJson() {
+    if (!selectedShotPlan) {
+      setShotsResultJsonError(t("workspace.shotsNone"));
+      return;
+    }
+
+    try {
+      const nextShotPlan = parseShotPlanResultText(
+        shotsResultText,
+        selectedShotPlan,
+        shotDurationSeconds,
+      );
+      setShotPlans((current) =>
+        current.map((shotPlan) =>
+          shotPlan.id === selectedShotPlan.id ? nextShotPlan : shotPlan,
+        ),
+      );
+      setSelectedShotIds(nextShotPlan.shots.map((shot) => shot.id));
+      setShotDurationSeconds(nextShotPlan.durationSeconds);
+      setOpenShotAttributePanelIds({});
+      setGeneratedShotPrompts({});
+      setShotsResultText(formatShotPlanResultText(nextShotPlan));
+      setIsEditingShotsResultJson(false);
+      setShotsResultJsonError("");
+      setStatus({ label: t("workspace.shotsResultApplied"), tone: "success" });
+    } catch (error) {
+      setShotsResultJsonError(
+        error instanceof Error ? error.message : t("workspace.shotsResultInvalid"),
+      );
     }
   }
 
@@ -1564,9 +2240,12 @@ export function ProjectWorkspace({
 
     try {
       const saved = await apiPatch<VideoShotPlan>(
-        `/shots/${selectedShotPlan.id}`,
+        isOneClickMode
+          ? `/projects/${projectId}/shots/${selectedShotPlan.id}`
+          : `/shots/${selectedShotPlan.id}`,
         {
           name: selectedShotPlan.name,
+          description: selectedShotPlan.description,
           durationSeconds: selectedShotPlan.durationSeconds,
           attributes: selectedShotPlan.attributes.filter(
             (attribute) => attribute.name.trim() && attribute.value.trim(),
@@ -1599,6 +2278,41 @@ export function ProjectWorkspace({
       setStatus({ label: t("workspace.shotsSaveFailed"), tone: "danger" });
     } finally {
       setIsSavingShots(false);
+    }
+  }
+
+  async function saveStoryContent() {
+    const storyContent = promptText.trim();
+    if (!storyContent) {
+      setErrorMessage(t("workspace.missingPrompt"));
+      setStoryGenerationErrorMessage(t("workspace.missingPrompt"));
+      return false;
+    }
+
+    setIsSavingStoryContent(true);
+    setErrorMessage("");
+    setStoryGenerationErrorMessage("");
+    setStatus({ label: t("oneClick.storySaving"), tone: "info" });
+
+    try {
+      const saved = await apiPatch<SaveProjectStoryContentResponse>(
+        `/projects/${projectId}/story-content`,
+        { storyContent },
+      );
+      if (!saved.saved) {
+        throw new Error(t("oneClick.storySaveFailed"));
+      }
+      setStatus({ label: t("oneClick.storySaved"), tone: "success" });
+      return true;
+    } catch (error) {
+      const nextError =
+        error instanceof Error ? error.message : t("oneClick.storySaveFailed");
+      setErrorMessage(nextError);
+      setStoryGenerationErrorMessage(nextError);
+      setStatus({ label: t("oneClick.storySaveFailed"), tone: "danger" });
+      return false;
+    } finally {
+      setIsSavingStoryContent(false);
     }
   }
 
@@ -1734,6 +2448,13 @@ export function ProjectWorkspace({
           inputText,
           templateId: selectedTemplate.id,
           masterPrompt,
+          ...(isOneClickMode
+            ? {
+                saveAsTemplate: true,
+                templateName: oneClickRecordName,
+                templateDescription: oneClickRecordDescription,
+              }
+            : {}),
         },
       );
       const completedJob = await pollJob(queuedJob.jobId);
@@ -1741,6 +2462,29 @@ export function ProjectWorkspace({
         getJobResult<TemplateSelectionAnalysisResult>(completedJob);
       setRawTemplateRequest(result.rawRequest);
       setRawTemplateResponse(result.rawResponse);
+      if (isOneClickMode) {
+        const now = new Date().toISOString();
+        const generatedScenario: VideoTemplate = {
+          id: result.templateSelection.templateId,
+          ownerUserId: "user_001",
+          name: result.templateSelection.templateName,
+          description: oneClickRecordDescription,
+          idea: inputText,
+          attributes: result.templateSelection.attributes.map((attribute) => ({
+            id: attribute.id,
+            name: attribute.name,
+            options: attribute.options,
+          })),
+          isDefault: false,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        };
+        setTemplates((current) => [
+          generatedScenario,
+          ...current.filter((template) => template.id !== generatedScenario.id),
+        ]);
+      }
       setSelectedTemplateId(result.templateSelection.templateId);
       setSelectedOptionIds(
         templateSelectionToOptionIds(result.templateSelection),
@@ -1947,26 +2691,7 @@ export function ProjectWorkspace({
       shotSelection: shotSelectionText,
       scenarioSelection,
     });
-
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      "User source text:",
-      inputText,
-      "",
-      "Reference media:",
-      mediaSummary,
-      "",
-      "Shot selection:",
-      shotSelectionText,
-      "",
-      "Scenario selection:",
-      scenarioSelection,
-      "",
-      "Output format:",
-      "Return readable sections with concise bullets for direction, visual style, and script/prompt content.",
-    ].join("\n");
+    return renderedPrompt;
   }
 
   function buildScenarioAnalysisFullPrompt() {
@@ -1999,15 +2724,24 @@ export function ProjectWorkspace({
       attributes: attributeCatalogText,
     });
 
-    return [
-      renderedPrompt,
-      "",
-      "Scenario catalog:",
-      attributeCatalogText,
-      "",
-      "User story/script:",
-      inputText,
-    ].join("\n");
+    return renderedPrompt;
+  }
+
+  function buildOneClickScenarioReviewFullPrompt() {
+    const inputText = promptText.trim();
+    const masterPrompt = scenarioAnalysisPrompt.trim();
+    if (!inputText || !masterPrompt) {
+      return null;
+    }
+
+    const attributeContext =
+      "One Click skips scenario/template selection, so no scenario attribute catalog is provided.";
+    const renderedPrompt = renderPromptTemplate(masterPrompt, {
+      story: inputText,
+      attributes: attributeContext,
+    });
+
+    return renderedPrompt;
   }
 
   function buildShotGenerationFullPrompt() {
@@ -2027,59 +2761,7 @@ export function ProjectWorkspace({
       durationSeconds: String(durationSeconds),
     });
 
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      `Story: ${sourceText}`,
-      "",
-      "Scenario/plan attributes:",
-      attributeText,
-      "",
-      `Target seconds per shot: ${durationSeconds}`,
-      "",
-      "Provider output contract:",
-      "- Return only strict JSON. Do not include markdown, comments, or prose outside JSON.",
-      "- Every shot must include attributes named exactly Start state, End state, and Dialogue.",
-      "- The Start state of shot 2+ must continue from the previous shot's End state.",
-      "- Dialogue should be short, natural spoken dialogue, narration, or voiceover for that exact shot.",
-      "- Keep each duration between 1 and the requested duration, never more than 8 seconds.",
-      "",
-      "Required JSON shape:",
-      JSON.stringify(
-        {
-          name: "Shot plan name",
-          durationSeconds,
-          shots: [
-            {
-              title: "Shot 1: Hook",
-              description: "Filmable description of the moment.",
-              durationSeconds,
-              attributes: [
-                { name: "Start state", value: "How the shot begins." },
-                { name: "End state", value: "How the shot ends." },
-                {
-                  name: "Dialogue",
-                  value: "Short spoken line or voiceover for this shot.",
-                },
-                { name: "Camera", value: "Camera movement and framing." },
-                {
-                  name: "Visual",
-                  value: "Lighting, composition, production details.",
-                },
-                { name: "Action", value: "Primary action in the shot." },
-                {
-                  name: "Transition",
-                  value: "How this shot connects to the next one.",
-                },
-              ],
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-    ].join("\n");
+    return renderedPrompt;
   }
 
   function buildComposedInstructionPreview() {
@@ -2156,6 +2838,22 @@ export function ProjectWorkspace({
     }
 
     const previewPayload = buildPromptPreviewPayload();
+    const renderedPreviewPayload = JSON.stringify(previewPayload, null, 2);
+
+    async function copyPromptPreviewValue() {
+      try {
+        let copied = copyPromptWithTextarea(renderedPreviewPayload);
+        if (!copied && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(renderedPreviewPayload);
+          copied = true;
+        }
+        if (copied) {
+          setIsPromptPreviewCopied(true);
+        }
+      } catch {
+        setStatus({ label: t("workspace.shotPromptCopyFailed"), tone: "danger" });
+      }
+    }
 
     return (
       <div
@@ -2182,14 +2880,37 @@ export function ProjectWorkspace({
                 {t("workspace.promptPreviewHelp")}
               </p>
             </div>
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
-              onClick={() => setIsPromptPreviewOpen(false)}
-              aria-label={t("workspace.promptPreviewClose")}
-            >
-              <X size={16} />
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+                onClick={() => void copyPromptPreviewValue()}
+                aria-label={
+                  isPromptPreviewCopied
+                    ? t("workspace.shotPromptCopied")
+                    : t("workspace.shotPromptCopy")
+                }
+                title={
+                  isPromptPreviewCopied
+                    ? t("workspace.shotPromptCopied")
+                    : t("workspace.shotPromptCopy")
+                }
+              >
+                {isPromptPreviewCopied ? (
+                  <CheckCircle2 size={16} />
+                ) : (
+                  <Copy size={16} />
+                )}
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+                onClick={() => setIsPromptPreviewOpen(false)}
+                aria-label={t("workspace.promptPreviewClose")}
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
           <div className="grid gap-4 overflow-y-auto p-5">
             <div>
@@ -2205,7 +2926,7 @@ export function ProjectWorkspace({
                 {t("workspace.promptPreviewRequest")}
               </div>
               <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-4 text-xs leading-5 text-slate-50">
-                {JSON.stringify(previewPayload, null, 2)}
+                {renderedPreviewPayload}
               </pre>
             </div>
           </div>
@@ -2217,6 +2938,23 @@ export function ProjectWorkspace({
   function renderRawDataModal() {
     if (!rawDataModal) {
       return null;
+    }
+
+    const renderedValue = formatRawJson(rawDataModal.value);
+
+    async function copyRawDataValue() {
+      try {
+        let copied = copyPromptWithTextarea(renderedValue);
+        if (!copied && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(renderedValue);
+          copied = true;
+        }
+        if (copied) {
+          setIsRawDataCopied(true);
+        }
+      } catch {
+        setStatus({ label: t("workspace.shotPromptCopyFailed"), tone: "danger" });
+      }
     }
 
     return (
@@ -2244,18 +2982,41 @@ export function ProjectWorkspace({
                 {rawDataModal.help}
               </p>
             </div>
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
-              onClick={() => setRawDataModal(null)}
-              aria-label={t("workspace.rawDataClose")}
-            >
-              <X size={16} />
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+                onClick={() => void copyRawDataValue()}
+                aria-label={
+                  isRawDataCopied
+                    ? t("workspace.shotPromptCopied")
+                    : t("workspace.shotPromptCopy")
+                }
+                title={
+                  isRawDataCopied
+                    ? t("workspace.shotPromptCopied")
+                    : t("workspace.shotPromptCopy")
+                }
+              >
+                {isRawDataCopied ? (
+                  <CheckCircle2 size={16} />
+                ) : (
+                  <Copy size={16} />
+                )}
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+                onClick={() => setRawDataModal(null)}
+                aria-label={t("workspace.rawDataClose")}
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
           <div className="overflow-y-auto p-5">
             <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-4 text-xs leading-5 text-slate-50">
-              {formatRawJson(rawDataModal.value)}
+              {renderedValue}
             </pre>
           </div>
         </div>
@@ -2492,6 +3253,7 @@ export function ProjectWorkspace({
                 setStoryGenerationErrorMessage("");
                 setRawStoryRequest(null);
                 setRawStoryResponse(null);
+                setRawDataModal(null);
               }}
             />
 
@@ -2521,6 +3283,7 @@ export function ProjectWorkspace({
                 rows={8}
                 value={promptText}
                 onChange={(event) => {
+                  hasUserEditedStoryContentRef.current = true;
                   setPromptText(event.target.value);
                   setGeneratedShotPrompts({});
                   setStoryGenerationErrorMessage("");
@@ -2534,6 +3297,7 @@ export function ProjectWorkspace({
                   setShotGenerationSuccessMessage("");
                   setTemplateAnalysisCompact("");
                   setTemplateAnalysisErrorMessage("");
+                  setRawDataModal(null);
                 }}
                 className="mt-2 w-full rounded-md border border-border p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
               />
@@ -2588,6 +3352,552 @@ export function ProjectWorkspace({
     );
   }
 
+  function updateOneClickScenarioAttributes(
+    updater: (attributes: ScenarioAttribute[]) => ScenarioAttribute[],
+  ) {
+    if (!selectedTemplate) {
+      return;
+    }
+
+    setOneClickScenarioEditorMessage("");
+    setOneClickScenarioEditorError("");
+    setIsEditingOneClickScenarioSchema(false);
+    setTemplates((current) =>
+      current.map((template) =>
+        template.id === selectedTemplate.id
+          ? { ...template, attributes: updater(template.attributes) }
+          : template,
+      ),
+    );
+  }
+
+  function updateOneClickScenarioAttribute(
+    attributeId: string,
+    patch: Partial<ScenarioAttribute>,
+  ) {
+    updateOneClickScenarioAttributes((attributes) =>
+      attributes.map((attribute) =>
+        attribute.id === attributeId ? { ...attribute, ...patch } : attribute,
+      ),
+    );
+  }
+
+  function updateOneClickScenarioOption(
+    attributeId: string,
+    optionId: string,
+    label: string,
+  ) {
+    updateOneClickScenarioAttributes((attributes) =>
+      attributes.map((attribute) =>
+        attribute.id === attributeId
+          ? {
+              ...attribute,
+              options: attribute.options.map((option) =>
+                option.id === optionId
+                  ? { ...option, label, value: label }
+                  : option,
+              ),
+            }
+          : attribute,
+      ),
+    );
+  }
+
+  function addOneClickScenarioAttribute() {
+    updateOneClickScenarioAttributes((attributes) => [
+      ...attributes,
+      {
+        id: makeScenarioEditorId("attribute"),
+        name: "",
+        description: "",
+        options: [optionFromScenarioLabel("")],
+      },
+    ]);
+  }
+
+  function removeOneClickScenarioAttribute(attributeId: string) {
+    updateOneClickScenarioAttributes((attributes) =>
+      attributes.filter((attribute) => attribute.id !== attributeId),
+    );
+  }
+
+  function addOneClickScenarioOption(attributeId: string) {
+    updateOneClickScenarioAttributes((attributes) =>
+      attributes.map((attribute) =>
+        attribute.id === attributeId
+          ? {
+              ...attribute,
+              options: [...attribute.options, optionFromScenarioLabel("")],
+            }
+          : attribute,
+      ),
+    );
+  }
+
+  function removeOneClickScenarioOption(attributeId: string, optionId: string) {
+    updateOneClickScenarioAttributes((attributes) =>
+      attributes.map((attribute) =>
+        attribute.id === attributeId
+          ? {
+              ...attribute,
+              options: attribute.options.filter((option) => option.id !== optionId),
+            }
+          : attribute,
+      ),
+    );
+  }
+
+  function applyOneClickScenarioSchema() {
+    if (!selectedTemplate) {
+      return;
+    }
+
+    try {
+      const parsedAttributes = parseScenarioAttributesText(
+        oneClickScenarioAttributesText,
+      );
+      setTemplates((current) =>
+        current.map((template) =>
+          template.id === selectedTemplate.id
+            ? { ...template, attributes: parsedAttributes }
+            : template,
+        ),
+      );
+      setOneClickScenarioAttributesText(
+        formatScenarioAttributesText(parsedAttributes),
+      );
+      setOneClickScenarioEditorMessage(t("template.jsonApplied"));
+      setOneClickScenarioEditorError("");
+      setIsEditingOneClickScenarioSchema(false);
+    } catch {
+      setOneClickScenarioEditorMessage("");
+      setOneClickScenarioEditorError(t("template.jsonInvalid"));
+    }
+  }
+
+  async function saveOneClickScenario() {
+    if (!selectedTemplate) {
+      return;
+    }
+
+    let attributesToSave: ScenarioAttribute[];
+    try {
+      attributesToSave = isEditingOneClickScenarioSchema
+        ? parseScenarioAttributesText(oneClickScenarioAttributesText)
+        : selectedTemplate.attributes;
+    } catch {
+      attributesToSave = selectedTemplate.attributes;
+    }
+
+    const normalizedAttributes = attributesToSave
+      .map((attribute) => ({
+        ...attribute,
+        name: attribute.name.trim(),
+        description: attribute.description?.trim() || undefined,
+        options: attribute.options
+          .map((option) => ({
+            ...option,
+            label: option.label.trim(),
+            value: option.value.trim() || option.label.trim(),
+            description: option.description?.trim() || undefined,
+          }))
+          .filter((option) => option.label),
+      }))
+      .filter((attribute) => attribute.name && attribute.options.length > 0);
+
+    if (!oneClickScenarioName.trim() || normalizedAttributes.length === 0) {
+      setOneClickScenarioEditorMessage("");
+      setOneClickScenarioEditorError(t("template.jsonInvalid"));
+      return;
+    }
+
+    setIsSavingOneClickScenario(true);
+    setOneClickScenarioEditorMessage("");
+    setOneClickScenarioEditorError("");
+
+    try {
+      const savedScenario = await apiPatch<VideoTemplate>(
+        `/templates/${selectedTemplate.id}`,
+        {
+          name: oneClickScenarioName.trim(),
+          description: oneClickScenarioDescription.trim() || undefined,
+          idea: promptText.trim() || selectedTemplate.idea,
+          attributes: normalizedAttributes,
+        },
+      );
+      setTemplates((current) =>
+        current.map((template) =>
+          template.id === savedScenario.id ? savedScenario : template,
+        ),
+      );
+      setSelectedOptionIds((current) => {
+        const validOptionIds = new Set(
+          savedScenario.attributes.flatMap((attribute) =>
+            attribute.options.map((option) => option.id),
+          ),
+        );
+        const nextSelectedOptionIds: Record<string, string[]> = {};
+        for (const [attributeId, optionIds] of Object.entries(current)) {
+          const filteredOptionIds = optionIds.filter((optionId) =>
+            validOptionIds.has(optionId),
+          );
+          if (filteredOptionIds.length > 0) {
+            nextSelectedOptionIds[attributeId] = filteredOptionIds;
+          }
+        }
+        return nextSelectedOptionIds;
+      });
+      setOneClickScenarioAttributesText(
+        formatScenarioAttributesText(savedScenario.attributes),
+      );
+      setOneClickScenarioEditorMessage(t("template.saved"));
+      setIsEditingOneClickScenarioSchema(false);
+    } catch (error) {
+      setOneClickScenarioEditorError(
+        error instanceof Error ? error.message : t("template.empty"),
+      );
+    } finally {
+      setIsSavingOneClickScenario(false);
+    }
+  }
+
+  function renderOneClickScenarioEditor() {
+    if (!selectedTemplate) {
+      return null;
+    }
+
+    return (
+      <div className="rounded-md border border-border bg-white p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">{t("template.editTitle")}</div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("template.editorDescription")}
+            </p>
+          </div>
+          {oneClickScenarioEditorMessage ? (
+            <Badge variant="success">{oneClickScenarioEditorMessage}</Badge>
+          ) : null}
+        </div>
+
+        {oneClickScenarioEditorError ? (
+          <div className="mt-3 whitespace-pre-line rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+            {oneClickScenarioEditorError}
+          </div>
+        ) : null}
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="text-sm font-medium">
+            {t("template.name")}
+            <input
+              value={oneClickScenarioName}
+              onChange={(event) => {
+                setOneClickScenarioName(event.target.value);
+                setOneClickScenarioEditorMessage("");
+                setOneClickScenarioEditorError("");
+              }}
+              className="mt-2 h-10 w-full rounded-md border border-border px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+            />
+          </label>
+          <label className="text-sm font-medium">
+            {t("template.descriptionField")}
+            <input
+              value={oneClickScenarioDescription}
+              onChange={(event) => {
+                setOneClickScenarioDescription(event.target.value);
+                setOneClickScenarioEditorMessage("");
+                setOneClickScenarioEditorError("");
+              }}
+              className="mt-2 h-10 w-full rounded-md border border-border px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+            />
+          </label>
+        </div>
+
+        <div className="mt-5 grid gap-3">
+          <div className="rounded-md border border-border bg-muted/40 p-3">
+            <label
+              className="text-sm font-medium"
+              htmlFor="oneClickScenarioAttributesSchema"
+            >
+              {t("template.jsonEditor")}
+            </label>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("template.jsonHelp")}
+            </p>
+            <TextareaWithCounter
+              id="oneClickScenarioAttributesSchema"
+              value={oneClickScenarioAttributesText}
+              onChange={(event) => {
+                setOneClickScenarioAttributesText(event.target.value);
+                setIsEditingOneClickScenarioSchema(true);
+                setOneClickScenarioEditorMessage("");
+                setOneClickScenarioEditorError("");
+              }}
+              spellCheck={false}
+              className="mt-3 min-h-52 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              className="mt-3 gap-2"
+              onClick={applyOneClickScenarioSchema}
+            >
+              <Sparkles size={15} />
+              {t("template.jsonApply")}
+            </Button>
+          </div>
+
+          {selectedTemplate.attributes.map((attribute, attributeIndex) => (
+            <div key={attribute.id} className="rounded-md border border-border p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-800">
+                  {attributeIndex + 1}
+                </span>
+                <input
+                  value={attribute.name}
+                  onChange={(event) =>
+                    updateOneClickScenarioAttribute(attribute.id, {
+                      name: event.target.value,
+                    })
+                  }
+                  placeholder={t("template.attributeName")}
+                  className="h-10 min-w-0 flex-1 rounded-md border border-border px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-10 w-10 px-0 text-red-600 hover:bg-red-50 hover:text-red-700"
+                  onClick={() => removeOneClickScenarioAttribute(attribute.id)}
+                  aria-label={t("template.delete")}
+                >
+                  <Trash2 size={15} />
+                </Button>
+              </div>
+              {attribute.description ? (
+                <p className="mt-2 whitespace-pre-wrap rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
+                  {attribute.description}
+                </p>
+              ) : null}
+
+              <div className="mt-3 grid gap-2">
+                {attribute.options.map((option, optionIndex) => (
+                  <div
+                    key={option.id}
+                    className="grid grid-cols-[auto_1fr_auto] items-start gap-2"
+                  >
+                    <span className="mt-1 rounded bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+                      {attributeIndex + 1}.{optionIndex + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <input
+                        value={option.label}
+                        onChange={(event) =>
+                          updateOneClickScenarioOption(
+                            attribute.id,
+                            option.id,
+                            event.target.value,
+                          )
+                        }
+                        placeholder={t("template.optionLabel")}
+                        className="h-10 min-w-0 w-full rounded-md border border-border px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                      />
+                      {option.description ? (
+                        <p className="mt-1 whitespace-pre-wrap rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                          {option.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-10 w-10 px-0 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      onClick={() =>
+                        removeOneClickScenarioOption(attribute.id, option.id)
+                      }
+                      aria-label={t("template.delete")}
+                    >
+                      <Trash2 size={15} />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-fit gap-2"
+                  onClick={() => addOneClickScenarioOption(attribute.id)}
+                >
+                  <Plus size={15} />
+                  {t("template.addOption")}
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="button"
+              variant="secondary"
+              className="gap-2"
+              onClick={addOneClickScenarioAttribute}
+            >
+              <Plus size={15} />
+              {t("template.addAttribute")}
+            </Button>
+            <Button
+              type="button"
+              className="gap-2"
+              disabled={isSavingOneClickScenario}
+              onClick={() => void saveOneClickScenario()}
+            >
+              {isSavingOneClickScenario ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Save size={16} />
+              )}
+              {t("template.save")}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderOneClickScenarioStep() {
+    return (
+      <div className="mt-4 rounded-lg border border-border bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 font-medium">
+              <FileText size={18} className="text-sky-600" />
+              {t("oneClick.step2Title")}
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("oneClick.step2Help")}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4">
+          <MasterPromptField
+            id="oneClickScenarioMasterPrompt"
+            label={t("oneClick.step2PromptLabel")}
+            help={t("oneClick.step2PromptHelp")}
+            rows={7}
+            value={scenarioAnalysisPrompt}
+            onChange={(event) => {
+              setScenarioAnalysisPrompt(event.target.value);
+              setTemplateAnalysisCompact("");
+              setTemplateAnalysisErrorMessage("");
+              setRawTemplateRequest(null);
+              setRawTemplateResponse(null);
+              setRawDataModal(null);
+            }}
+          />
+
+          <div>
+            <label className="text-sm font-medium" htmlFor="oneClickStoryReview">
+              {t("workspace.storyInputLabel")}
+            </label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("oneClick.step2StoryHelp")}
+            </p>
+            <TextareaWithCounter
+              id="oneClickStoryReview"
+              rows={8}
+              value={promptText}
+              onChange={(event) => {
+                hasUserEditedStoryContentRef.current = true;
+                setPromptText(event.target.value);
+                setGeneratedShotPrompts({});
+                setTemplateAnalysisCompact("");
+                setTemplateAnalysisErrorMessage("");
+                setRawTemplateRequest(null);
+                setRawTemplateResponse(null);
+                setRawShotRequest(null);
+                setRawShotResponse(null);
+                setShotGenerationErrorMessage("");
+                setShotGenerationSuccessMessage("");
+                setRawDataModal(null);
+              }}
+              className="mt-2 w-full rounded-md border border-border p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+            />
+          </div>
+
+          {selectedTemplate ? (
+            <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
+              {t("oneClick.step2DefaultScenario", {
+                name: selectedTemplate.name,
+              })}
+            </div>
+          ) : (
+            <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+              {t("workspace.templateNone")}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="button"
+              className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isAnalyzingTemplate || !selectedTemplate}
+              onClick={() => void analyzeTemplateSelection()}
+            >
+              {isAnalyzingTemplate ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Sparkles size={16} />
+              )}
+              {isAnalyzingTemplate
+                ? t("workspace.templateAnalyzing")
+                : t("workspace.templateAnalyze")}
+            </Button>
+            {renderFullPromptButton(
+              t("oneClick.step2FullPrompt"),
+              t("oneClick.step2FullPromptHelp"),
+              selectedTemplate
+                ? buildScenarioAnalysisFullPrompt()
+                : buildOneClickScenarioReviewFullPrompt(),
+            )}
+            {renderRawDataButton(
+              t("workspace.rawRequestButton"),
+              t("workspace.scenarioRawRequest"),
+              t("workspace.scenarioRawRequestHelp"),
+              rawTemplateRequest,
+            )}
+            {renderRawDataButton(
+              t("workspace.rawResponseButton"),
+              t("workspace.scenarioRawResponse"),
+              t("workspace.scenarioRawResponseHelp"),
+              rawTemplateResponse,
+            )}
+          </div>
+
+          {templateAnalysisErrorMessage ? (
+            <div className="flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
+              <AlertCircle size={16} className="mt-0.5 shrink-0" />
+              <span className="whitespace-pre-wrap">
+                {templateAnalysisErrorMessage}
+              </span>
+            </div>
+          ) : null}
+
+          {templateAnalysisCompact ? (
+            <div className="rounded-md border border-sky-100 bg-sky-50 p-3 font-mono text-xs leading-5 text-sky-950">
+              <div className="mb-1 font-sans text-sm font-medium text-sky-900">
+                {t("workspace.templateAnalysisResult")}
+              </div>
+              <pre className="whitespace-pre-wrap break-words">
+                {templateAnalysisCompact}
+              </pre>
+            </div>
+          ) : null}
+
+          {renderOneClickScenarioEditor()}
+        </div>
+      </div>
+    );
+  }
+
   function toggleTemplateOption(attributeId: string, optionId: string) {
     setSelectedOptionIds((current) => {
       const selectedIds = current[attributeId] ?? [];
@@ -2611,6 +3921,7 @@ export function ProjectWorkspace({
     setShotGenerationSuccessMessage("");
     setRawProductRequest(null);
     setRawProductResponse(null);
+    setRawDataModal(null);
   }
 
   function composeShotPrompt(shot: VideoShot) {
@@ -2707,13 +4018,118 @@ export function ProjectWorkspace({
     ].join("\n");
   }
 
-  function createShotPrompt(shot: VideoShot) {
+  function openShotPrompt(shot: VideoShot) {
+    const prompt = composeShotPrompt(shot);
     setGeneratedShotPrompts((current) => ({
       ...current,
-      [shot.id]: composeShotPrompt(shot),
+      [shot.id]: prompt,
     }));
+    setRawDataModal({
+      title: t("workspace.shotPromptTitle"),
+      help: t("workspace.shotPromptPopupHelp"),
+      value: prompt,
+    });
     setErrorMessage("");
     setStatus({ label: t("workspace.shotPromptGenerated"), tone: "success" });
+  }
+
+  async function createShotVideo(shot: VideoShot) {
+    const finalPrompt = (generatedShotPrompts[shot.id] ?? composeShotPrompt(shot)).trim();
+    if (!finalPrompt) {
+      setShotVideoErrors((current) => ({
+        ...current,
+        [shot.id]: t("workspace.shotVideoMissingPrompt"),
+      }));
+      setStatus({ label: t("workspace.shotVideoFailed"), tone: "danger" });
+      return;
+    }
+
+    const mediaIds = getValidShotMediaItems(shot).map((item) => item.id);
+    const appRequest = {
+      endpoint: `/api/v1/projects/${projectId}/videos`,
+      body: {
+        finalPrompt,
+        mediaIds,
+      },
+      shot: {
+        id: shot.id,
+        title: shot.title,
+      },
+    };
+
+    setGeneratedShotPrompts((current) => ({
+      ...current,
+      [shot.id]: finalPrompt,
+    }));
+    setCreatingVideoShotIds((current) => ({ ...current, [shot.id]: true }));
+    setShotVideoMessages((current) => {
+      const next = { ...current };
+      delete next[shot.id];
+      return next;
+    });
+    setShotVideoErrors((current) => {
+      const next = { ...current };
+      delete next[shot.id];
+      return next;
+    });
+    setRawShotVideoRequests((current) => ({ ...current, [shot.id]: appRequest }));
+    setRawShotVideoResponses((current) => {
+      const next = { ...current };
+      delete next[shot.id];
+      return next;
+    });
+    setErrorMessage("");
+    setStatus({ label: t("workspace.shotVideoCreating"), tone: "info" });
+
+    try {
+      const queuedJob = await apiPost<Job>(`/projects/${projectId}/videos`, {
+        finalPrompt,
+        mediaIds,
+      });
+      const completedJob = await pollJob(queuedJob.jobId);
+      const result = getJobResult<VideoGenerationResult>(completedJob);
+      setRawShotVideoRequests((current) => ({
+        ...current,
+        [shot.id]: result.rawRequest ?? appRequest,
+      }));
+      setRawShotVideoResponses((current) => ({
+        ...current,
+        [shot.id]: result.rawResponse ?? result,
+      }));
+      setShotVideoMessages((current) => ({
+        ...current,
+        [shot.id]: t("workspace.shotVideoSuccess"),
+      }));
+      setStatus({ label: t("workspace.shotVideoSuccess"), tone: "success" });
+    } catch (error) {
+      const nextError = formatVideoGenerationError(error, t);
+      const rawFailure =
+        error instanceof JobFailureError
+          ? {
+              jobId: error.job.jobId,
+              status: error.job.status,
+              error: error.job.error,
+              result: error.job.result,
+            }
+          : {
+              error: error instanceof Error ? error.message : t("workspace.shotVideoFailed"),
+            };
+      setRawShotVideoResponses((current) => ({
+        ...current,
+        [shot.id]: rawFailure,
+      }));
+      setShotVideoErrors((current) => ({
+        ...current,
+        [shot.id]: nextError,
+      }));
+      setStatus({ label: t("workspace.shotVideoFailed"), tone: "danger" });
+    } finally {
+      setCreatingVideoShotIds((current) => {
+        const next = { ...current };
+        delete next[shot.id];
+        return next;
+      });
+    }
   }
 
   function copyPromptWithTextarea(prompt: string) {
@@ -2732,27 +4148,6 @@ export function ProjectWorkspace({
       return document.execCommand("copy");
     } finally {
       document.body.removeChild(textarea);
-    }
-  }
-
-  async function copyShotPrompt(prompt: string) {
-    try {
-      let copied = copyPromptWithTextarea(prompt);
-
-      if (!copied && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(prompt);
-        copied = true;
-      }
-
-      if (!copied) {
-        throw new Error("Copy command failed");
-      }
-
-      setErrorMessage("");
-      setStatus({ label: t("workspace.shotPromptCopied"), tone: "success" });
-    } catch {
-      setErrorMessage(t("workspace.shotPromptCopyFailed"));
-      setStatus({ label: t("workspace.shotPromptCopyFailed"), tone: "danger" });
     }
   }
 
@@ -2816,6 +4211,7 @@ export function ProjectWorkspace({
                   setRawShotResponse(null);
                   setShotGenerationErrorMessage("");
                   setShotGenerationSuccessMessage("");
+                  setRawDataModal(null);
                 }}
               />
             </div>
@@ -2878,6 +4274,45 @@ export function ProjectWorkspace({
               )}
             </div>
 
+            <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-foreground">
+                    {t("workspace.shotsResultTitle")}
+                  </h4>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {t("workspace.shotsResultHelp")}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="gap-2"
+                  onClick={applyShotsResultJson}
+                >
+                  <Save size={15} />
+                  {t("workspace.shotsResultApply")}
+                </Button>
+              </div>
+              <TextareaWithCounter
+                rows={10}
+                value={shotsResultText}
+                onChange={(event) => {
+                  setShotsResultText(event.target.value);
+                  setIsEditingShotsResultJson(true);
+                  setShotsResultJsonError("");
+                }}
+                placeholder={t("workspace.shotsResultPlaceholder")}
+                spellCheck={false}
+                className="mt-3 min-h-72 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
+              />
+              {shotsResultJsonError ? (
+                <div className="mt-2 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-xs leading-5 text-red-700">
+                  {shotsResultJsonError}
+                </div>
+              ) : null}
+            </div>
+
             {shotGenerationErrorMessage ? (
               <div className="mt-3 flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
                 <AlertCircle size={16} className="mt-0.5 shrink-0" />
@@ -2902,36 +4337,50 @@ export function ProjectWorkspace({
           </div>
         ) : (
           <>
-            <label className="mt-3 block text-sm font-medium" htmlFor="shotPlan">
-              {t("workspace.shotsSelect")}
-            </label>
-            <select
-              id="shotPlan"
-              value={selectedShotPlanId}
-              onChange={(event) => {
-                const nextShotPlanId = event.target.value;
-                const nextShotPlan =
-                  shotPlans.find((shotPlan) => shotPlan.id === nextShotPlanId) ??
-                  null;
-                setSelectedShotPlanId(nextShotPlanId);
-                setSelectedShotIds(
-                  nextShotPlan?.shots.map((shot) => shot.id) ?? [],
-                );
-                setRawStoryRequest(null);
-                setRawStoryResponse(null);
-                setOpenShotAttributePanelIds({});
-                if (nextShotPlan) {
-                  setShotDurationSeconds(nextShotPlan.durationSeconds);
-                }
-              }}
-              className="mt-2 h-10 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
-            >
-              {shotPlans.map((shotPlan) => (
-                <option key={shotPlan.id} value={shotPlan.id}>
-                  {shotPlan.name}
-                </option>
-              ))}
-            </select>
+            {isOneClickMode ? (
+              selectedShotPlan ? (
+                <div className="mt-3 rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
+                  {t("oneClick.step3SavedShotPlan", {
+                    name: selectedShotPlan.name,
+                  })}
+                </div>
+              ) : null
+            ) : (
+              <>
+                <label className="mt-3 block text-sm font-medium" htmlFor="shotPlan">
+                  {t("workspace.shotsSelect")}
+                </label>
+                <select
+                  id="shotPlan"
+                  value={selectedShotPlanId}
+                  onChange={(event) => {
+                    const nextShotPlanId = event.target.value;
+                    const nextShotPlan =
+                      shotPlans.find((shotPlan) => shotPlan.id === nextShotPlanId) ??
+                      null;
+                    setSelectedShotPlanId(nextShotPlanId);
+                    setSelectedShotIds(
+                      nextShotPlan?.shots.map((shot) => shot.id) ?? [],
+                    );
+                    setRawStoryRequest(null);
+                    setRawStoryResponse(null);
+                    setOpenShotAttributePanelIds({});
+                    setIsEditingShotsResultJson(false);
+                    setShotsResultJsonError("");
+                    if (nextShotPlan) {
+                      setShotDurationSeconds(nextShotPlan.durationSeconds);
+                    }
+                  }}
+                  className="mt-2 h-10 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                >
+                  {shotPlans.map((shotPlan) => (
+                    <option key={shotPlan.id} value={shotPlan.id}>
+                      {shotPlan.name}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
 
             {selectedShotPlan ? (
               <div className="mt-4 grid gap-3">
@@ -2973,12 +4422,15 @@ export function ProjectWorkspace({
 
                 {selectedShotPlan.shots.map((shot, shotIndex) => {
                   const checked = selectedShotIds.includes(shot.id);
-                  const generatedShotPrompt = generatedShotPrompts[shot.id];
                   const shotAttributes = shot.attributes.filter(
                     (attribute) => !isDialogueAttribute(attribute),
                   );
                   const isShotAttributesOpen =
                     openShotAttributePanelIds[shot.id] ?? false;
+                  const isCreatingShotVideo =
+                    creatingVideoShotIds[shot.id] ?? false;
+                  const shotVideoMessage = shotVideoMessages[shot.id];
+                  const shotVideoError = shotVideoErrors[shot.id];
                   return (
                     <div
                       key={shot.id}
@@ -3195,31 +4647,52 @@ export function ProjectWorkspace({
                             />
                           </label>
                           {renderMediaUpload(shot)}
-                          <Button
-                            type="button"
-                            className="mt-3 w-fit gap-2"
-                            onClick={() => createShotPrompt(shot)}
-                          >
-                            <Sparkles size={15} />
-                            {t("workspace.shotPromptGenerate")}
-                          </Button>
-
-                          {generatedShotPrompt ? (
-                            <div className="relative mt-3 rounded-md border border-sky-100 bg-white p-3 pr-12 text-sm leading-6 text-foreground shadow-sm">
-                              <button
-                                type="button"
-                                className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
-                                aria-label={t("workspace.shotPromptCopy")}
-                                title={t("workspace.shotPromptCopy")}
-                                onClick={() =>
-                                  void copyShotPrompt(generatedShotPrompt)
-                                }
-                              >
-                                <Copy size={15} />
-                              </button>
-                              <pre className="whitespace-pre-wrap break-words font-sans">
-                                {generatedShotPrompt}
-                              </pre>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="gap-2"
+                              onClick={() => openShotPrompt(shot)}
+                            >
+                              <FileText size={15} />
+                              {t("workspace.fullPromptButton")}
+                            </Button>
+                            <Button
+                              type="button"
+                              className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={isCreatingShotVideo}
+                              onClick={() => void createShotVideo(shot)}
+                            >
+                              {isCreatingShotVideo ? (
+                                <Loader2 size={15} className="animate-spin" />
+                              ) : (
+                                <FileVideo size={15} />
+                              )}
+                              {isCreatingShotVideo
+                                ? t("workspace.shotVideoCreating")
+                                : t("workspace.shotVideoCreate")}
+                            </Button>
+                            {renderRawDataButton(
+                              t("workspace.rawRequestButton"),
+                              t("workspace.shotVideoRawRequest"),
+                              t("workspace.shotVideoRawRequestHelp"),
+                              rawShotVideoRequests[shot.id],
+                            )}
+                            {renderRawDataButton(
+                              t("workspace.rawResponseButton"),
+                              t("workspace.shotVideoRawResponse"),
+                              t("workspace.shotVideoRawResponseHelp"),
+                              rawShotVideoResponses[shot.id],
+                            )}
+                          </div>
+                          {shotVideoMessage ? (
+                            <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">
+                              {shotVideoMessage}
+                            </div>
+                          ) : null}
+                          {shotVideoError ? (
+                            <div className="mt-3 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+                              {shotVideoError}
                             </div>
                           ) : null}
                         </div>
@@ -3338,6 +4811,7 @@ export function ProjectWorkspace({
                       setTemplateAnalysisErrorMessage("");
                       setRawTemplateRequest(null);
                       setRawTemplateResponse(null);
+                      setRawDataModal(null);
                     }}
                   />
                 </div>
@@ -3628,6 +5102,103 @@ export function ProjectWorkspace({
     </Button>
   );
 
+  function renderOneClickWizard() {
+    const steps: Array<{ id: 1 | 2 | 3; label: string }> = [
+      { id: 1, label: t("oneClick.step1Short") },
+      { id: 2, label: t("oneClick.step2Short") },
+      { id: 3, label: t("oneClick.step3Short") },
+    ];
+    const hasStoryContent = promptText.trim().length > 0;
+    const canGoNext = hasStoryContent;
+    const goToNextStep = async () => {
+      if (oneClickStep === 1 || oneClickStep === 2) {
+        const saved = await saveStoryContent();
+        if (!saved) {
+          return;
+        }
+      }
+      if (oneClickStep === 1) {
+        setOneClickStep(2);
+        return;
+      }
+      setOneClickStep(3);
+    };
+
+    return (
+      <Card
+        title={t("oneClick.wizardTitle")}
+        action={<Badge variant="info">{t("oneClick.shortcutBadge")}</Badge>}
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          {steps.map((step) => {
+            const active = step.id === oneClickStep;
+            const disabled = step.id > 1 && !hasStoryContent;
+            return (
+              <button
+                key={step.id}
+                type="button"
+                disabled={disabled}
+                className={`rounded-md border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-sky-200 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  active
+                    ? "border-sky-300 bg-sky-50 text-sky-950"
+                    : "border-border bg-white text-muted-foreground hover:bg-muted"
+                }`}
+                onClick={() => {
+                  if (!disabled) {
+                    setOneClickStep(step.id);
+                  }
+                }}
+              >
+                <span className="block text-xs font-medium uppercase">
+                  {t("oneClick.stepNumber", { step: step.id })}
+                </span>
+                <span className="mt-1 block text-sm font-semibold">
+                  {step.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {oneClickStep === 1 ? renderStoryContentStep() : null}
+        {oneClickStep === 2 ? renderOneClickScenarioStep() : null}
+        {oneClickStep === 3 ? renderShotsPanel() : null}
+        {renderScriptStatus()}
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={oneClickStep === 1}
+            onClick={() =>
+              setOneClickStep((current) =>
+                current === 3 ? 2 : current === 2 ? 1 : 1,
+              )
+            }
+          >
+            {t("oneClick.backStep")}
+          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <LinkButton href={`/projects/${projectId}`} variant="secondary">
+              {t("oneClick.openProject")}
+            </LinkButton>
+            {oneClickStep < 3 ? (
+              <Button
+                type="button"
+                disabled={!canGoNext || isSavingStoryContent}
+                onClick={() => void goToNextStep()}
+              >
+                {isSavingStoryContent
+                  ? t("oneClick.storySaving")
+                  : t("oneClick.nextStep")}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <>
       <div
@@ -3637,7 +5208,9 @@ export function ProjectWorkspace({
             : "grid gap-5 xl:grid-cols-[1.08fr_0.92fr]"
         }
       >
-        {flowType === "script" ? (
+        {isOneClickMode ? (
+          renderOneClickWizard()
+        ) : flowType === "script" ? (
           <Card
             title={t("flow.script")}
             action={<Badge variant="info">{t("workspace.selectedFlow")}</Badge>}

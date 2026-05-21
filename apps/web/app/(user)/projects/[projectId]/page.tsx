@@ -27,6 +27,8 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
     >
       <ProjectWorkspace
         projectId={project?.id ?? projectId}
+        projectName={project?.name}
+        projectDescription={project?.description ?? null}
         flowType={project?.flowType ?? "product"}
         savedTemplateSelection={project?.templateSelection ?? null}
         defaultPrompt=""

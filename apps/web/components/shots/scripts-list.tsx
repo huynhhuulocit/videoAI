@@ -1,7 +1,7 @@
 "use client";
 
 import type { ApiSuccess, VideoShotPlan } from "@videoai/contracts";
-import { Edit3, Loader2, Plus, Star, Trash2 } from "lucide-react";
+import { Edit3, Loader2, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/language-provider";
 import { Badge } from "../ui/badge";
@@ -13,18 +13,6 @@ const apiBaseUrl =
 
 async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${apiBaseUrl}/api/v1${path}`, {
-    headers: { "x-request-id": `web-${Date.now()}` },
-  });
-  if (!response.ok) {
-    throw new Error(`API request failed with status ${response.status}`);
-  }
-  const payload = (await response.json()) as ApiSuccess<T>;
-  return payload.data;
-}
-
-async function apiPost<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}/api/v1${path}`, {
-    method: "POST",
     headers: { "x-request-id": `web-${Date.now()}` },
   });
   if (!response.ok) {
@@ -89,24 +77,6 @@ export function ScriptsList() {
     }
   }
 
-  async function setDefaultScript(script: VideoShotPlan) {
-    setBusyId(script.id);
-    setErrorMessage("");
-    try {
-      const updated = await apiPost<VideoShotPlan | null>(`/shots/${script.id}/default`);
-      if (!updated) {
-        throw new Error(t("shots.defaultFailed"));
-      }
-      setScripts((current) =>
-        current.map((item) => ({ ...item, isDefault: item.id === updated.id })),
-      );
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("shots.defaultFailed"));
-    } finally {
-      setBusyId("");
-    }
-  }
-
   return (
     <Card
       title={t("shots.listTitle")}
@@ -141,9 +111,6 @@ export function ScriptsList() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-medium text-foreground">{script.name}</h3>
-                    {script.isDefault ? (
-                      <Badge variant="success">{t("common.default")}</Badge>
-                    ) : null}
                     <Badge variant="info">
                       {t("shots.shotCount", { count: script.shots.length })}
                     </Badge>
@@ -154,7 +121,7 @@ export function ScriptsList() {
                     })}
                   </p>
                   <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
-                    {script.sourceText}
+                    {script.description || script.sourceText}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -166,20 +133,6 @@ export function ScriptsList() {
                     <Edit3 size={15} />
                     {t("common.edit")}
                   </LinkButton>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="h-9 gap-2 px-3"
-                    disabled={busyId === script.id || script.isDefault}
-                    onClick={() => void setDefaultScript(script)}
-                  >
-                    {busyId === script.id ? (
-                      <Loader2 size={15} className="animate-spin" />
-                    ) : (
-                      <Star size={15} />
-                    )}
-                    {t("common.setDefault")}
-                  </Button>
                   <Button
                     type="button"
                     variant="destructive"

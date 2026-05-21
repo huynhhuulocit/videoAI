@@ -57,6 +57,18 @@ Error:
 
 Auth.js owns sign in, sign out and session routes inside the Next.js app.
 
+The optional site-wide gate is implemented in the Next.js web layer, outside the `/api/v1` Gateway contract. It protects pages and app routes before Auth.js when `SITE_GATE_ENABLED=true`.
+
+### `POST /api/site-gate/login`
+
+Validates the outer site gate username/password against environment variables and sets a signed HTTP-only cookie for the whole site. The request is form-encoded from `/site-login` and accepts `username`, `password` and optional safe relative `next`.
+
+Invalid credentials redirect back to `/site-login?error=1`. The real password is never stored in source code or returned to the browser.
+
+### `POST /api/site-gate/logout`
+
+Clears the outer site gate cookie and redirects to `/site-login`. This does not sign out the existing Auth.js user/admin session by itself.
+
 Gateway profile APIs:
 
 ### `GET /api/v1/me`
@@ -117,7 +129,7 @@ Archives a project by marking it non-active. Archived projects no longer appear 
 
 ### `POST /api/v1/projects/{projectId}/template-selection/analyze`
 
-Uses the active prompt provider/model to analyze the current Script Flow story against a selected Kịch bản/scenario template. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override, then backend-appended story and full attribute/option catalog context. The provider returns strict JSON with selected option IDs. The API normalizes the response, saves the resulting `templateSelection` on the project, creates AI request/response logs and returns a completed job.
+Uses the active prompt provider/model to analyze the current Script Flow story against a selected Kịch bản/scenario template. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override after replacing any placeholders present in that prompt. The provider returns strict JSON with selected option IDs. The API normalizes the response, saves the resulting `templateSelection` on the project, creates AI request/response logs and returns a completed job.
 
 Request:
 
@@ -125,11 +137,14 @@ Request:
 {
   "inputText": "Ăn khế trả vàng...",
   "templateId": "template_product_intro",
-  "masterPrompt": "You are a video script analyst..."
+  "masterPrompt": "You are a video script analyst...",
+  "saveAsTemplate": true,
+  "templateName": "One Click video project",
+  "templateDescription": "Short setup description used for the saved Scenario."
 }
 ```
 
-`masterPrompt` is optional. When omitted, the API uses the active admin-managed scenario analysis prompt, then falls back to the built-in default.
+`masterPrompt` is optional. When omitted, the API uses the active admin-managed scenario analysis prompt, then falls back to the built-in default. `saveAsTemplate`, `templateName` and `templateDescription` are optional; One Click uses them so a successful Step 2 analysis saves a Scenario record named/described from setup.
 
 Completed job result:
 
@@ -244,7 +259,7 @@ Lists active kịch bản/scenario templates owned by current user. The current 
 
 ### `POST /api/v1/templates/generate`
 
-Creates a kịch bản/scenario from a free-text video idea by calling the active prompt provider/model. The API uses the optional request `masterPrompt` as a temporary `Scenario` master prompt override; when omitted, it uses the active admin-managed `Scenario` prompt, then legacy fallback, then the built-in default. Placeholder replacement for `{story}` and `{attributes}` is best-effort and optional; the backend always appends structured runtime context and a strict JSON output contract after the selected master prompt.
+Creates a kịch bản/scenario from a free-text video idea by calling the active prompt provider/model. The API uses the optional request `masterPrompt` as a temporary `Scenario` master prompt override; when omitted, it uses the active admin-managed `Scenario` prompt, then legacy fallback, then the built-in default. Placeholder replacement for `{story}` and `{attributes}` is best-effort and optional; the backend does not append hidden runtime context or output instructions to the selected master prompt.
 
 The system must not create fake/sample scenario data when provider execution fails. Success persists the generated attribute/option JSON and AI request/response log in PostgreSQL, and the response also returns the redacted raw provider request/response so the Scenario create/edit UI can open `Request` and `Response` review popups next to the generate action.
 
@@ -309,7 +324,7 @@ Failure behavior:
 
 ### `POST /api/v1/templates`
 
-Creates a kịch bản/scenario manually from user-defined attributes/options. Frontend may parse attributes/options from a compact schema textarea such as `videoPurpose=Storytelling,Commercial;` and `genre=Folk Tale,Drama;`, or from compatible JSON, before sending the normalized `attributes` array.
+Creates a kịch bản/scenario manually from user-defined attributes/options. Frontend may parse attributes/options from a compact schema textarea such as `videoPurpose=Storytelling,Commercial;` and `genre=Folk Tale,Drama;`, or from optimized JSON before sending the normalized `attributes` array. The optimized JSON uses `id`, `name`, optional `description` and nested `options`; option `name` is converted to the internal `label`/`value` pair for compatibility. Legacy JSON with `translate`, `label` or `value` remains accepted.
 
 ### `PATCH /api/v1/templates/{templateId}`
 
@@ -319,19 +334,15 @@ Updates scenario name, description, idea or attributes/options JSON.
 
 Soft deletes a scenario by marking it archived.
 
-### `POST /api/v1/templates/{templateId}/default`
-
-Makes the scenario the current user's default scenario and clears the default flag from other active scenarios owned by the same user. If the default scenario is deleted later, the newest remaining active scenario becomes default.
-
 ## 8. Shot APIs
 
 ### `GET /api/v1/shots`
 
-Lists all active shot plans owned by the current user. Shot plans are reusable by any project owned by the same user. The current user default is returned first.
+Lists all active shot plans owned by the current user. Shot plans are reusable by any project owned by the same user. The list is ordered by latest update.
 
 ### `POST /api/v1/shots/generate`
 
-Generates a user-owned shot plan from story content. The API reads the active admin prompt provider/model and uses the optional request `masterPrompt` as a temporary `Shots` prompt override; when omitted, it falls back to the active admin default `Shots` master prompt. It optionally replaces legacy placeholders, appends structured story/attribute/duration context, calls the provider with a saved encrypted provider key or environment API key fallback, stores the redacted raw provider request plus raw response in AI logs/job result, normalizes the returned JSON, and persists the generated shot JSON in PostgreSQL. In the project workspace, `attributes` should include the selected Step 2 Kịch bản/scenario options formatted as compact plan attributes such as `genre=Folk Tale,Drama;`.
+Generates a user-owned shot plan from story content. The API reads the active admin prompt provider/model and uses the optional request `masterPrompt` as a temporary `Shots` prompt override; when omitted, it falls back to the active admin default `Shots` master prompt. It optionally replaces legacy placeholders, does not append hidden story/attribute/duration text, calls the provider with a saved encrypted provider key or environment API key fallback, stores the redacted raw provider request plus raw response in AI logs/job result, normalizes the returned JSON, and persists the generated shot JSON in PostgreSQL. In the project workspace, `attributes` should include the selected Step 2 Kịch bản/scenario options formatted as compact plan attributes such as `genre=Folk Tale,Drama;` only when the prompt includes `{attributes}`.
 
 For ChatGPT, the provider request uses the OpenAI Responses API with `text.format.type = "json_schema"`, `strict = true`, and `additionalProperties: false` on every schema object. Backend normalization still clamps shot durations to `1-8`.
 
@@ -341,6 +352,8 @@ Request:
 {
   "sourceText": "Create a short product introduction video.",
   "durationSeconds": 8,
+  "name": "One Click video project",
+  "description": "Short setup description used for the saved shot plan.",
   "masterPrompt": "You are an expert video shot planner.\n\nStory:\n{story}\n\nScenario attributes:\n{attributes}\n\nTarget seconds per shot: {durationSeconds}",
   "attributes": [
     {
@@ -376,6 +389,7 @@ Completed job result:
     "id": "shot_plan_001",
     "projectId": null,
     "name": "Shot plan 2026-05-18",
+    "description": "Short setup description used for the saved shot plan.",
     "sourceText": "Create a short product introduction video.",
     "durationSeconds": 8,
     "attributes": [],
@@ -411,7 +425,7 @@ Failure behavior:
 
 ### `PATCH /api/v1/shots/{shotPlanId}`
 
-Updates shot plan name, default duration, plan-level `attributes` or `shots` JSON after user edits.
+Updates shot plan name, description, default duration, plan-level `attributes` or `shots` JSON after user edits.
 
 ### `GET /api/v1/shots/{shotPlanId}`
 
@@ -421,10 +435,6 @@ Returns one active shot plan owned by the current user.
 
 Soft deletes a shot plan by marking it archived.
 
-### `POST /api/v1/shots/{shotPlanId}/default`
-
-Makes the shot plan the current user's default script/shot plan and clears the default flag from other active shot plans owned by the same user. If the default shot plan is deleted later, the newest remaining active shot plan becomes default.
-
 Compatibility endpoints retained during migration:
 
 - `GET /api/v1/projects/{projectId}/shots`
@@ -432,13 +442,13 @@ Compatibility endpoints retained during migration:
 - `PATCH /api/v1/projects/{projectId}/shots/{shotPlanId}`
 - `DELETE /api/v1/projects/{projectId}/shots/{shotPlanId}`
 
-New frontend code should use the user-level `/api/v1/shots` endpoints.
+New reusable Scripts UI code should use the user-level `/api/v1/shots` endpoints. One Click uses the project-scoped endpoints so Step 3 creates and edits a shot plan linked to the current project without showing an existing shot-plan selector.
 
 ## 9. Prompt and Script APIs
 
 ### `POST /api/v1/projects/{projectId}/prompts/generate`
 
-Starts Step 1 Story Content generation from Script Flow. The optional `masterPrompt` is a temporary `Scripts`/Story Content master prompt override for this request only; when omitted, runtime uses the active admin default. This endpoint calls the active prompt provider/model; it must not return locally generated fallback content when provider execution fails.
+Starts Step 1 Story Content generation from Script Flow. The optional `masterPrompt` is a temporary `Story Content` master prompt override for this request only; when omitted, runtime uses the active admin default. The persisted master-prompt type key remains `scripts` for compatibility. Runtime data is included only through placeholders present in the selected prompt. This endpoint calls the active prompt provider/model; it must not return locally generated fallback content when provider execution fails.
 
 Request:
 
@@ -507,6 +517,43 @@ Failure behavior:
 - Provider HTTP failures, unsupported providers, or empty provider text return `AI_PROVIDER_FAILED`.
 - The user workspace should show the safe error details inline under `Generate Story Content`; successful job raw request/response can be opened from the adjacent workspace `Request`/`Response` buttons and from Admin > AI Logs, with secrets redacted.
 
+### `GET /api/v1/projects/{projectId}/story-content`
+
+Returns the latest saved Story Content for a Script Flow/One Click project. The response is loaded from the newest succeeded `content.prompts` row for the project with source type `script_flow` or `story_content`, and the workspace uses it to hydrate the Story Content textarea when the project is opened.
+
+Response:
+
+```json
+{
+  "data": {
+    "storyContent": "Expanded story content used by later wizard steps."
+  }
+}
+```
+
+### `PATCH /api/v1/projects/{projectId}/story-content`
+
+Persists manually edited One Click Story Content before the wizard advances. This does not call an AI provider. The API writes a succeeded `content.prompts` record with `sourceType = story_content`, using the same text as `inputText` and `generatedPrompt`, so later Step 2/Step 3 loads can reuse the database-backed content.
+
+Request:
+
+```json
+{
+  "storyContent": "Expanded story content used by later wizard steps."
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "saved": true,
+    "storyContent": "Expanded story content used by later wizard steps."
+  }
+}
+```
+
 ### `POST /api/v1/projects/{projectId}/products/analyze`
 
 Starts product URL and optional media analysis.
@@ -564,7 +611,7 @@ Response:
 
 ### `POST /api/v1/projects/{projectId}/videos`
 
-Starts video generation from final prompt or script.
+Starts video generation from a final prompt, script, or composed project shot prompt. The current local implementation creates a `video_generation` job, writes a video generation record, logs the AI request, and calls the configured video provider/model. It must not return a fake success when the provider is missing, unsupported, over quota, or returns an error.
 
 Request:
 
@@ -572,21 +619,36 @@ Request:
 {
   "promptId": "prompt_001",
   "scriptId": "script_001",
-  "finalPrompt": "Final approved prompt text."
+  "finalPrompt": "Final approved prompt text.",
+  "mediaIds": ["media_001"]
 }
 ```
+
+`mediaIds` is optional and is used for ownership validation/logging when a project shot has reference media.
 
 Response:
 
 ```json
 {
   "data": {
-    "videoGenerationId": "video_gen_001",
-    "jobId": "job_video_001",
-    "status": "queued"
+    "jobId": "job_video_generation_001",
+    "type": "video_generation",
+    "status": "succeeded",
+    "progress": 100,
+    "result": {
+      "videoGenerationId": "video_gen_001",
+      "projectId": "project_001",
+      "status": "succeeded",
+      "provider": "veo",
+      "model": "veo-3.0-generate-preview",
+      "rawRequest": {},
+      "rawResponse": {}
+    }
   }
 }
 ```
+
+If the provider call fails, the job status is `failed`, the video generation record is marked failed, and the job error contains a stable code such as `AI_CONFIG_MISSING`, `AI_RATE_LIMITED` or `AI_PROVIDER_FAILED`. The web app surfaces this error beside the shot card and leaves the raw response popup available with the job error payload.
 
 ### `GET /api/v1/projects/{projectId}/videos/{videoGenerationId}`
 
@@ -772,7 +834,7 @@ Response:
           {
             "id": "built_in_scripts",
             "type": "scripts",
-            "name": "Built-in Scripts master prompt",
+            "name": "Built-in Story Content master prompt",
             "content": "Create readable script and prompt content.",
             "isDefault": true,
             "status": "active",
@@ -784,7 +846,7 @@ Response:
         "defaultPrompt": {
           "id": "built_in_scripts",
           "type": "scripts",
-          "name": "Built-in Scripts master prompt",
+          "name": "Built-in Story Content master prompt",
           "content": "Create readable script and prompt content.",
           "isDefault": true,
           "status": "active",
@@ -815,10 +877,10 @@ Request:
 
 Validation:
 
-- `type` must be `scenario`, `shots` or `scripts`.
+- `type` must be `scenario`, `shots` or `scripts`. The `scripts` key is displayed in admin/user UI as `Story Content`.
 - `name` and `content` are required.
 - Content may keep the recommended placeholder format, but placeholders are optional and saves do not validate their presence.
-- Recommended placeholders by type: `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{durationSeconds}`; `scripts` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{durationSeconds}`.
 
 ### `PATCH /api/v1/admin/master-prompts/{id}`
 

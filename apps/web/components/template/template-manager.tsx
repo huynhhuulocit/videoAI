@@ -54,15 +54,6 @@ function makeId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 }
 
-function escapeCompactToken(value: string) {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;")
-    .replace(/=/g, "\\=")
-    .replace(/\|/g, "\\|");
-}
-
 function unescapeCompactToken(value: string) {
   let result = "";
   let escaped = false;
@@ -270,39 +261,6 @@ function descriptionFromTranslateAndDetail(translate: string, detail: string) {
   ].filter(Boolean).join("\n");
 }
 
-function formatAttributeTranslateText(attributes: TemplateAttribute[]) {
-  const payload = attributes.map((attribute) => {
-    const attributeTranslate = extractTranslateDescription(
-      attribute.description,
-      lookupVietnameseLabel(attribute.name),
-      explainAttribute(attribute)
-    );
-
-    return {
-      attributeId: attribute.id,
-      attributeName: attribute.name,
-      translate: attributeTranslate.translate,
-      description: attributeTranslate.description,
-      options: attribute.options.map((option) => {
-        const optionTranslate = extractTranslateDescription(
-          option.description,
-          lookupVietnameseLabel(option.label),
-          explainOption(option)
-        );
-
-        return {
-          optionId: option.id,
-          optionLabel: option.label,
-          translate: optionTranslate.translate,
-          description: optionTranslate.description
-        };
-      })
-    };
-  });
-
-  return JSON.stringify(payload, null, 2);
-}
-
 function splitDetailParts(value: string) {
   return splitUnescaped(value, "|")
     .map((part) => unescapeCompactToken(part.trim()))
@@ -314,212 +272,26 @@ function joinDetailDescription(parts: string[]) {
 }
 
 function descriptionFromVietnameseAndDetail(vietnamese: string, detail: string) {
-  return descriptionFromTranslateAndDetail(vietnamese, detail);
-}
-
-function findMatchingAttribute(attributes: TemplateAttribute[], name: string) {
-  const normalizedName = normalizeIdentifier(name, "");
-  return attributes.find((attribute) =>
-    [
-      attribute.id,
-      attribute.name,
-      compactKeyFromAttribute(attribute)
-    ].some((candidate) => normalizeIdentifier(candidate, "") === normalizedName)
-  );
-}
-
-function findMatchingOption(options: TemplateOption[], name: string) {
-  const normalizedName = normalizeIdentifier(name, "");
-  return options.find((option) =>
-    [option.id, option.label, option.value].some(
-      (candidate) => normalizeIdentifier(candidate, "") === normalizedName
-    )
-  );
-}
-
-function parseAttributeNotesText(value: string, attributes: TemplateAttribute[]) {
-  const blocks = value
-    .split(/\n(?=\s*\d+\.\s+)/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-
-  if (blocks.length === 0) {
-    return attributes;
-  }
-
-  return attributes.map((attribute) => {
-    const block = blocks.find((candidate) => {
-      const firstLine = candidate.split(/\r?\n/).find(Boolean) ?? "";
-      const name = firstLine.replace(/^\s*\d+\.\s*/, "").trim();
-      return findMatchingAttribute([attribute], name);
-    });
-
-    if (!block) {
-      return attribute;
-    }
-
-    const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const vietnameseLine = lines.find((line) => /^Vietnamese:/i.test(line));
-    const descriptionLine = lines.find((line) => /^Description:/i.test(line));
-    const vietnamese = vietnameseLine?.replace(/^Vietnamese:\s*/i, "").trim() ?? "";
-    const description = descriptionLine?.replace(/^Description:\s*/i, "").trim() ?? "";
-    const optionLines = lines.filter((line) => line.startsWith("-"));
-
-    return {
-      ...attribute,
-      description:
-        descriptionFromVietnameseAndDetail(vietnamese, description) ||
-        attribute.description,
-      options: attribute.options.map((option) => {
-        const optionLine = optionLines.find((line) => {
-          const optionName = line.replace(/^-\s*/, "").split(":")[0]?.trim() ?? "";
-          return findMatchingOption([option], optionName);
-        });
-
-        if (!optionLine) {
-          return option;
-        }
-
-        const detail = optionLine.replace(/^-\s*/, "").split(":").slice(1).join(":").trim();
-        return {
-          ...option,
-          description: detail || option.description
-        };
-      })
-    };
-  });
-}
-
-function attributeDescriptionFingerprint(attributes: TemplateAttribute[]) {
-  return JSON.stringify(
-    attributes.map((attribute) => ({
-      id: attribute.id,
-      description: attribute.description ?? "",
-      options: attribute.options.map((option) => ({
-        id: option.id,
-        description: option.description ?? ""
-      }))
-    }))
-  );
-}
-
-function parseAttributeTranslateJson(value: string, attributes: TemplateAttribute[]) {
-  const parsed = JSON.parse(value) as unknown;
-  const root = toRecord(parsed);
-  const input = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray(root.attributes)
-      ? root.attributes
-      : null;
-
-  if (!input) {
-    throw new Error("Invalid translate JSON.");
-  }
-
-  return attributes.map((attribute) => {
-    const match = input
-      .map(toRecord)
-      .find((entry) => {
-        const id = cleanString(entry.attributeId) || cleanString(entry.id);
-        const name =
-          cleanString(entry.attributeName) ||
-          cleanString(entry.name) ||
-          cleanString(entry.label);
-        return (
-          (id && id === attribute.id) ||
-          (name && Boolean(findMatchingAttribute([attribute], name)))
-        );
-      });
-
-    if (!match) {
-      return attribute;
-    }
-
-    const translate =
-      cleanString(match.translate) ||
-      cleanString(match.vietnamese) ||
-      cleanString(match.translation) ||
-      cleanString(match.vi);
-    const detail =
-      cleanString(match.description) ||
-      cleanString(match.explanation) ||
-      cleanString(match.detail);
-    const optionsInput = Array.isArray(match.options) ? match.options.map(toRecord) : [];
-
-    return {
-      ...attribute,
-      description:
-        descriptionFromTranslateAndDetail(translate, detail) ||
-        attribute.description,
-      options: attribute.options.map((option) => {
-        const optionMatch = optionsInput.find((entry) => {
-          const id = cleanString(entry.optionId) || cleanString(entry.id);
-          const name =
-            cleanString(entry.optionLabel) ||
-            cleanString(entry.label) ||
-            cleanString(entry.value);
-          return (
-            (id && id === option.id) ||
-            (name && Boolean(findMatchingOption([option], name)))
-          );
-        });
-
-        if (!optionMatch) {
-          return option;
-        }
-
-        const optionTranslate =
-          cleanString(optionMatch.translate) ||
-          cleanString(optionMatch.vietnamese) ||
-          cleanString(optionMatch.translation) ||
-          cleanString(optionMatch.vi);
-        const optionDetail =
-          cleanString(optionMatch.description) ||
-          cleanString(optionMatch.explanation) ||
-          cleanString(optionMatch.detail);
-
-        return {
-          ...option,
-          description:
-            descriptionFromTranslateAndDetail(optionTranslate, optionDetail) ||
-            option.description
-        };
-      })
-    };
-  });
-}
-
-function parseAttributeTranslateText(value: string, attributes: TemplateAttribute[]) {
-  const trimmedValue = value.trim();
-  if (!trimmedValue) {
-    return attributes;
-  }
-
-  if (trimmedValue.startsWith("[") || trimmedValue.startsWith("{")) {
-    return parseAttributeTranslateJson(trimmedValue, attributes);
-  }
-
-  return parseAttributeNotesText(trimmedValue, attributes);
-}
-
-function compactKeyFromAttribute(attribute: TemplateAttribute) {
-  const source =
-    attribute.id && !attribute.id.startsWith("attribute_")
-      ? attribute.id
-      : attribute.name;
-  return source
-    .replace(/[-_]+(.)/g, (_, character: string) => character.toUpperCase())
-    .replace(/^\w/, (character) => character.toLowerCase())
-    .replace(/\s+(.)/g, (_, character: string) => character.toUpperCase());
+  return vietnamese ? descriptionFromTranslateAndDetail(vietnamese, detail) : detail;
 }
 
 function formatAttributesText(attributes: TemplateAttribute[]) {
-  return attributes
-    .map((attribute) => {
-      const options = attribute.options.map((option) => escapeCompactToken(option.label)).join(",");
-      return `${escapeCompactToken(compactKeyFromAttribute(attribute))}=${options};`;
-    })
-    .join("\n");
+  return JSON.stringify(
+    {
+      attributes: attributes.map((attribute) => ({
+        id: attribute.id,
+        name: attribute.name,
+        ...(attribute.description?.trim() ? { description: attribute.description.trim() } : {}),
+        options: attribute.options.map((option) => ({
+          id: option.id,
+          name: option.label,
+          ...(option.description?.trim() ? { description: option.description.trim() } : {})
+        }))
+      }))
+    },
+    null,
+    2
+  );
 }
 
 function renderPromptTemplate(template: string, values: Record<string, string>) {
@@ -542,8 +314,7 @@ function getScenarioGenerationOutputContract() {
           options: [
             {
               id: "video-purpose-education",
-              label: "Education",
-              value: "Education",
+              name: "Education",
               description: "Use when the video teaches or explains."
             }
           ]
@@ -697,6 +468,7 @@ function parseAttributesJson(value: string): TemplateAttribute[] {
       const attribute = toRecord(attributeInput);
       const name = cleanString(attribute.name);
       const attributeVietnamese =
+        cleanString(attribute.translate) ||
         cleanString(attribute.vietnamese) ||
         cleanString(attribute.vi) ||
         cleanString(attribute.translation);
@@ -713,8 +485,12 @@ function parseAttributesJson(value: string): TemplateAttribute[] {
           }
 
           const option = toRecord(optionInput);
-          const label = cleanString(option.label) || cleanString(option.value);
+          const label =
+            cleanString(option.name) ||
+            cleanString(option.label) ||
+            cleanString(option.value);
           const optionVietnamese =
+            cleanString(option.translate) ||
             cleanString(option.vietnamese) ||
             cleanString(option.vi) ||
             cleanString(option.translation);
@@ -893,9 +669,7 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
   const [templates, setTemplates] = useState<VideoTemplate[]>([]);
   const [draft, setDraft] = useState<TemplateDraft>(emptyDraft);
   const [attributesText, setAttributesText] = useState(formatAttributesText(emptyDraft.attributes));
-  const [attributeTranslateText, setAttributeTranslateText] = useState(formatAttributeTranslateText(emptyDraft.attributes));
   const [isEditingJson, setIsEditingJson] = useState(false);
-  const [isEditingAttributeTranslate, setIsEditingAttributeTranslate] = useState(false);
   const [status, setStatus] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [generationErrorMessage, setGenerationErrorMessage] = useState("");
@@ -921,8 +695,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
           setTemplates([]);
           setDraft(emptyDraft);
           setAttributesText(formatAttributesText(emptyDraft.attributes));
-          setAttributeTranslateText(formatAttributeTranslateText(emptyDraft.attributes));
-          setIsEditingAttributeTranslate(false);
           setRawTemplateRequest(null);
           setRawTemplateResponse(null);
           return;
@@ -969,12 +741,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
   }, [draft.attributes, isEditingJson]);
 
   useEffect(() => {
-    if (!isEditingAttributeTranslate) {
-      setAttributeTranslateText(formatAttributeTranslateText(draft.attributes));
-    }
-  }, [draft.attributes, isEditingAttributeTranslate]);
-
-  useEffect(() => {
     let cancelled = false;
 
     async function loadScenarioMasterPrompt() {
@@ -1019,32 +785,10 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
     }
 
     const outputContract = getScenarioGenerationOutputContract();
-    const renderedPrompt = renderPromptTemplate(masterPrompt, {
+    return renderPromptTemplate(masterPrompt, {
       story: idea,
       attributes: outputContract
     });
-
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      "Task: Create a reusable Scenario template for VideoAI from the user's video idea.",
-      "Do not select options from an existing catalog. Create a useful new catalog of attributes and options.",
-      "The Scenario will later be used to guide script analysis, shot generation, and prompt composition.",
-      "",
-      "User video idea:",
-      idea,
-      "",
-      "Output rules:",
-      "- Return only strict JSON. Do not include markdown, comments, or prose outside JSON.",
-      "- Include 3 to 8 attributes. Each attribute should include 2 to 6 practical options.",
-      "- Keep attribute names short and reusable across similar videos.",
-      "- Use human-readable labels and stable kebab-case ids.",
-      "- The response must be original to the user's idea. Do not return placeholder/sample data.",
-      "",
-      "Required JSON shape:",
-      outputContract
-    ].join("\n");
   }
 
   function renderDebugButton(
@@ -1076,19 +820,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
     );
   }
 
-  const isAttributeTranslateApplied = useMemo(() => {
-    if (!attributeTranslateText.trim()) {
-      return false;
-    }
-
-    try {
-      const translatedAttributes = parseAttributeTranslateText(attributeTranslateText, draft.attributes);
-      return attributeDescriptionFingerprint(translatedAttributes) === attributeDescriptionFingerprint(draft.attributes);
-    } catch {
-      return false;
-    }
-  }, [attributeTranslateText, draft.attributes]);
-
   function updateAttribute(attributeId: string, patch: Partial<TemplateAttribute>) {
     setIsEditingJson(false);
     setDraft((current) => ({
@@ -1099,7 +830,7 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
     }));
   }
 
-  function updateOption(attributeId: string, optionId: string, label: string) {
+  function updateOption(attributeId: string, optionId: string, patch: Partial<TemplateOption>) {
     setIsEditingJson(false);
     setDraft((current) => ({
       ...current,
@@ -1108,7 +839,13 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
           ? {
               ...attribute,
               options: attribute.options.map((option) =>
-                option.id === optionId ? { ...option, label, value: label } : option
+                option.id === optionId
+                  ? {
+                      ...option,
+                      ...patch,
+                      ...(patch.label !== undefined ? { value: patch.label } : {})
+                    }
+                  : option
               )
             }
           : attribute
@@ -1176,7 +913,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
     setRawTemplateRequest(debug?.rawRequest ?? null);
     setRawTemplateResponse(debug?.rawResponse ?? null);
     setIsEditingJson(false);
-    setIsEditingAttributeTranslate(false);
     setStatus("");
     setErrorMessage("");
   }
@@ -1187,33 +923,11 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
       setDraft((current) => ({ ...current, attributes: parsedAttributes }));
       setAttributesText(formatAttributesText(parsedAttributes));
       setIsEditingJson(false);
-      setIsEditingAttributeTranslate(false);
       setErrorMessage("");
       setStatus(t("template.jsonApplied"));
     } catch {
       setStatus("");
       setErrorMessage(t("template.jsonInvalid"));
-    }
-  }
-
-  function buildAttributeTranslate() {
-    setAttributeTranslateText(formatAttributeTranslateText(draft.attributes));
-    setIsEditingAttributeTranslate(true);
-    setStatus(t("template.translateGenerated"));
-    setErrorMessage("");
-  }
-
-  function applyAttributeTranslate() {
-    try {
-      const nextAttributes = parseAttributeTranslateText(attributeTranslateText, draft.attributes);
-      setDraft((current) => ({ ...current, attributes: nextAttributes }));
-      setAttributeTranslateText(formatAttributeTranslateText(nextAttributes));
-      setIsEditingAttributeTranslate(false);
-      setStatus(t("template.translateApplied"));
-      setErrorMessage("");
-    } catch {
-      setStatus("");
-      setErrorMessage(t("template.translateInvalid"));
     }
   }
 
@@ -1234,9 +948,13 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
 
     try {
       const masterPrompt = scenarioMasterPrompt.trim();
+      if (!masterPrompt) {
+        setGenerationErrorMessage(t("template.scenarioMasterPromptMissing"));
+        return;
+      }
       const generatedTemplate = await apiSend<GenerateTemplateResult>("POST", "/templates/generate", {
         idea,
-        ...(masterPrompt ? { masterPrompt } : {})
+        masterPrompt
       });
       const template: VideoTemplate = generatedTemplate;
       setRawTemplateRequest(generatedTemplate.rawRequest);
@@ -1245,7 +963,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
       setTemplates((current) => [template, ...current.filter((item) => item.id !== template.id)]);
       setDraft(templateToDraft(template));
       setIsEditingJson(false);
-      setIsEditingAttributeTranslate(false);
       setStatus(t("template.saved"));
       if (isCreateMode || isEditMode) {
         router.replace(`/templates/${template.id}`);
@@ -1269,16 +986,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
       return;
     }
 
-    try {
-      if (attributeTranslateText.trim()) {
-        parsedAttributes = parseAttributeTranslateText(attributeTranslateText, parsedAttributes);
-      }
-    } catch {
-      setStatus("");
-      setErrorMessage(t("template.translateInvalid"));
-      return;
-    }
-
     const normalizedAttributes = parsedAttributes
       .map((attribute) => ({
         ...attribute,
@@ -1288,7 +995,8 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
           .map((option) => ({
             ...option,
             label: option.label.trim(),
-            value: option.value.trim() || option.label.trim()
+            value: option.value.trim() || option.label.trim(),
+            description: option.description?.trim() || undefined
           }))
           .filter((option) => option.label)
       }))
@@ -1318,8 +1026,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
       setDraft(templateToDraft(template));
       setAttributesText(formatAttributesText(template.attributes));
       setIsEditingJson(false);
-      setAttributeTranslateText(formatAttributeTranslateText(template.attributes));
-      setIsEditingAttributeTranslate(false);
       setStatus(t("template.saved"));
       if (isNewTemplate) {
         router.replace(`/templates/${template.id}`);
@@ -1344,7 +1050,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
         const nextTemplate = remainingTemplates[0];
         setDraft(nextTemplate ? templateToDraft(nextTemplate) : emptyDraft);
         setIsEditingJson(false);
-        setIsEditingAttributeTranslate(false);
       }
       setStatus(t("template.deleted"));
     } catch (error) {
@@ -1526,49 +1231,6 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
             </Button>
           </div>
 
-          <div className="rounded-md border border-sky-100 bg-sky-50/70 p-3">
-            <label className="text-sm font-medium text-sky-950" htmlFor="templateAttributeNotes">
-              {t("template.translateEditor")}
-            </label>
-            <p className="mt-1 text-sm text-sky-800/80">{t("template.translateHelp")}</p>
-            <TextareaWithCounter
-              id="templateAttributeNotes"
-              value={attributeTranslateText}
-              onChange={(event) => {
-                setAttributeTranslateText(event.target.value);
-                setIsEditingAttributeTranslate(true);
-                setStatus("");
-                setErrorMessage("");
-              }}
-              spellCheck={false}
-              className="mt-3 min-h-52 w-full resize-y rounded-md border border-sky-200 bg-white/95 p-3 text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
-            />
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                className="gap-2"
-                onClick={buildAttributeTranslate}
-              >
-                <Sparkles size={15} />
-                {t("template.translateGenerate")}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="gap-2"
-                disabled={isAttributeTranslateApplied || !attributeTranslateText.trim()}
-                title={isAttributeTranslateApplied ? t("template.translateAlreadyApplied") : undefined}
-                onClick={applyAttributeTranslate}
-              >
-                <Save size={15} />
-                {isAttributeTranslateApplied
-                  ? t("template.translateAlreadyApplied")
-                  : t("template.translateApply")}
-              </Button>
-            </div>
-          </div>
-
           {draft.attributes.map((attribute, attributeIndex) => (
             <div key={attribute.id} className="rounded-md border border-border p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -1585,11 +1247,12 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
                   <Trash2 size={15} />
                 </Button>
               </div>
-              {attribute.description ? (
-                <p className="mt-2 whitespace-pre-wrap rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
-                  {attribute.description}
-                </p>
-              ) : null}
+              <input
+                value={attribute.description ?? ""}
+                onChange={(event) => updateAttribute(attribute.id, { description: event.target.value })}
+                placeholder={t("template.attributeDescription")}
+                className="mt-2 h-10 w-full rounded-md border border-sky-100 bg-sky-50 px-3 text-xs text-sky-950 outline-none focus:ring-2 focus:ring-sky-200"
+              />
 
               <div className="mt-3 grid gap-2">
                 {attribute.options.map((option, optionIndex) => (
@@ -1600,15 +1263,16 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
                     <div className="min-w-0">
                       <input
                         value={option.label}
-                        onChange={(event) => updateOption(attribute.id, option.id, event.target.value)}
+                        onChange={(event) => updateOption(attribute.id, option.id, { label: event.target.value })}
                         placeholder={t("template.optionLabel")}
                         className="h-10 min-w-0 w-full rounded-md border border-border px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
                       />
-                      {option.description ? (
-                        <p className="mt-1 whitespace-pre-wrap rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                          {option.description}
-                        </p>
-                      ) : null}
+                      <input
+                        value={option.description ?? ""}
+                        onChange={(event) => updateOption(attribute.id, option.id, { description: event.target.value })}
+                        placeholder={t("template.optionDescription")}
+                        className="mt-1 h-9 w-full rounded-md border border-border bg-muted/40 px-3 text-xs text-muted-foreground outline-none focus:ring-2 focus:ring-sky-200"
+                      />
                     </div>
                     <Button
                       type="button"

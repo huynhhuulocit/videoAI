@@ -145,7 +145,7 @@ function defaultMasterPromptName(type: MasterPromptType) {
   if (type === "shots") {
     return "Built-in Shots master prompt";
   }
-  return "Built-in Scripts master prompt";
+  return "Built-in Story Content master prompt";
 }
 
 function builtInMasterPrompt(type: MasterPromptType): MasterPrompt {
@@ -245,6 +245,7 @@ export function mapVideoShotPlan(row: DbVideoShotPlan): VideoShotPlan {
     ownerUserId: row.ownerUserId,
     projectId: row.projectId,
     name: row.name,
+    ...(row.description ? { description: row.description } : {}),
     sourceText: row.sourceText,
     durationSeconds: row.durationSeconds,
     attributes: VideoShotAttributeSchema.array().parse(row.attributes),

@@ -23,6 +23,7 @@ import { ok } from "./response.js";
 
 const aiTemplateOptionSchema = z.object({
   id: z.string().optional(),
+  name: z.string().optional(),
   label: z.string().optional(),
   value: z.string().optional(),
   description: z.string().optional()
@@ -62,11 +63,10 @@ const templateGenerationJsonSchema = {
               type: "object",
               properties: {
                 id: { type: "string" },
-                label: { type: "string" },
-                value: { type: "string" },
+                name: { type: "string" },
                 description: { type: "string" }
               },
-              required: ["id", "label", "value", "description"]
+              required: ["id", "name", "description"]
             }
           }
         },
@@ -99,11 +99,10 @@ const openAiTemplateGenerationJsonSchema = {
               additionalProperties: false,
               properties: {
                 id: { type: "string" },
-                label: { type: "string" },
-                value: { type: "string" },
+                name: { type: "string" },
                 description: { type: "string" }
               },
-              required: ["id", "label", "value", "description"]
+              required: ["id", "name", "description"]
             }
           }
         },
@@ -146,7 +145,7 @@ export class TemplatesController {
         ownerUserId: defaultUserId,
         status: "active"
       },
-      orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }]
+      orderBy: { updatedAt: "desc" }
     });
     return ok(templates.map(mapVideoTemplate));
   }
@@ -194,12 +193,6 @@ export class TemplatesController {
       const draft = this.normalizeAiTemplate(rawResponse, rawRequest);
 
       const template = await prisma.$transaction(async (tx) => {
-        const activeTemplateCount = await tx.videoTemplateRecord.count({
-          where: {
-            ownerUserId: defaultUserId,
-            status: "active"
-          }
-        });
         const createdTemplate = await tx.videoTemplateRecord.create({
           data: {
             id: `template_${Date.now()}`,
@@ -208,7 +201,7 @@ export class TemplatesController {
             description: draft.description,
             idea: body.idea,
             attributes: this.toJson(draft.attributes),
-            isDefault: activeTemplateCount === 0,
+            isDefault: false,
             status: "active"
           }
         });
@@ -281,12 +274,6 @@ export class TemplatesController {
   async createTemplate(@Body() rawBody: unknown) {
     const body = CreateTemplateRequestSchema.parse(rawBody);
     const template = await prisma.$transaction(async (tx) => {
-      const activeTemplateCount = await tx.videoTemplateRecord.count({
-        where: {
-          ownerUserId: defaultUserId,
-          status: "active"
-        }
-      });
       return tx.videoTemplateRecord.create({
         data: {
           id: `template_${Date.now()}`,
@@ -295,7 +282,7 @@ export class TemplatesController {
           description: body.description ?? null,
           idea: body.idea ?? null,
           attributes: this.toJson(body.attributes),
-          isDefault: activeTemplateCount === 0,
+          isDefault: false,
           status: "active"
         }
       });
@@ -344,72 +331,15 @@ export class TemplatesController {
 
   @Delete(":templateId")
   async deleteTemplate(@Param("templateId") templateId: string) {
-    const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.videoTemplateRecord.findFirst({
-        where: {
-          id: templateId,
-          ownerUserId: defaultUserId,
-          status: "active"
-        }
-      });
-      if (!existing) {
-        return { count: 0 };
-      }
-      const archived = await tx.videoTemplateRecord.updateMany({
+    const result = await prisma.videoTemplateRecord.updateMany({
         where: {
           id: templateId,
           ownerUserId: defaultUserId,
           status: "active"
         },
         data: { isDefault: false, status: "archived" }
-      });
-      if (existing.isDefault) {
-        const nextDefault = await tx.videoTemplateRecord.findFirst({
-          where: {
-            ownerUserId: defaultUserId,
-            status: "active"
-          },
-          orderBy: { updatedAt: "desc" }
-        });
-        if (nextDefault) {
-          await tx.videoTemplateRecord.update({
-            where: { id: nextDefault.id },
-            data: { isDefault: true }
-          });
-        }
-      }
-      return archived;
     });
     return ok({ deleted: result.count > 0 });
-  }
-
-  @Post(":templateId/default")
-  async setDefaultTemplate(@Param("templateId") templateId: string) {
-    const template = await prisma.$transaction(async (tx) => {
-      const existing = await tx.videoTemplateRecord.findFirst({
-        where: {
-          id: templateId,
-          ownerUserId: defaultUserId,
-          status: "active"
-        }
-      });
-      if (!existing) {
-        return null;
-      }
-      await tx.videoTemplateRecord.updateMany({
-        where: {
-          ownerUserId: defaultUserId,
-          status: "active"
-        },
-        data: { isDefault: false }
-      });
-      return tx.videoTemplateRecord.update({
-        where: { id: templateId },
-        data: { isDefault: true }
-      });
-    });
-
-    return ok(template ? mapVideoTemplate(template) : null);
   }
 
   private buildTemplateGenerationPrompt(masterPrompt: string, idea: string) {
@@ -425,8 +355,7 @@ export class TemplatesController {
             options: [
               {
                 id: "video-purpose-education",
-                label: "Education",
-                value: "Education",
+                name: "Education",
                 description: "Use when the video teaches or explains."
               }
             ]
@@ -436,35 +365,13 @@ export class TemplatesController {
       null,
       2
     );
-    const renderedPrompt = this.renderOptionalPromptPlaceholders(
+    return this.renderOptionalPromptPlaceholders(
       masterPrompt.trim() || DEFAULT_TEMPLATE_SELECTION_PROMPT,
       {
         story: idea,
         attributes: outputContract
       }
     );
-
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      "Task: Create a reusable Scenario template for VideoAI from the user's video idea.",
-      "Do not select options from an existing catalog. Create a useful new catalog of attributes and options.",
-      "The Scenario will later be used to guide script analysis, shot generation, and prompt composition.",
-      "",
-      "User video idea:",
-      idea,
-      "",
-      "Output rules:",
-      "- Return only strict JSON. Do not include markdown, comments, or prose outside JSON.",
-      "- Include 3 to 8 attributes. Each attribute should include 2 to 6 practical options.",
-      "- Keep attribute names short and reusable across similar videos.",
-      "- Use human-readable labels and stable kebab-case ids.",
-      "- The response must be original to the user's idea. Do not return placeholder/sample data.",
-      "",
-      "Required JSON shape:",
-      outputContract
-    ].join("\n");
   }
 
   private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {
@@ -749,7 +656,10 @@ export class TemplatesController {
     optionIndex: number,
     usedOptionIds: Set<string>
   ): TemplateOption | null {
-    const label = this.cleanText(option.label, "") || this.cleanText(option.value, "");
+    const label =
+      this.cleanText(option.name, "") ||
+      this.cleanText(option.label, "") ||
+      this.cleanText(option.value, "");
     if (!label) {
       return null;
     }

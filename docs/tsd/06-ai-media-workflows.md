@@ -51,6 +51,19 @@ sequenceDiagram
   Web->>Web: Display formatted prompt with copy action
 ```
 
+## 2.0.1. One Click Script Flow Shortcut
+
+One Click reuses the Script Flow data model and AI workflows instead of adding a new backend flow type:
+
+1. `/one-click` creates a normal project with `flowType = script`, setup name and setup description.
+2. `/one-click/{projectId}` renders a guided one-step-at-a-time UI.
+3. Step 1 calls the existing Script prompt/content generation workflow and writes the response back into `Story Content`; manually entered Story Content is also saved before the wizard advances.
+4. Step 2 is a Scenario step: it renders the active `Scenario` master prompt with Story Content and uses the scenario/template catalog. The UI hides the `Choose scenario` dropdown but still calls `template_selection` when the user clicks `Analyze scenario`.
+5. Successful Step 2 analysis saves the selected scenario attributes/options to the project and creates a Scenario record named/described from the One Click setup so later prompt composition and shot generation can reuse them.
+6. Step 3 calls `shot_generation` with the Step 1 Story Content, temporary `Shots` master prompt and selected scenario attributes when present. One Click does not show an existing shot-plan selector; the project-scoped shot generation endpoint is used so the resulting shot plan is saved, linked to the project and named/described from the One Click setup.
+7. After a shot card exists, the user can open `Prompt` to inspect the composed per-shot prompt without calling AI, or click `Create video` to submit that prompt to the configured video provider/model through `POST /api/v1/projects/{projectId}/videos`. The shot-level Request/Response popups show the redacted provider request and response/job error for that shot. Provider failures must mark the video job failed and must not create fallback video success data.
+7. Generated shot plans, raw request/response logging, provider errors and prompt preview behavior remain the same as Script Flow.
+
 ## 2.1. Template Generation Flow
 
 Steps:
@@ -58,7 +71,7 @@ Steps:
 1. User opens the `Template` page.
 2. User enters a video idea, for example `tạo 1 video về ngày vui của bé`.
 3. UI shows the active admin-managed `Scenario` master prompt in an editable textarea. Edits are temporary for this generation and are sent as optional `masterPrompt`; they do not overwrite the admin default.
-4. API reads active prompt provider/model config and the selected `Scenario` master prompt. Placeholder replacement for `{story}` and `{attributes}` is optional, then backend appends structured runtime context and a strict scenario-template JSON output contract.
+4. API reads active prompt provider/model config and the selected `Scenario` master prompt. Placeholder replacement for `{story}` and `{attributes}` is optional, and backend does not append hidden runtime context or output contract text.
 5. System creates an AI request log with flow type `template_generation` before submitting to the provider.
 6. AI produces template JSON with attributes and options.
 7. System stores the template in `content.video_templates`.
@@ -79,10 +92,10 @@ Steps:
 3. User chooses a Kịch bản/scenario template.
 4. User clicks `Analyze scenario`.
 5. API creates an AI request log with flow type `template_selection`.
-6. API replaces optional `Scenario` placeholders (`{story}`, `{attributes}`) when present, then sends the rendered master prompt plus structured Step 1 Story Content and selected template attribute/option catalog to the active prompt provider/model. If the request omits a temporary master prompt, the API uses the admin-managed `Scenario` default, then legacy fallback, then the built-in default.
+6. API replaces optional `Scenario` placeholders (`{story}`, `{attributes}`) when present, then sends exactly the rendered master prompt to the active prompt provider/model. If the request omits a temporary master prompt, the API uses the admin-managed `Scenario` default, then legacy fallback, then the built-in default.
 7. Provider returns strict JSON containing selected option IDs and a compact selection string such as `genre=Folk Tale;`.
 8. API validates that selected option IDs belong to the user's active template, normalizes the result to `templateSelection`, saves it in `projects.projects.template_selection` and stores raw request/response in the job/log result.
-9. Workspace applies the returned option IDs as checked boxes and shows a `Prompt` button before `Request` beside `Analyze scenario`; `Prompt` opens the fully rendered prompt after placeholder replacement and runtime catalog/story append. Adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run. User can edit the checkboxes and save the current selection back to the project.
+9. Workspace applies the returned option IDs as checked boxes and shows a `Prompt` button before `Request` beside `Analyze scenario`; `Prompt` opens exactly the rendered prompt after placeholder replacement. Adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run. User can edit the checkboxes and save the current selection back to the project.
 10. If scenario analysis fails, the failed job must include a stable `ApiError` code, message and safe details such as provider, model, env fallback name, HTTP status or schema issue count. The workspace must show those details inline under `Analyze scenario` with an actionable explanation. API keys and secrets must stay redacted in both user popups and admin AI logs.
 
 ## 2.2. Prompt Preview Before Submission
@@ -108,14 +121,14 @@ Steps:
 2. User enters or generates Step 1 `Story Content`. From the visible `Scripts` menu backed by the compatibility `/shots` route, the list page shows saved scripts/shot plans and add/edit/delete/set-default actions. `/shots/new` and `/shots/{shotPlanId}` show the admin-managed `Shots` master prompt summary, a separate story-content textarea and optional plan-level attributes. No project picker is required.
 3. In `/shots/new`, generation always sends the default 8 seconds per shot; in the project workspace, the UI shows the active `Shots` master prompt in an editable textarea, the user can adjust a 1-8 second value before generating, and the selected Step 2 Kịch bản/scenario options are sent as compact plan attributes.
 4. User clicks `Generate Shots`.
-5. API reads active prompt provider/model config and uses the temporary request `masterPrompt` override when present, otherwise the active `Shots` master prompt. Prompt placeholders such as `{story}`, `{attributes}` and `{durationSeconds}` are optional compatibility; backend always appends structured story, plan attribute and duration context after the selected master prompt.
+5. API reads active prompt provider/model config and uses the temporary request `masterPrompt` override when present, otherwise the active `Shots` master prompt. Prompt placeholders such as `{story}`, `{attributes}` and `{durationSeconds}` are optional compatibility; backend sends exactly the rendered master prompt without hidden runtime context.
 6. System creates an AI request log with flow type `shot_generation`.
 7. API calls the active prompt provider. It first uses the encrypted provider key saved in Admin > AI Config, then falls back to provider-specific env (`GEMINI_API_KEY` for `gemini`/`google`, `OPENAI_API_KEY` for `chatgpt`/`openai`, or `<PROVIDER>_API_KEY` for other provider names). `chatgpt`/`openai` uses the OpenAI Responses API.
    - Gemini receives the richer response JSON schema with duration bounds.
    - ChatGPT receives a provider-compatible strict JSON schema with `additionalProperties: false` on every object; duration bounds are enforced during backend normalization.
 8. User-facing script create/edit pages expose `Prompt`, `Request` and `Response` buttons for this workflow; the full prompt is computed before submission and the raw request/response popups use the completed job result.
 8. AI must return strict JSON with `name`, `durationSeconds` and `shots[]`. Each shot includes `title`, `description`, `durationSeconds` and editable `attributes[]`; every shot should include `Start state`, `End state` and `Dialogue`.
-9. System stores the redacted raw provider request and raw AI JSON in the AI logs and completed job result. The workspace shows a `Prompt` button before `Request` beside `Generate Shots` so users can inspect the fully rendered prompt after placeholder replacement and runtime context append; adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run.
+9. System stores the redacted raw provider request and raw AI JSON in the AI logs and completed job result. The workspace shows a `Prompt` button before `Request` beside `Generate Shots` so users can inspect exactly the rendered prompt after placeholder replacement; adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run.
 10. System normalizes the JSON before persistence: missing IDs are generated, durations are clamped to `1-8`, each shot is guaranteed to have `Start state`, `End state` and `Dialogue`, plan-level attributes are preserved, and `mediaIds` defaults to an empty list.
 11. System stores the normalized shot plan in `content.video_shot_plans`, including owner user ID, nullable source project ID, plan-level `attributes` JSON and per-shot `shots` JSON.
 12. If no saved key or env fallback exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails for other reasons or returns invalid JSON, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to fake or mock shot generation.
@@ -128,11 +141,11 @@ Steps:
 
 Steps:
 
-1. User edits Step 1 `Story Content`, optionally edits the visible `Scripts`/Story Content master prompt, then clicks `Generate Story Content`.
-2. API reads the active prompt provider/model config and uses the temporary request `masterPrompt` when present; otherwise it falls back to the active `Scripts` master prompt, then the built-in Scripts default.
-3. Backend replaces optional `Scripts` placeholders (`{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`) when present, then appends structured runtime context with user source text, media references, selected shot plan context and selected scenario options.
+1. User edits Step 1 `Story Content`, optionally edits the visible `Story Content` master prompt, then clicks `Generate Story Content`.
+2. API reads the active prompt provider/model config and uses the temporary request `masterPrompt` when present; otherwise it falls back to the active `Story Content` master prompt, then the built-in Story Content default. The persisted type key remains `scripts`.
+3. Backend replaces optional `Story Content` placeholders (`{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`) when present, then sends exactly the rendered master prompt. Runtime data is included only when the selected prompt contains the relevant placeholder.
 4. API creates an AI request log with flow type `prompt_generation`, calls the active provider/model, and stores the redacted raw provider request plus raw provider response in the completed job/AI logs.
-5. The generated provider text is written back into the workspace `Story Content` textarea. The workspace shows a `Prompt` button before `Request` beside `Generate Story Content` so users can inspect the fully rendered prompt after placeholder replacement and runtime context append; adjacent `Request`/`Response` buttons open the latest raw provider payloads in read-only popups. That textarea becomes the source of truth for scenario analysis, shot generation, per-shot prompt composition and script creation.
+5. The generated provider text is written back into the workspace `Story Content` textarea. The workspace shows a `Prompt` button before `Request` beside `Generate Story Content` so users can inspect exactly the rendered prompt after placeholder replacement; adjacent `Request`/`Response` buttons open the latest raw provider payloads in read-only popups. That textarea becomes the source of truth for scenario analysis, shot generation, per-shot prompt composition and script creation.
 6. If no saved key or env fallback exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails or returns empty text, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to local/sample Story Content.
 7. The workspace shows the failure inline under `Generate Story Content` with a readable explanation, stable error code, provider/model when available, env/status hints when relevant and the job ID for admin lookup. Raw provider payloads are only shown through successful run popups and Admin > AI Logs, with secrets redacted.
 

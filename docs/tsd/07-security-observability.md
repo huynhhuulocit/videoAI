@@ -23,6 +23,13 @@ Session handling:
 - Next.js server layer validates session with Auth.js.
 - Calls from Next.js to API Gateway include an internal signed token containing user ID, role and expiry.
 
+Optional site gate:
+
+- A lightweight site-wide gate can be enabled with `SITE_GATE_ENABLED=true`.
+- The site gate is an outer customer-sharing layer before Auth.js, not a replacement for user/admin login.
+- Site gate credentials are configured through environment variables and must not be committed.
+- Successful site gate login sets an HTTP-only signed cookie so customers do not re-enter the gate password on every page refresh.
+
 ## 2. Authorization
 
 Use RBAC at API Gateway and service level.
@@ -165,7 +172,21 @@ Apply rate limits at API Gateway:
 
 Use Redis-backed rate limiting so limits are consistent across gateway instances.
 
-## 9. Failure Handling
+## 9. Local Tunnel Sharing
+
+For short customer tests from a developer machine, the Cloudflare Tunnel guide lives in `deploy/cloudflare-tunnel/README.md`.
+
+Rules:
+
+- Use a fixed named Cloudflare Tunnel hostname.
+- Put Cloudflare Access in front of the hostname.
+- Allow only explicit customer/admin email addresses, preferably through One-Time PIN for guests.
+- Do not use Access policies that include `Everyone` or unrestricted One-Time PIN login.
+- Keep the app-level site gate enabled for tunnel sharing as an additional defense layer.
+- Do not open inbound public access to local ports `3000`, `4000`, PostgreSQL or Redis.
+- Route `/api/*` through the tunnel to the local API Gateway and route all other paths to the local web app.
+
+## 10. Failure Handling
 
 User-facing failures:
 

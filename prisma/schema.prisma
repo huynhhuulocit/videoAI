@@ -91,6 +91,7 @@ model VideoShotPlanRecord {
   ownerUserId     String   @map("owner_user_id")
   projectId       String?  @map("project_id")
   name            String
+  description     String?
   sourceText      String   @map("source_text")
   durationSeconds Int      @map("duration_seconds")
   attributes      Json     @default("[]")

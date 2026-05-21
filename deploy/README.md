@@ -11,6 +11,16 @@ This folder contains a simple single-server deployment for the current VideoAI t
 
 The deployment is intentionally small and pragmatic. It is suitable for one tester and low traffic. It is not the final multi-service production topology from the TSD.
 
+## Cloudflare Tunnel for Local Customer Testing
+
+If you want to share your current local app from `localhost:3000` with a small number of customers, use the Cloudflare Tunnel guide instead of this VPS deploy:
+
+```text
+deploy/cloudflare-tunnel/README.md
+```
+
+That mode keeps the app on your local machine, routes `https://YOUR_HOSTNAME/api/*` to `localhost:4000`, routes all other traffic to `localhost:3000`, and expects Cloudflare Access with an explicit email allowlist in front of the app. Use this VPS/Caddy deploy when you want the product to keep running on a server without your local machine.
+
 ## VPS Recommendation
 
 For one-person testing, start with:
@@ -127,6 +137,7 @@ docker compose --env-file .env -f docker-compose.yml exec -T postgres \
 - `NEXT_PUBLIC_API_GATEWAY_URL` should stay empty for same-origin deployment through Caddy.
 - `API_GATEWAY_URL` is set internally to `http://api:4000` by Docker Compose.
 - `WEB_ORIGIN` is set from `PUBLIC_WEB_ORIGIN` for API CORS.
+- `SITE_GATE_ENABLED=true` enables an outer app-level username/password gate before the normal VideoAI login. Keep the real `SITE_GATE_PASSWORD` and `SITE_GATE_SECRET` only in local/server `.env` files.
 - `AI_CONFIG_ENCRYPTION_KEY` must stay stable after you save provider keys in Admin. Changing it can make saved encrypted provider keys unreadable.
 - `GEMINI_API_KEY` and `OPENAI_API_KEY` are fallback keys. Prefer saving provider keys in Admin after the app is running.
 
@@ -136,4 +147,3 @@ docker compose --env-file .env -f docker-compose.yml exec -T postgres \
 - PostgreSQL, Redis, web, and API share one VPS. Scale out only when traffic or AI jobs justify it.
 - Local storage is a Docker volume. Move uploads to S3-compatible storage before multi-user production.
 - The Docker images keep dev tooling so `db:push` and `db:seed` can run inside the same image. Optimize image size later if needed.
-

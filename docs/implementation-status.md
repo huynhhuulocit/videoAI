@@ -44,8 +44,9 @@ Implemented as the first foundation slice:
   - Image/video upload uses the API Gateway, local storage files and PostgreSQL media metadata.
   - Script Flow upload is scoped to individual shot cards and stores validated media IDs in shot JSON.
   - Script Flow can load user-owned reusable shot plans, generate new plans, edit shot JSON, select multiple shots and persist them to PostgreSQL.
+    - One Click reuses Script Flow as a guided shortcut: Step 1 and Step 2 save Story Content to database before advancing, Step 2 saves scenario selection and a setup-named Scenario on analysis, and Step 3 creates a setup-named project-linked shot plan without showing the reusable shot-plan selector.
     - Loads video templates from PostgreSQL and renders template attribute/option checkboxes inside a desktop right-column `Attributes` panel that is collapsed by default and widened for label/count readability.
-    - Script Flow has Step 1 `Story Content` with the active `Scripts` master prompt visible and editable for a temporary generation; `Generate Story Content` calls the active AI provider, writes the provider response back into the textarea, and reuses that content across later script steps.
+    - Script Flow has Step 1 `Story Content` with the active `Story Content` master prompt visible and editable for a temporary generation; `Generate Story Content` calls the active AI provider, writes the provider response back into the textarea, and reuses that content across later script steps.
     - Story Content generation failures show detailed safe errors inline under the button and do not fallback to local/sample content.
     - Script Flow can analyze Step 1 Story Content against the selected Kịch bản with an admin-managed Scenario master prompt that users can edit temporarily, auto-check matching options through AI, and save the selection to project JSON.
     - Script Flow labels Story Content as Step 1, Kịch bản as Step 2 and Shots as Step 3; shot generation sends selected Step 2 attributes/options into `shot_generation`.
@@ -53,6 +54,7 @@ Implemented as the first foundation slice:
     - The Script Flow card spans the full available project workspace width so Step 1, Step 2 and Step 3 are not constrained by the Product Flow two-column layout.
     - Step 1, Step 2, Step 3, the Step 2 `Attributes` panel and individual attribute groups can collapse/expand. The Story Content textarea in Step 1 is reused by Step 2 scenario analysis and Step 3 shot generation.
     - Step 3 shows the active admin-managed `Shots` master prompt in an editable textarea; edits are sent as a temporary `masterPrompt` override for the next shot generation without changing the admin default.
+    - Step 3 always shows a `Shots result` JSON textarea; it is empty until a selected/generated/pasted shot plan JSON exists, and user edits can be applied to rebuild the editable shot cards before saving.
     - Step 3 shot cards render shot-level attributes inside their own right-column collapsed `Attributes` panel with count, add, edit and remove controls using the same wider desktop layout; `Create Prompt` remains a separate shot action.
   - Script Flow includes a read-only prompt preview popup for the composed AI request before submission.
   - Script Flow no longer shows the `AI suggested content` panel in the per-shot local prompt composer path.
@@ -66,14 +68,14 @@ Implemented as the first foundation slice:
   - Scenario create/edit pages show the active admin-managed `Scenario` master prompt in an editable textarea. Temporary edits are sent as `masterPrompt` for the AI generation request.
   - AI-assisted scenario generation now calls the configured prompt provider/model through `/api/v1/templates/generate`, logs redacted raw provider request/response, returns detailed readable API errors on provider/config/schema failure and does not fallback to sample scenario data.
   - Compact schema textarea supports `attribute=option1,option2;` and compatible JSON input before save.
-  - Visual editor uses numbered attribute/option rows and omits per-attribute description fields.
+  - Visual editor uses numbered attribute/option rows with editable description fields synchronized with the JSON schema.
   - Manual add attribute and add option.
   - Delete saved scenarios and persist normalized template JSON to PostgreSQL.
 - Admin dashboard routes:
   - `/admin/ai-config`
   - `/admin/shot-prompt`
     - Visible label/title is `Master Prompt`.
-    - Manages `Scenario`, `Shots` and `Scripts` master prompts from `config.master_prompts`, including create, edit, archive/delete and set default per type.
+    - Manages `Story Content`, `Scenario` and `Shots` master prompts from `config.master_prompts`, including create, edit, archive/delete and set default per type. The persisted type key for Story Content remains `scripts` for compatibility.
     - Keeps legacy `/admin/shot-prompt` URL and legacy prompt columns as compatibility/fallback.
   - `/admin/ai-logs`
 - Visible admin/user textareas use the shared `TextareaWithCounter` component with a character count, excluding hidden clipboard helper textareas.
@@ -119,7 +121,7 @@ Implemented as the first foundation slice:
 - User sidebar includes `Projects`, which opens the database-backed project list instead of a hard-coded project workspace.
 - `Scripts` create/edit pages start from a fixed screenwriter prompt with a story-content section; generated shot plans include `Start state`, `End state` and `Dialogue` attributes for continuity and per-shot spoken content.
 - `Generate shots` uses the active prompt provider/model. Missing saved provider key and missing env fallback fail the job with `AI_CONFIG_MISSING`; provider or parse failures use `AI_PROVIDER_FAILED` and do not create fake shot data.
-- Admin can manage `Scenario`, `Shots` and `Scripts` master prompts with recommended placeholder formats and default selection per type; backend replaces placeholders when present and appends structured context at runtime.
+- Admin can manage `Story Content`, `Scenario` and `Shots` master prompts with recommended placeholder formats and default selection per type; backend replaces placeholders when present and does not append hidden runtime context to prompt text.
 - The per-shot local prompt composer remains a legacy compatibility surface and appends structured shot context in the web app.
 - Script Flow now composes prompts per shot locally from shot media, shot attributes and selected template options, with copy actions in each shot card. Shot and plan attribute placeholders render bracketed rows, including `[Voiceover Script]: "..."` for the `Dialogue` value.
 

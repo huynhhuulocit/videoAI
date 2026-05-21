@@ -168,7 +168,10 @@ export type TemplateSelection = z.infer<typeof TemplateSelectionSchema>;
 export const AnalyzeTemplateSelectionRequestSchema = z.object({
   inputText: z.string().min(1).max(12000),
   templateId: z.string().min(1),
-  masterPrompt: z.string().min(1).max(12000).optional()
+  masterPrompt: z.string().trim().min(1).max(12000).optional(),
+  saveAsTemplate: z.boolean().optional().default(false),
+  templateName: z.string().trim().min(1).max(120).optional(),
+  templateDescription: z.string().trim().max(500).optional()
 });
 export type AnalyzeTemplateSelectionRequest = z.infer<typeof AnalyzeTemplateSelectionRequestSchema>;
 
@@ -187,6 +190,11 @@ export const SaveProjectTemplateSelectionRequestSchema = z.object({
   templateSelection: TemplateSelectionSchema.nullable()
 });
 export type SaveProjectTemplateSelectionRequest = z.infer<typeof SaveProjectTemplateSelectionRequestSchema>;
+
+export const SaveProjectStoryContentRequestSchema = z.object({
+  storyContent: z.string().trim().min(1).max(12000)
+});
+export type SaveProjectStoryContentRequest = z.infer<typeof SaveProjectStoryContentRequestSchema>;
 
 export const VideoShotAttributeSchema = z.object({
   id: z.string(),
@@ -210,6 +218,7 @@ export const VideoShotPlanSchema = z.object({
   ownerUserId: z.string(),
   projectId: z.string().nullable().optional(),
   name: z.string(),
+  description: z.string().optional(),
   sourceText: z.string(),
   durationSeconds: z.number().int().min(1).max(8),
   attributes: z.array(VideoShotAttributeSchema).default([]),
@@ -244,7 +253,7 @@ export type UpdateTemplateRequest = z.infer<typeof UpdateTemplateRequestSchema>;
 
 export const GenerateTemplateRequestSchema = z.object({
   idea: z.string().min(1).max(1000),
-  masterPrompt: z.string().min(1).max(12000).optional()
+  masterPrompt: z.string().trim().min(1).max(12000).optional()
 });
 export type GenerateTemplateRequest = z.infer<typeof GenerateTemplateRequestSchema>;
 
@@ -260,7 +269,9 @@ export const GenerateShotsRequestSchema = z.object({
   sourceText: z.string().min(1).max(12000),
   durationSeconds: z.number().int().min(1).max(8).optional().default(8),
   attributes: z.array(VideoShotAttributeSchema).default([]),
-  masterPrompt: z.string().min(1).max(20000).optional()
+  masterPrompt: z.string().trim().min(1).max(20000).optional(),
+  name: z.string().trim().min(1).max(120).optional(),
+  description: z.string().trim().max(500).optional()
 });
 export type GenerateShotsRequest = z.infer<typeof GenerateShotsRequestSchema>;
 
@@ -275,6 +286,7 @@ export type GenerateShotsJobResult = z.infer<typeof GenerateShotsJobResultSchema
 
 export const UpdateShotPlanRequestSchema = z.object({
   name: z.string().min(1).max(120).optional(),
+  description: z.string().max(500).optional(),
   durationSeconds: z.number().int().min(1).max(8).optional(),
   attributes: z.array(VideoShotAttributeSchema).optional(),
   shots: z.array(VideoShotSchema).min(1).optional()
@@ -284,7 +296,7 @@ export type UpdateShotPlanRequest = z.infer<typeof UpdateShotPlanRequestSchema>;
 export const GeneratePromptRequestSchema = z.object({
   inputText: z.string().min(1),
   mediaIds: z.array(z.string()).default([]),
-  masterPrompt: z.string().min(1).max(20000).optional(),
+  masterPrompt: z.string().trim().min(1).max(20000).optional(),
   templateSelection: TemplateSelectionSchema.optional(),
   shotSelection: ShotSelectionSchema.optional()
 });
@@ -306,7 +318,8 @@ export type CreateScriptRequest = z.infer<typeof CreateScriptRequestSchema>;
 export const CreateVideoRequestSchema = z.object({
   promptId: z.string().optional(),
   scriptId: z.string().optional(),
-  finalPrompt: z.string().min(1)
+  finalPrompt: z.string().min(1),
+  mediaIds: z.array(z.string()).default([])
 });
 export type CreateVideoRequest = z.infer<typeof CreateVideoRequestSchema>;
 
@@ -468,9 +481,12 @@ export const DEFAULT_TEMPLATE_SELECTION_PROMPT = [
 ].join("\n");
 
 export const DEFAULT_SCRIPT_GENERATION_PROMPT = [
-  "You are a video script and prompt strategist.",
-  "Create clear, reviewable content for a short product or story video.",
-  "Use the user's source text, selected scenario options, selected shots and media references as structured context.",
+  "You are a Story Content writer for short AI video.",
+  "Turn the user's raw idea, notes, or script into a vivid, complete Story Content draft that can drive scenario analysis and shot generation.",
+  "Preserve the source language unless the user explicitly asks for another language.",
+  "Make the content lively, specific, emotionally clear, and production-ready. Expand thin ideas with concrete setting, characters, actions, beginning/middle/end, visual moments, dialogue or voiceover cues, and transitions.",
+  "Do not add unrelated facts, brands, claims, or copyrighted lyrics.",
+  "Use the runtime data below only when it is present.",
   "",
   "User source text:",
   "{inputText}",
@@ -484,7 +500,11 @@ export const DEFAULT_SCRIPT_GENERATION_PROMPT = [
   "Selected scenario/options:",
   "{scenarioSelection}",
   "",
-  "Return readable sections with concise bullets and practical video direction."
+  "Return a polished Story Content draft with:",
+  "1. Title",
+  "2. Full story content",
+  "3. Key scenes or moments",
+  "4. Tone and visual direction"
 ].join("\n");
 
 export function getShotPromptMissingPlaceholders(prompt: string) {

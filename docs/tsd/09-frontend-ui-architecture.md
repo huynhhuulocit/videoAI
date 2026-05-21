@@ -47,6 +47,8 @@ app/
     projects/
     projects/new/
     projects/[projectId]/
+    one-click/
+    one-click/[projectId]/
     shots/
     shots/new/
     shots/[shotPlanId]/
@@ -72,7 +74,7 @@ Recommended feature modules:
 - `template-builder`
 - `video-generation`
 - `admin-ai-config`
-- `admin-master-prompt` (route compatibility: `/admin/shot-prompt`)
+- `admin-master-prompt` (route compatibility redirect: `/admin/shot-prompt`; canonical child routes: `/admin/shot-prompt/story-content`, `/admin/shot-prompt/scenario`, `/admin/shot-prompt/shots`)
 - `admin-ai-logs`
 
 Each feature module should own:
@@ -84,9 +86,9 @@ Each feature module should own:
 
 `shot-media-upload` is a Script Flow UI concern: the upload control is rendered inside each shot card, stores validated media IDs in the shot JSON and feeds the local per-shot prompt composer. Product Flow continues to use project-level `media-upload`.
 
-In the project workspace Script Flow, the main Script Flow card spans the full available workspace width so Step 1, Step 2 and Step 3 are not constrained to a half-width dashboard column. Step 1 is `Story Content`: it renders the admin-managed `Scripts`/Story Content master prompt and the source textarea. Generated content replaces that textarea and becomes the source for later steps. Step 2 keeps the Scenario master prompt/action surface in the left main content column and renders scenario attributes/options in a desktop right-column `Attributes` panel. The `Attributes` panel is collapsed by default, widened for label/count readability, and individual attribute groups remain collapsible with selected-count badges. Attribute and option rows expose saved Scenario translate/description metadata through compact helper icons that open on hover or click. AI action rows expose a `Prompt` button before adjacent `Request` and `Response` buttons; `Prompt` opens the full rendered provider prompt after placeholder replacement and runtime context append, while `Request`/`Response` open read-only raw-data popups for the latest successful AI run.
+In the project workspace Script Flow, the main Script Flow card spans the full available workspace width so Step 1, Step 2 and Step 3 are not constrained to a half-width dashboard column. Step 1 is `Story Content`: it renders the admin-managed `Story Content` master prompt and the source textarea. The underlying master-prompt type key remains `scripts` for API/data compatibility. On open, Script Flow and One Click workspaces load the latest saved database Story Content into that textarea before the user edits it. Generated content replaces that textarea and becomes the source for later steps. Step 2 keeps the Scenario master prompt/action surface in the left main content column and renders scenario attributes/options in a desktop right-column `Attributes` panel. The `Attributes` panel is collapsed by default, widened for label/count readability, and individual attribute groups remain collapsible with selected-count badges. Attribute and option rows expose saved Scenario description metadata through compact helper icons that open on hover or click. AI action rows expose a `Prompt` button before adjacent `Request` and `Response` buttons; `Prompt` opens exactly the rendered provider prompt after placeholder replacement with no hidden runtime context appended, while `Request`/`Response` open read-only raw-data popups for the latest successful AI run.
 
-Step 3 renders the active admin-managed `Shots` master prompt in an editable `TextareaWithCounter` before duration/generate controls. Changes are temporary workspace state and are sent as the optional `masterPrompt` request override for shot generation; the admin default remains unchanged. `Generate shots` renders inline success/error feedback directly below the action row, with AI provider/config/schema failures formatted as detailed multi-line messages using stable error codes and job metadata when available. Per-shot `Attributes` panels also sit in the same wider right column on desktop.
+Step 3 renders the active admin-managed `Shots` master prompt in an editable `TextareaWithCounter` before duration/generate controls. Changes are temporary workspace state and are sent as the optional `masterPrompt` request override for shot generation; the admin default remains unchanged. Step 3 always shows a `Shots result` JSON textarea directly below the generate action row. It is empty until a shot plan exists or the user pastes JSON; when populated, it is the normalized shot plan used to build the editable shot cards. Users can edit it and apply it back to the cards before saving. `Generate shots` renders inline success/error feedback directly below the JSON editor/action area, with AI provider/config/schema failures formatted as detailed multi-line messages using stable error codes and job metadata when available. Per-shot `Attributes` panels also sit in the same wider right column on desktop.
 
 ## 5. UI State Strategy
 
@@ -114,6 +116,8 @@ User shell navigation includes:
 
 - `/dashboard`
 - `/projects`
+- `/one-click`
+- `/one-click/[projectId]`
 - `/shots` with visible label `Scripts`
 - `/shots/new`
 - `/shots/[shotPlanId]`
@@ -123,11 +127,13 @@ User shell navigation includes:
 
 The `/projects` route lists active projects owned by the signed-in user, links to each project workspace at `/projects/[projectId]`, and exposes a compact delete/archive action per row. `/shots` and `/templates` are list-only routes; creation and editing are handled by their `/new` and dynamic detail routes. User shell should prioritize project context, active jobs and fast creation actions.
 
-Scenario create/edit routes (`/templates/new` and `/templates/[templateId]`) render the active admin-managed `Scenario` master prompt above the video idea textarea. The prompt can be edited temporarily for that AI generation request, and provider failures must be displayed inline as detailed multi-line errors without falling back to sample scenario data. The AI generation row exposes `Prompt`, `Request` and `Response` buttons: `Prompt` opens the full rendered provider prompt, while `Request`/`Response` open the redacted raw provider payloads returned by the latest successful `/api/v1/templates/generate` call.
+The `/one-click` route is a guided Script Flow shortcut, not a new backend project flow. It creates a normal `script` project from setup name/description, then `/one-click/[projectId]` renders `ProjectWorkspace` in One Click mode: Step 1 Story Content, Step 2 Scenario analysis using a scenario catalog without showing a `Choose scenario` dropdown, and Step 3 Shots master prompt plus editable shot generation. Step 2 also embeds the Scenario content editor pattern from `/templates/[templateId]` so the active scenario name, description, schema JSON and attributes/options can be reviewed or saved inline. One Click persists each step: Story Content is saved before Step 2, Scenario analysis writes `templateSelection` to the project and creates a Scenario named/described from setup, and Step 3 generates a project-linked shot plan named/described from setup without showing an existing shot-plan selector.
+
+Scenario create/edit routes (`/templates/new` and `/templates/[templateId]`) render the active admin-managed `Scenario` master prompt above the video idea textarea. The prompt can be edited temporarily for that AI generation request, and provider failures must be displayed inline as detailed multi-line errors without falling back to sample scenario data. The AI generation row exposes `Prompt`, `Request` and `Response` buttons: `Prompt` opens the full rendered provider prompt, while `Request`/`Response` open the redacted raw provider payloads returned by the latest successful `/api/v1/templates/generate` call. Prompt and raw-data popups expose a header copy icon.
 
 Scripts create/edit routes (`/shots/new` and `/shots/[shotPlanId]`) use the same AI debug action pattern for shot-generation. The generated full prompt is available before submission, and the latest job result raw request/response opens in read-only popups instead of inline collapsible panels.
 
-Scenario create/edit routes also include a `Vietnamese translate JSON` textarea for human-readable translations and explanations of the current attributes/options. The textarea stores JSON keyed by `attributeId` and `optionId`, applies translate/description values to `description` fields only, and disables apply after the current JSON produces no remaining description changes. English labels/values remain the data used by prompt processing. The schema parser still accepts compatible JSON description fields and compact text with optional `attribute | Vietnamese | description = option | Vietnamese | description` metadata.
+Scenario create/edit routes store human-readable explanations directly in the main JSON-first schema. Each attribute and option can include `description`; options use `name` in JSON and the editor converts it to the internal processing label/value. `Parse schema` and `Save scenario` keep the visual description fields synchronized with the JSON textarea. Legacy `translate`, `label` and `value` fields remain parse-compatible for older scenarios, but the editor emits the shorter `id/name/description/options` format. The schema parser still accepts compact `attribute=option1,option2;` text for compatibility.
 
 All public, user and admin pages should expose a visible back action. The back action may use browser history first, then fall back to the nearest safe route such as `/`, `/dashboard` or `/admin/ai-config`.
 
