@@ -1,5 +1,5 @@
-import { renderMasterPromptPage } from "../master-prompt-page";
+import { redirect } from "next/navigation";
 
 export default async function StoryContentMasterPromptPage() {
-  return renderMasterPromptPage("scripts");
+  redirect("/admin/story/master-prompt");
 }

@@ -2,9 +2,10 @@
 
 import type { ChangeEvent, DragEvent } from "react";
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import type {
   ApiError,
+  AttributeCatalog,
+  AttributeSelection,
   GenerateShotsJobResult,
   Job,
   MasterPromptConfig,
@@ -24,6 +25,7 @@ import {
   DEFAULT_SHOT_GENERATION_PROMPT,
   DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
+  MASTER_PROMPT_PLACEHOLDERS,
   TemplateAttributeSchema,
 } from "@videoai/contracts";
 import {
@@ -60,7 +62,7 @@ import {
 } from "../../lib/i18n/dictionary";
 
 const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:4000";
+  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
 
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const videoTypes = new Set(["video/mp4", "video/quicktime", "video/webm"]);
@@ -75,6 +77,32 @@ type MediaKind = "image" | "video" | "unknown";
 type MediaStatus = "validated" | "rejected";
 type ScenarioAttribute = VideoTemplate["attributes"][number];
 type ScenarioOption = ScenarioAttribute["options"][number];
+
+function catalogToVideoTemplate(catalog: AttributeCatalog): VideoTemplate {
+  return {
+    id: catalog.id,
+    ownerUserId: "admin",
+    name: catalog.name,
+    description: catalog.description,
+    idea: "",
+    attributes: catalog.attributes.map((attribute) => ({
+      id: attribute.id,
+      name: attribute.name,
+      description: attribute.description,
+      required: attribute.required,
+      options: attribute.options.map((option) => ({
+        id: option.id,
+        label: option.name,
+        value: option.name,
+        description: option.description,
+      })),
+    })),
+    isDefault: catalog.isDefault,
+    status: catalog.status,
+    createdAt: catalog.createdAt,
+    updatedAt: catalog.updatedAt,
+  };
+}
 
 type MediaItem = {
   id: string;
@@ -95,6 +123,11 @@ type ProjectWorkspaceProps = {
   flowType: ProjectFlow;
   workspaceMode?: "project" | "one-click";
   savedTemplateSelection?: TemplateSelection | null;
+  savedAttributeSelections?: {
+    story?: AttributeSelection | null | undefined;
+    scenario?: AttributeSelection | null | undefined;
+    shots?: AttributeSelection | null | undefined;
+  } | null;
   defaultPrompt: string;
   defaultProductUrl: string;
 };
@@ -901,14 +934,13 @@ function parseShotResultShots(value: unknown, fallbackDurationSeconds: number) {
 function parseShotPlanResultText(
   value: string,
   currentShotPlan: VideoShotPlan,
-  fallbackDurationSeconds: number,
 ): VideoShotPlan {
   const parsed = JSON.parse(value) as unknown;
   const root = Array.isArray(parsed) ? { shots: parsed } : toPlainRecord(parsed);
   const shotPlanRoot = toPlainRecord(root.shotPlan);
   const resultRoot = Object.keys(shotPlanRoot).length > 0 ? shotPlanRoot : root;
   const durationSeconds = clampShotDuration(
-    Number(resultRoot.durationSeconds ?? fallbackDurationSeconds),
+    Number(resultRoot.durationSeconds ?? currentShotPlan.durationSeconds),
   );
   const shots =
     resultRoot.shots === undefined
@@ -972,6 +1004,144 @@ function renderPromptTemplate(
     (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
     template,
   );
+}
+
+function requiredOptionIdsForTemplate(template: VideoTemplate | null) {
+  if (!template) {
+    return {};
+  }
+  return template.attributes.reduce<Record<string, string[]>>((selectedIds, attribute) => {
+    if (attribute.required && attribute.options[0]) {
+      selectedIds[attribute.id] = [attribute.options[0].id];
+    }
+    return selectedIds;
+  }, {});
+}
+
+function mergeWithRequiredOptionIds(
+  template: VideoTemplate | null,
+  current: Record<string, string[]>,
+) {
+  if (!template) {
+    return current;
+  }
+  const next = { ...current };
+  template.attributes.forEach((attribute) => {
+    const firstOption = attribute.options[0];
+    const currentIds = next[attribute.id];
+    if (attribute.required && (!currentIds || currentIds.length === 0) && firstOption) {
+      next[attribute.id] = [firstOption.id];
+    }
+  });
+  return next;
+}
+
+function requiredOptionIdsForCatalog(catalog: AttributeCatalog | null) {
+  if (!catalog) {
+    return {};
+  }
+  return catalog.attributes.reduce<Record<string, string[]>>((selectedIds, attribute) => {
+    if (attribute.required && attribute.options[0]) {
+      selectedIds[attribute.id] = [attribute.options[0].id];
+    }
+    return selectedIds;
+  }, {});
+}
+
+function mergeWithRequiredCatalogOptionIds(
+  catalog: AttributeCatalog | null,
+  current: Record<string, string[]>,
+) {
+  if (!catalog) {
+    return current;
+  }
+  const next = { ...current };
+  catalog.attributes.forEach((attribute) => {
+    const firstOption = attribute.options[0];
+    const currentIds = next[attribute.id];
+    if (
+      attribute.required &&
+      (!currentIds || currentIds.length === 0) &&
+      firstOption
+    ) {
+      next[attribute.id] = [firstOption.id];
+    }
+  });
+  return next;
+}
+
+function attributeSelectionToOptionIds(
+  selection: AttributeSelection | null | undefined,
+) {
+  if (!selection) {
+    return {};
+  }
+
+  return selection.attributes.reduce<Record<string, string[]>>(
+    (selectedIds, attribute) => ({
+      ...selectedIds,
+      [attribute.id]: attribute.options.map((option) => option.id),
+    }),
+    {},
+  );
+}
+
+function buildAttributeSelection(
+  catalog: AttributeCatalog | null,
+  selectedOptionIds: Record<string, string[]>,
+): AttributeSelection | null {
+  if (!catalog) {
+    return null;
+  }
+  const attributes = catalog.attributes
+    .map((attribute) => {
+      const selectedIds = selectedOptionIds[attribute.id] ?? [];
+      return {
+        id: attribute.id,
+        name: attribute.name,
+        required: attribute.required,
+        options: attribute.options
+          .filter((option) => selectedIds.includes(option.id))
+          .map((option) => ({
+            id: option.id,
+            name: option.name,
+            ...(option.description ? { description: option.description } : {}),
+          })),
+      };
+    })
+    .filter((attribute) => attribute.options.length > 0);
+  return {
+    catalogId: catalog.id,
+    catalogName: catalog.name,
+    type: catalog.type,
+    attributes,
+  };
+}
+
+function formatAttributeSelectionCompact(selection: AttributeSelection | null) {
+  if (!selection || selection.attributes.length === 0) {
+    return "";
+  }
+
+  return selection.attributes
+    .map(
+      (attribute) =>
+        `${attribute.name}=${attribute.options.map((option) => option.name).join(",")};`,
+    )
+    .join("\n");
+}
+
+function attributeSelectionToShotAttributes(selection: AttributeSelection | null): VideoShotAttribute[] {
+  if (!selection) {
+    return [];
+  }
+  return selection.attributes
+    .filter((attribute) => attribute.options.length > 0)
+    .map((attribute) => ({
+      id: `${selection.type}_${attribute.id}`,
+      name: attribute.name,
+      value: attribute.options.map((option) => option.name).join(", "),
+    }));
 }
 
 function formatMediaPromptSummary(items: MediaItem[], emptyText: string) {
@@ -1320,6 +1490,7 @@ export function ProjectWorkspace({
   flowType,
   workspaceMode = "project",
   savedTemplateSelection,
+  savedAttributeSelections,
   defaultPrompt,
   defaultProductUrl,
 }: ProjectWorkspaceProps) {
@@ -1340,7 +1511,6 @@ export function ProjectWorkspace({
   const [isEditingShotsResultJson, setIsEditingShotsResultJson] =
     useState(false);
   const [shotsResultJsonError, setShotsResultJsonError] = useState("");
-  const [shotDurationSeconds, setShotDurationSeconds] = useState(8);
   const [rawShotRequest, setRawShotRequest] = useState<unknown>(null);
   const [rawShotResponse, setRawShotResponse] = useState<unknown>(null);
   const [rawStoryRequest, setRawStoryRequest] = useState<unknown>(null);
@@ -1364,6 +1534,14 @@ export function ProjectWorkspace({
   const [selectedOptionIds, setSelectedOptionIds] = useState<
     Record<string, string[]>
   >({});
+  const [scenarioAttributeCatalog, setScenarioAttributeCatalog] =
+    useState<AttributeCatalog | null>(null);
+  const [storyAttributeCatalog, setStoryAttributeCatalog] =
+    useState<AttributeCatalog | null>(null);
+  const [shotsAttributeCatalog, setShotsAttributeCatalog] =
+    useState<AttributeCatalog | null>(null);
+  const [storyOptionIds, setStoryOptionIds] = useState<Record<string, string[]>>({});
+  const [shotsOptionIds, setShotsOptionIds] = useState<Record<string, string[]>>({});
   const [templateAnalysisCompact, setTemplateAnalysisCompact] = useState("");
   const [generatedShotPrompts, setGeneratedShotPrompts] = useState<
     Record<string, string>
@@ -1399,8 +1577,12 @@ export function ProjectWorkspace({
   const [isTemplateStepOpen, setIsTemplateStepOpen] = useState(true);
   const [isTemplateAttributesOpen, setIsTemplateAttributesOpen] =
     useState(false);
+  const [isStoryAttributesOpen, setIsStoryAttributesOpen] = useState(false);
+  const [isShotsAttributesOpen, setIsShotsAttributesOpen] = useState(false);
   const [isShotsStepOpen, setIsShotsStepOpen] = useState(true);
   const [collapsedTemplateAttributeIds, setCollapsedTemplateAttributeIds] =
+    useState<Record<string, boolean>>({});
+  const [collapsedCatalogAttributeIds, setCollapsedCatalogAttributeIds] =
     useState<Record<string, boolean>>({});
   const [openScenarioHelperId, setOpenScenarioHelperId] = useState("");
   const [openShotAttributePanelIds, setOpenShotAttributePanelIds] = useState<
@@ -1454,6 +1636,18 @@ export function ProjectWorkspace({
   const templateSelection = buildTemplateSelection(
     selectedTemplate,
     selectedOptionIds,
+  );
+  const storyAttributeSelection = buildAttributeSelection(
+    storyAttributeCatalog,
+    storyOptionIds,
+  );
+  const scenarioAttributeSelection = buildAttributeSelection(
+    scenarioAttributeCatalog,
+    selectedOptionIds,
+  );
+  const shotsAttributeSelection = buildAttributeSelection(
+    shotsAttributeCatalog,
+    shotsOptionIds,
   );
   const selectedShotPlan =
     shotPlans.find((shotPlan) => shotPlan.id === selectedShotPlanId) ?? null;
@@ -1582,7 +1776,7 @@ export function ProjectWorkspace({
           );
         }
       } catch {
-        // Story Content is optional for new Script Flow projects.
+        // Story Content is optional for new Scenario projects.
       }
     }
 
@@ -1610,7 +1804,7 @@ export function ProjectWorkspace({
     async function loadShotPlans() {
       try {
         const loadedShotPlans = await apiGet<VideoShotPlan[]>(
-          isOneClickMode ? `/projects/${projectId}/shots` : "/shots",
+          `/projects/${projectId}/shots`,
         );
         if (!cancelled) {
           setShotPlans(loadedShotPlans);
@@ -1622,9 +1816,6 @@ export function ProjectWorkspace({
               ? current
               : loadedShotPlans[0]?.shots.map((shot) => shot.id) ?? [],
           );
-          if (loadedShotPlans[0]) {
-            setShotDurationSeconds(loadedShotPlans[0].durationSeconds);
-          }
         }
       } catch {
         if (!cancelled) {
@@ -1645,19 +1836,19 @@ export function ProjectWorkspace({
 
     async function loadTemplates() {
       try {
-        const loadedTemplates = await apiGet<VideoTemplate[]>("/templates");
+        const defaultScenarioCatalog = await apiGet<AttributeCatalog | null>(
+          "/attribute-catalogs/scenario/default",
+        );
+        const loadedTemplates = defaultScenarioCatalog
+          ? [catalogToVideoTemplate(defaultScenarioCatalog)]
+          : [];
         if (!cancelled) {
+          setScenarioAttributeCatalog(defaultScenarioCatalog);
           setTemplates(loadedTemplates);
-          setSelectedTemplateId(
-            (current) =>
-              current ||
-              (savedTemplateSelection &&
-              loadedTemplates.some(
-                (template) => template.id === savedTemplateSelection.templateId,
-              )
-                ? savedTemplateSelection.templateId
-                : loadedTemplates[0]?.id || ""),
-          );
+          const nextTemplateId =
+            loadedTemplates[0]?.id ||
+            (savedTemplateSelection?.templateId ?? "");
+          setSelectedTemplateId((current) => current || nextTemplateId);
           if (
             savedTemplateSelection &&
             loadedTemplates.some(
@@ -1665,12 +1856,18 @@ export function ProjectWorkspace({
             )
           ) {
             setSelectedOptionIds(
-              templateSelectionToOptionIds(savedTemplateSelection),
+              mergeWithRequiredOptionIds(
+                loadedTemplates[0] ?? null,
+                templateSelectionToOptionIds(savedTemplateSelection),
+              ),
             );
+          } else if (loadedTemplates[0]) {
+            setSelectedOptionIds(requiredOptionIdsForTemplate(loadedTemplates[0]));
           }
         }
       } catch {
         if (!cancelled) {
+          setScenarioAttributeCatalog(null);
           setTemplates([]);
         }
       }
@@ -1682,6 +1879,49 @@ export function ProjectWorkspace({
       cancelled = true;
     };
   }, [savedTemplateSelection]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStepAttributeCatalogs() {
+      try {
+        const [storyCatalog, shotsCatalog] = await Promise.all([
+          apiGet<AttributeCatalog | null>("/attribute-catalogs/story/default"),
+          apiGet<AttributeCatalog | null>("/attribute-catalogs/shots/default"),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setStoryAttributeCatalog(storyCatalog);
+        setStoryOptionIds(
+          mergeWithRequiredCatalogOptionIds(
+            storyCatalog,
+            attributeSelectionToOptionIds(savedAttributeSelections?.story),
+          ),
+        );
+        setShotsAttributeCatalog(shotsCatalog);
+        setShotsOptionIds(
+          mergeWithRequiredCatalogOptionIds(
+            shotsCatalog,
+            attributeSelectionToOptionIds(savedAttributeSelections?.shots),
+          ),
+        );
+      } catch {
+        if (!cancelled) {
+          setStoryAttributeCatalog(null);
+          setStoryOptionIds({});
+          setShotsAttributeCatalog(null);
+          setShotsOptionIds({});
+        }
+      }
+    }
+
+    void loadStepAttributeCatalogs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [savedAttributeSelections]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1824,6 +2064,19 @@ export function ProjectWorkspace({
     }
 
     return latest;
+  }
+
+  async function saveProjectAttributeSelections() {
+    await apiPatch<{ saved: boolean }>(
+      `/projects/${projectId}/attribute-selections`,
+      {
+        attributeSelections: {
+          story: storyAttributeSelection,
+          scenario: scenarioAttributeSelection,
+          shots: shotsAttributeSelection,
+        },
+      },
+    );
   }
 
   async function buildMediaItem(
@@ -2022,9 +2275,7 @@ export function ProjectWorkspace({
   ) {
     try {
       const saved = await apiPatch<VideoShotPlan>(
-        isOneClickMode
-          ? `/projects/${projectId}/shots/${shotPlan.id}`
-          : `/shots/${shotPlan.id}`,
+        `/projects/${projectId}/shots/${shotPlan.id}`,
         buildShotPlanSaveBody(shotPlan, allowedMediaIds),
       );
       setShotPlans((current) =>
@@ -2136,7 +2387,10 @@ export function ProjectWorkspace({
   }
 
   function addShot() {
-    const nextShot = createLocalShot(shotDurationSeconds);
+    if (!selectedShotPlan) {
+      return;
+    }
+    const nextShot = createLocalShot(selectedShotPlan.durationSeconds);
     updateSelectedShotPlan((shotPlan) => ({
       ...shotPlan,
       shots: [...shotPlan.shots, nextShot],
@@ -2256,12 +2510,16 @@ export function ProjectWorkspace({
     setStatus({ label: t("workspace.shotsGenerating"), tone: "info" });
 
     try {
+      await saveProjectAttributeSelections();
       const queuedJob = await apiPost<Job>(
         `/projects/${projectId}/shots/generate`,
         {
           sourceText,
-          durationSeconds: shotDurationSeconds,
           attributes: templateSelectionToShotAttributes(templateSelection),
+          scenarioAttributes:
+            attributeSelectionToShotAttributes(scenarioAttributeSelection),
+          shotsAttributes:
+            attributeSelectionToShotAttributes(shotsAttributeSelection),
           masterPrompt,
           ...(isOneClickMode
             ? {
@@ -2282,7 +2540,6 @@ export function ProjectWorkspace({
       ]);
       setSelectedShotPlanId(shotPlan.id);
       setSelectedShotIds(shotPlan.shots.map((shot) => shot.id));
-      setShotDurationSeconds(shotPlan.durationSeconds);
       setShotsResultText(formatShotPlanResultText(shotPlan));
       setIsEditingShotsResultJson(false);
       setShotsResultJsonError("");
@@ -2314,7 +2571,6 @@ export function ProjectWorkspace({
       const nextShotPlan = parseShotPlanResultText(
         shotsResultText,
         selectedShotPlan,
-        shotDurationSeconds,
       );
       setShotPlans((current) =>
         current.map((shotPlan) =>
@@ -2322,7 +2578,6 @@ export function ProjectWorkspace({
         ),
       );
       setSelectedShotIds(nextShotPlan.shots.map((shot) => shot.id));
-      setShotDurationSeconds(nextShotPlan.durationSeconds);
       setOpenShotAttributePanelIds({});
       setGeneratedShotPrompts({});
       setShotsResultText(formatShotPlanResultText(nextShotPlan));
@@ -2352,9 +2607,7 @@ export function ProjectWorkspace({
 
     try {
       const saved = await apiPatch<VideoShotPlan>(
-        isOneClickMode
-          ? `/projects/${projectId}/shots/${selectedShotPlan.id}`
-          : `/shots/${selectedShotPlan.id}`,
+        `/projects/${projectId}/shots/${selectedShotPlan.id}`,
         {
           name: selectedShotPlan.name,
           description: selectedShotPlan.description,
@@ -2414,6 +2667,7 @@ export function ProjectWorkspace({
       if (!saved.saved) {
         throw new Error(t("oneClick.storySaveFailed"));
       }
+      await saveProjectAttributeSelections();
       setStatus({ label: t("oneClick.storySaved"), tone: "success" });
       return true;
     } catch (error) {
@@ -2454,12 +2708,18 @@ export function ProjectWorkspace({
     setStatus({ label: t("workspace.generatingPrompt"), tone: "info" });
 
     try {
+      await saveProjectAttributeSelections();
       const queuedJob = await apiPost<Job>(
         `/projects/${projectId}/prompts/generate`,
         {
           inputText,
           mediaIds: requestMediaIds,
           masterPrompt,
+          attributeSelections: {
+            story: storyAttributeSelection,
+            scenario: scenarioAttributeSelection,
+            shots: shotsAttributeSelection,
+          },
           ...(shotSelection ? { shotSelection } : {}),
           ...(templateSelection ? { templateSelection } : {}),
         },
@@ -2554,19 +2814,13 @@ export function ProjectWorkspace({
     setStatus({ label: t("workspace.templateAnalyzing"), tone: "info" });
 
     try {
+      await saveProjectAttributeSelections();
       const queuedJob = await apiPost<Job>(
         `/projects/${projectId}/template-selection/analyze`,
         {
           inputText,
-          templateId: selectedTemplate.id,
+          catalogId: selectedTemplate.id,
           masterPrompt,
-          ...(isOneClickMode
-            ? {
-                saveAsTemplate: true,
-                templateName: oneClickRecordName,
-                templateDescription: oneClickRecordDescription,
-              }
-            : {}),
         },
       );
       const completedJob = await pollJob(queuedJob.jobId);
@@ -2574,32 +2828,12 @@ export function ProjectWorkspace({
         getJobResult<TemplateSelectionAnalysisResult>(completedJob);
       setRawTemplateRequest(result.rawRequest);
       setRawTemplateResponse(result.rawResponse);
-      if (isOneClickMode) {
-        const now = new Date().toISOString();
-        const generatedScenario: VideoTemplate = {
-          id: result.templateSelection.templateId,
-          ownerUserId: "user_001",
-          name: result.templateSelection.templateName,
-          description: oneClickRecordDescription,
-          idea: inputText,
-          attributes: result.templateSelection.attributes.map((attribute) => ({
-            id: attribute.id,
-            name: attribute.name,
-            options: attribute.options,
-          })),
-          isDefault: false,
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-        };
-        setTemplates((current) => [
-          generatedScenario,
-          ...current.filter((template) => template.id !== generatedScenario.id),
-        ]);
-      }
       setSelectedTemplateId(result.templateSelection.templateId);
       setSelectedOptionIds(
-        templateSelectionToOptionIds(result.templateSelection),
+        mergeWithRequiredOptionIds(
+          selectedTemplate,
+          templateSelectionToOptionIds(result.templateSelection),
+        ),
       );
       setTemplateAnalysisCompact(result.compactSelection);
       setTemplateAnalysisErrorMessage("");
@@ -2634,6 +2868,7 @@ export function ProjectWorkspace({
           templateSelection,
         },
       );
+      await saveProjectAttributeSelections();
       setStatus({
         label: t("workspace.templateSelectionSaved"),
         tone: "success",
@@ -2805,6 +3040,7 @@ export function ProjectWorkspace({
       mediaSummary,
       shotSelection: shotSelectionText,
       scenarioSelection,
+      storyAttributes: formatAttributeSelectionCompact(storyAttributeSelection),
     });
     return renderedPrompt;
   }
@@ -2837,6 +3073,7 @@ export function ProjectWorkspace({
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       story: inputText,
       attributes: attributeCatalogText,
+      scenarioAttributes: attributeCatalogText,
     });
 
     return renderedPrompt;
@@ -2849,11 +3086,21 @@ export function ProjectWorkspace({
       return null;
     }
 
-    const attributeContext =
-      "One Click skips scenario/template selection, so no scenario attribute catalog is provided.";
+    const attributeContext = scenarioAttributeCatalog
+      ? JSON.stringify(
+          {
+            catalogId: scenarioAttributeCatalog.id,
+            catalogName: scenarioAttributeCatalog.name,
+            attributes: scenarioAttributeCatalog.attributes,
+          },
+          null,
+          2,
+        )
+      : "";
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       story: inputText,
       attributes: attributeContext,
+      scenarioAttributes: attributeContext,
     });
 
     return renderedPrompt;
@@ -2866,14 +3113,20 @@ export function ProjectWorkspace({
       return null;
     }
 
-    const durationSeconds = shotDurationSeconds;
     const attributeText = formatPlanAttributesForPrompt(
       templateSelectionToShotAttributes(templateSelection),
+    );
+    const scenarioAttributesText = formatPlanAttributesForPrompt(
+      attributeSelectionToShotAttributes(scenarioAttributeSelection),
+    );
+    const shotsAttributesText = formatPlanAttributesForPrompt(
+      attributeSelectionToShotAttributes(shotsAttributeSelection),
     );
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       story: sourceText,
       attributes: attributeText,
-      durationSeconds: String(durationSeconds),
+      scenarioAttributes: scenarioAttributesText,
+      shotsAttributes: shotsAttributesText,
     });
 
     return renderedPrompt;
@@ -2920,6 +3173,11 @@ export function ProjectWorkspace({
         ? {
             inputText: promptText.trim(),
             mediaIds: requestMediaIds,
+            attributeSelections: {
+              story: storyAttributeSelection,
+              scenario: scenarioAttributeSelection,
+              shots: shotsAttributeSelection,
+            },
             ...(shotSelection ? { shotSelection } : {}),
             ...(templateSelection ? { templateSelection } : {}),
           }
@@ -3378,6 +3636,307 @@ export function ProjectWorkspace({
     );
   }
 
+  function renderAttributeCatalogSelection({
+    catalog,
+    selectedIds,
+    setSelectedIds,
+    title,
+    help,
+    helperPrefix,
+    panelOpen,
+    onPanelToggle,
+  }: {
+    catalog: AttributeCatalog | null;
+    selectedIds: Record<string, string[]>;
+    setSelectedIds: (
+      updater: (current: Record<string, string[]>) => Record<string, string[]>,
+    ) => void;
+    title: string;
+    help: string;
+    helperPrefix: string;
+    panelOpen?: boolean;
+    onPanelToggle?: () => void;
+  }) {
+    const isPanelMode = typeof onPanelToggle === "function";
+    const isPanelOpen = panelOpen ?? true;
+    const selectedCount =
+      catalog?.attributes.reduce(
+        (total, attribute) => total + (selectedIds[attribute.id] ?? []).length,
+        0,
+      ) ?? 0;
+
+    if (!catalog) {
+      const unavailable = (
+        <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+          No active {title.toLowerCase()} catalog is configured in Admin.
+        </div>
+      );
+
+      if (isPanelMode) {
+        return (
+          <div className="rounded-md border border-border bg-white">
+            <button
+              type="button"
+              className="flex w-full items-start justify-between gap-3 p-3 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+              onClick={onPanelToggle}
+              aria-expanded={isPanelOpen}
+            >
+              <span className="min-w-0">
+                <span className="flex min-w-0 items-center gap-2 font-medium">
+                  {isPanelOpen ? (
+                    <ChevronDown
+                      size={18}
+                      className="text-muted-foreground"
+                    />
+                  ) : (
+                    <ChevronRight
+                      size={18}
+                      className="text-muted-foreground"
+                    />
+                  )}
+                  <span className="truncate">{title}</span>
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {selectedCount} selected
+                </span>
+              </span>
+              <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                0
+              </span>
+            </button>
+            {isPanelOpen ? (
+              <div className="border-t border-border p-3">{unavailable}</div>
+            ) : null}
+          </div>
+        );
+      }
+
+      return unavailable;
+    }
+
+    function toggleCatalogOption(attributeId: string, optionId: string) {
+      setSelectedIds((current) => {
+        const attribute = catalog?.attributes.find(
+          (item) => item.id === attributeId,
+        );
+        const currentIds = current[attributeId] ?? [];
+        const nextIds = currentIds.includes(optionId)
+          ? currentIds.filter((selectedId) => selectedId !== optionId)
+          : [...currentIds, optionId];
+
+        if (
+          attribute?.required &&
+          nextIds.length === 0 &&
+          attribute.options[0]
+        ) {
+          return {
+            ...current,
+            [attributeId]: [attribute.options[0].id],
+          };
+        }
+
+        return {
+          ...current,
+          [attributeId]: nextIds,
+        };
+      });
+      setGeneratedShotPrompts({});
+      setRawStoryRequest(null);
+      setRawStoryResponse(null);
+      setRawTemplateRequest(null);
+      setRawTemplateResponse(null);
+      setRawShotRequest(null);
+      setRawShotResponse(null);
+      setShotGenerationErrorMessage("");
+      setShotGenerationSuccessMessage("");
+      setTemplateAnalysisCompact("");
+      setTemplateAnalysisErrorMessage("");
+      setRawDataModal(null);
+    }
+
+    const attributeList = (
+      <div className="grid gap-3">
+        {catalog.attributes.map((attribute, attributeIndex) => {
+          const attributeSelectedIds = selectedIds[attribute.id] ?? [];
+          const collapseKey = `${helperPrefix}:${attribute.id}`;
+          const isAttributeCollapsed =
+            collapsedCatalogAttributeIds[collapseKey] ?? true;
+          return (
+            <div
+              key={attribute.id}
+              className="rounded-md border border-border p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-start gap-2 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+                  onClick={() =>
+                    setCollapsedCatalogAttributeIds((current) => ({
+                      ...current,
+                      [collapseKey]: !isAttributeCollapsed,
+                    }))
+                  }
+                  aria-expanded={!isAttributeCollapsed}
+                >
+                  {isAttributeCollapsed ? (
+                    <ChevronRight
+                      size={16}
+                      className="mt-1 shrink-0 text-muted-foreground"
+                    />
+                  ) : (
+                    <ChevronDown
+                      size={16}
+                      className="mt-1 shrink-0 text-muted-foreground"
+                    />
+                  )}
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm text-sky-800">
+                    {attributeIndex + 1}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-medium">
+                        {attribute.name}
+                      </span>
+                      {attribute.required ? (
+                        <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+                          Required
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {attributeSelectedIds.length} selected
+                    </span>
+                  </span>
+                </button>
+                <ScenarioTextHelper
+                  description={attribute.description}
+                  descriptionLabel={t("workspace.scenarioHelperDescription")}
+                  helperId={`${helperPrefix}:attribute:${attribute.id}`}
+                  label={t("workspace.scenarioHelperOpen")}
+                  onToggle={setOpenScenarioHelperId}
+                  openHelperId={openScenarioHelperId}
+                  translateLabel={t("workspace.scenarioHelperTranslate")}
+                />
+              </div>
+              {!isAttributeCollapsed ? (
+                <>
+                  {attribute.description ? (
+                    <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                      {attribute.description}
+                    </p>
+                  ) : null}
+                  <div className="mt-3 grid gap-2">
+                    {attribute.options.map((option, optionIndex) => {
+                      const checked = attributeSelectedIds.includes(option.id);
+                      const optionInputId = `${helperPrefix}-${attribute.id}-${option.id}`;
+                      return (
+                        <div
+                          key={option.id}
+                          className={`grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-md border px-3 py-2 text-sm transition ${
+                            checked
+                              ? "border-sky-300 bg-sky-50 text-sky-800"
+                              : "border-border bg-white text-foreground hover:bg-muted"
+                          }`}
+                        >
+                          <input
+                            id={optionInputId}
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-border"
+                            checked={checked}
+                            onChange={() =>
+                              toggleCatalogOption(attribute.id, option.id)
+                            }
+                          />
+                          <label
+                            htmlFor={optionInputId}
+                            className="flex min-w-0 cursor-pointer items-center gap-2"
+                          >
+                            <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                              {attributeIndex + 1}.{optionIndex + 1}
+                            </span>
+                            <span className="truncate">{option.name}</span>
+                          </label>
+                          <ScenarioTextHelper
+                            description={option.description}
+                            descriptionLabel={t(
+                              "workspace.scenarioHelperDescription",
+                            )}
+                            helperId={`${helperPrefix}:option:${attribute.id}:${option.id}`}
+                            label={t("workspace.scenarioHelperOpen")}
+                            onToggle={setOpenScenarioHelperId}
+                            openHelperId={openScenarioHelperId}
+                            translateLabel={t(
+                              "workspace.scenarioHelperTranslate",
+                            )}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    );
+
+    if (isPanelMode) {
+      return (
+        <div className="rounded-md border border-border bg-white">
+          <button
+            type="button"
+            className="flex w-full items-start justify-between gap-3 p-3 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+            onClick={onPanelToggle}
+            aria-expanded={isPanelOpen}
+          >
+            <span className="min-w-0">
+              <span className="flex min-w-0 items-center gap-2 font-medium">
+                {isPanelOpen ? (
+                  <ChevronDown size={18} className="text-muted-foreground" />
+                ) : (
+                  <ChevronRight size={18} className="text-muted-foreground" />
+                )}
+                <span className="truncate">{title}</span>
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {selectedCount} selected
+              </span>
+            </span>
+            <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+              {catalog.attributes.length}
+            </span>
+          </button>
+          {isPanelOpen ? (
+            <div className="border-t border-border p-3">
+              <p className="mb-3 text-xs leading-5 text-muted-foreground">
+                {help}
+              </p>
+              {attributeList}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    return (
+      <div className="rounded-md border border-border bg-white p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-foreground">{title}</div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              {help}
+            </p>
+          </div>
+          <Badge variant="info">
+            {selectedCount} selected
+          </Badge>
+        </div>
+        <div className="mt-3">{attributeList}</div>
+      </div>
+    );
+  }
+
   function renderStoryContentStep() {
     if (flowType !== "script") {
       return null;
@@ -3408,112 +3967,129 @@ export function ProjectWorkspace({
         </div>
 
         {isStoryStepOpen ? (
-          <div className="mt-4 grid gap-4">
-            <MasterPromptField
-              id="storyMasterPrompt"
-              label={t("workspace.storyMasterPromptLabel")}
-              help={t("workspace.storyMasterPromptHelp")}
-              rows={7}
-              value={scriptGenerationPrompt}
-              onChange={(event) => {
-                setScriptGenerationPrompt(event.target.value);
-                setStoryGenerationErrorMessage("");
-                setRawStoryRequest(null);
-                setRawStoryResponse(null);
-                setRawDataModal(null);
-              }}
-            />
-
-            <div>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <label className="text-sm font-medium" htmlFor="scenarioStory">
-                    {t("workspace.storyInputLabel")}
-                  </label>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("workspace.storyInputHelp")}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-8 w-8 shrink-0 px-0 text-sky-700 hover:text-sky-800"
-                  aria-label={t("workspace.promptPreviewOpen")}
-                  title={t("workspace.promptPreviewOpen")}
-                  onClick={() => setIsPromptPreviewOpen(true)}
-                >
-                  <Eye size={16} />
-                </Button>
-              </div>
-              <TextareaWithCounter
-                id="scenarioStory"
-                rows={8}
-                value={promptText}
+          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="min-w-0 space-y-4">
+              <MasterPromptField
+                id="storyMasterPrompt"
+                label={t("workspace.storyMasterPromptLabel")}
+                help={t("workspace.storyMasterPromptHelp")}
+                rows={7}
+                value={scriptGenerationPrompt}
                 onChange={(event) => {
-                  hasUserEditedStoryContentRef.current = true;
-                  setPromptText(event.target.value);
-                  setGeneratedShotPrompts({});
+                  setScriptGenerationPrompt(event.target.value);
                   setStoryGenerationErrorMessage("");
                   setRawStoryRequest(null);
                   setRawStoryResponse(null);
-                  setRawTemplateRequest(null);
-                  setRawTemplateResponse(null);
-                  setRawShotRequest(null);
-                  setRawShotResponse(null);
-                  setShotGenerationErrorMessage("");
-                  setShotGenerationSuccessMessage("");
-                  setTemplateAnalysisCompact("");
-                  setTemplateAnalysisErrorMessage("");
                   setRawDataModal(null);
                 }}
-                className="mt-2 w-full rounded-md border border-border p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scripts}
               />
-            </div>
 
-            <div className="flex flex-wrap gap-3">
-              <Button
-                type="button"
-                className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isGenerating}
-                onClick={() => void generatePrompt()}
-              >
-                {isGenerating ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <Sparkles size={16} />
-                )}
-                {isGenerating
-                  ? t("workspace.storyGenerating")
-                  : t("workspace.storyGenerate")}
-              </Button>
-              {renderFullPromptButton(
-                t("workspace.storyFullPrompt"),
-                t("workspace.storyFullPromptHelp"),
-                buildStoryContentFullPrompt(),
-                requestMediaItems,
-              )}
-              {renderRawDataButton(
-                t("workspace.rawRequestButton"),
-                t("workspace.storyRawRequest"),
-                t("workspace.storyRawRequestHelp"),
-                rawStoryRequest,
-              )}
-              {renderRawDataButton(
-                t("workspace.rawResponseButton"),
-                t("workspace.storyRawResponse"),
-                t("workspace.storyRawResponseHelp"),
-                rawStoryResponse,
-              )}
-            </div>
-
-            {storyGenerationErrorMessage ? (
-              <div className="flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                <span className="whitespace-pre-wrap">
-                  {storyGenerationErrorMessage}
-                </span>
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <label className="text-sm font-medium" htmlFor="scenarioStory">
+                      {t("workspace.storyInputLabel")}
+                    </label>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t("workspace.storyInputHelp")}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-8 w-8 shrink-0 px-0 text-sky-700 hover:text-sky-800"
+                    aria-label={t("workspace.promptPreviewOpen")}
+                    title={t("workspace.promptPreviewOpen")}
+                    onClick={() => setIsPromptPreviewOpen(true)}
+                  >
+                    <Eye size={16} />
+                  </Button>
+                </div>
+                <TextareaWithCounter
+                  id="scenarioStory"
+                  rows={8}
+                  value={promptText}
+                  onChange={(event) => {
+                    hasUserEditedStoryContentRef.current = true;
+                    setPromptText(event.target.value);
+                    setGeneratedShotPrompts({});
+                    setStoryGenerationErrorMessage("");
+                    setRawStoryRequest(null);
+                    setRawStoryResponse(null);
+                    setRawTemplateRequest(null);
+                    setRawTemplateResponse(null);
+                    setRawShotRequest(null);
+                    setRawShotResponse(null);
+                    setShotGenerationErrorMessage("");
+                    setShotGenerationSuccessMessage("");
+                    setTemplateAnalysisCompact("");
+                    setTemplateAnalysisErrorMessage("");
+                    setRawDataModal(null);
+                  }}
+                  className="mt-2 w-full rounded-md border border-border p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                />
               </div>
-            ) : null}
+
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  type="button"
+                  className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isGenerating}
+                  onClick={() => void generatePrompt()}
+                >
+                  {isGenerating ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={16} />
+                  )}
+                  {isGenerating
+                    ? t("workspace.storyGenerating")
+                    : t("workspace.storyGenerate")}
+                </Button>
+                {renderFullPromptButton(
+                  t("workspace.storyFullPrompt"),
+                  t("workspace.storyFullPromptHelp"),
+                  buildStoryContentFullPrompt(),
+                  requestMediaItems,
+                )}
+                {renderRawDataButton(
+                  t("workspace.rawRequestButton"),
+                  t("workspace.storyRawRequest"),
+                  t("workspace.storyRawRequestHelp"),
+                  rawStoryRequest,
+                )}
+                {renderRawDataButton(
+                  t("workspace.rawResponseButton"),
+                  t("workspace.storyRawResponse"),
+                  t("workspace.storyRawResponseHelp"),
+                  rawStoryResponse,
+                )}
+              </div>
+
+              {storyGenerationErrorMessage ? (
+                <div className="flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
+                  <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                  <span className="whitespace-pre-wrap">
+                    {storyGenerationErrorMessage}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+
+            <aside className="min-w-0">
+              {renderAttributeCatalogSelection({
+                catalog: storyAttributeCatalog,
+                selectedIds: storyOptionIds,
+                setSelectedIds: setStoryOptionIds,
+                title: "Story Attributes",
+                help: "Admin-managed Story attributes. Required attributes keep at least one selected option.",
+                helperPrefix: "story",
+                panelOpen: isStoryAttributesOpen,
+                onPanelToggle: () =>
+                  setIsStoryAttributesOpen((current) => !current),
+              })}
+            </aside>
           </div>
         ) : null}
       </div>
@@ -3960,6 +4536,7 @@ export function ProjectWorkspace({
               setRawTemplateResponse(null);
               setRawDataModal(null);
             }}
+            placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
           />
 
           <div>
@@ -4002,6 +4579,15 @@ export function ProjectWorkspace({
               {t("workspace.templateNone")}
             </div>
           )}
+
+          {renderAttributeCatalogSelection({
+            catalog: scenarioAttributeCatalog,
+            selectedIds: selectedOptionIds,
+            setSelectedIds: setSelectedOptionIds,
+            title: "Scenario Attributes",
+            help: "Admin-managed Scenario attributes. AI can analyze Story Content and select matching options, and required attributes cannot be empty.",
+            helperPrefix: "scenario-one-click",
+          })}
 
           <div className="flex flex-wrap gap-3">
             <Button
@@ -4060,7 +4646,6 @@ export function ProjectWorkspace({
             </div>
           ) : null}
 
-          {renderOneClickScenarioEditor()}
         </div>
       </div>
     );
@@ -4068,10 +4653,17 @@ export function ProjectWorkspace({
 
   function toggleTemplateOption(attributeId: string, optionId: string) {
     setSelectedOptionIds((current) => {
+      const attribute = selectedTemplate?.attributes.find((item) => item.id === attributeId);
       const selectedIds = current[attributeId] ?? [];
       const nextIds = selectedIds.includes(optionId)
         ? selectedIds.filter((selectedId) => selectedId !== optionId)
         : [...selectedIds, optionId];
+      if (attribute?.required && nextIds.length === 0 && attribute.options[0]) {
+        return {
+          ...current,
+          [attributeId]: [attribute.options[0].id],
+        };
+      }
       return {
         ...current,
         [attributeId]: nextIds,
@@ -4368,135 +4960,127 @@ export function ProjectWorkspace({
 
         {isShotsStepOpen ? (
           <>
-            <div className="mt-4">
-              <MasterPromptField
-                id="shotsMasterPrompt"
-                label={t("workspace.shotsMasterPromptLabel")}
-                help={t("workspace.shotsMasterPromptHelp")}
-                rows={7}
-                value={shotGenerationPrompt}
-                onChange={(event) => {
-                  setShotGenerationPrompt(event.target.value);
-                  setRawShotRequest(null);
-                  setRawShotResponse(null);
-                  setShotGenerationErrorMessage("");
-                  setShotGenerationSuccessMessage("");
-                  setRawDataModal(null);
-                }}
-              />
-            </div>
+            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+              <div className="min-w-0">
+                <MasterPromptField
+                  id="shotsMasterPrompt"
+                  label={t("workspace.shotsMasterPromptLabel")}
+                  help={t("workspace.shotsMasterPromptHelp")}
+                  rows={7}
+                  value={shotGenerationPrompt}
+                  onChange={(event) => {
+                    setShotGenerationPrompt(event.target.value);
+                    setRawShotRequest(null);
+                    setRawShotResponse(null);
+                    setShotGenerationErrorMessage("");
+                    setShotGenerationSuccessMessage("");
+                    setRawDataModal(null);
+                  }}
+                  placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shots}
+                />
 
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <label className="text-sm font-medium" htmlFor="shotDuration">
-                {t("workspace.shotsDuration")}
-              </label>
-              <input
-                id="shotDuration"
-                type="number"
-                min={1}
-                max={8}
-                value={shotDurationSeconds}
-                onChange={(event) => {
-                  const nextDuration = clampShotDuration(
-                    Number(event.target.value),
-                  );
-                  setShotDurationSeconds(nextDuration);
-                  setRawShotRequest(null);
-                  setRawShotResponse(null);
-                  setShotGenerationErrorMessage("");
-                  setShotGenerationSuccessMessage("");
-                  updateSelectedShotPlan((shotPlan) => ({
-                    ...shotPlan,
-                    durationSeconds: nextDuration,
-                  }));
-                }}
-                className="h-9 w-20 rounded-md border border-border px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
-              />
-              <Button
-                type="button"
-                className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isGeneratingShots}
-                onClick={() => void generateShots()}
-              >
-                {isGeneratingShots ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <Sparkles size={16} />
-                )}
-                {t("workspace.shotsGenerate")}
-              </Button>
-              {renderFullPromptButton(
-                t("workspace.shotsFullPrompt"),
-                t("workspace.shotsFullPromptHelp"),
-                buildShotGenerationFullPrompt(),
-                requestMediaItems,
-              )}
-              {renderRawDataButton(
-                t("workspace.rawRequestButton"),
-                t("shots.rawRequest"),
-                t("shots.rawRequestHelp"),
-                rawShotRequest,
-              )}
-              {renderRawDataButton(
-                t("workspace.rawResponseButton"),
-                t("shots.rawResponse"),
-                t("shots.rawResponseHelp"),
-                rawShotResponse,
-              )}
-            </div>
-
-            <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h4 className="text-sm font-semibold text-foreground">
-                    {t("workspace.shotsResultTitle")}
-                  </h4>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    {t("workspace.shotsResultHelp")}
-                  </p>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isGeneratingShots}
+                    onClick={() => void generateShots()}
+                  >
+                    {isGeneratingShots ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={16} />
+                    )}
+                    {t("workspace.shotsGenerate")}
+                  </Button>
+                  {renderFullPromptButton(
+                    t("workspace.shotsFullPrompt"),
+                    t("workspace.shotsFullPromptHelp"),
+                    buildShotGenerationFullPrompt(),
+                    requestMediaItems,
+                  )}
+                  {renderRawDataButton(
+                    t("workspace.rawRequestButton"),
+                    t("shots.rawRequest"),
+                    t("shots.rawRequestHelp"),
+                    rawShotRequest,
+                  )}
+                  {renderRawDataButton(
+                    t("workspace.rawResponseButton"),
+                    t("shots.rawResponse"),
+                    t("shots.rawResponseHelp"),
+                    rawShotResponse,
+                  )}
                 </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="gap-2"
-                  onClick={applyShotsResultJson}
-                >
-                  <Save size={15} />
-                  {t("workspace.shotsResultApply")}
-                </Button>
-              </div>
-              <TextareaWithCounter
-                rows={10}
-                value={shotsResultText}
-                onChange={(event) => {
-                  setShotsResultText(event.target.value);
-                  setIsEditingShotsResultJson(true);
-                  setShotsResultJsonError("");
-                }}
-                placeholder={t("workspace.shotsResultPlaceholder")}
-                spellCheck={false}
-                className="mt-3 min-h-72 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
-              />
-              {shotsResultJsonError ? (
-                <div className="mt-2 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-xs leading-5 text-red-700">
-                  {shotsResultJsonError}
-                </div>
-              ) : null}
-            </div>
 
-            {shotGenerationErrorMessage ? (
-              <div className="mt-3 flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
-                <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                <span className="whitespace-pre-wrap">
-                  {shotGenerationErrorMessage}
-                </span>
+                <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-foreground">
+                        {t("workspace.shotsResultTitle")}
+                      </h4>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {t("workspace.shotsResultHelp")}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="gap-2"
+                      onClick={applyShotsResultJson}
+                    >
+                      <Save size={15} />
+                      {t("workspace.shotsResultApply")}
+                    </Button>
+                  </div>
+                  <TextareaWithCounter
+                    rows={10}
+                    value={shotsResultText}
+                    onChange={(event) => {
+                      setShotsResultText(event.target.value);
+                      setIsEditingShotsResultJson(true);
+                      setShotsResultJsonError("");
+                    }}
+                    placeholder={t("workspace.shotsResultPlaceholder")}
+                    spellCheck={false}
+                    className="mt-3 min-h-72 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
+                  />
+                  {shotsResultJsonError ? (
+                    <div className="mt-2 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-xs leading-5 text-red-700">
+                      {shotsResultJsonError}
+                    </div>
+                  ) : null}
+                </div>
+
+                {shotGenerationErrorMessage ? (
+                  <div className="mt-3 flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
+                    <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                    <span className="whitespace-pre-wrap">
+                      {shotGenerationErrorMessage}
+                    </span>
+                  </div>
+                ) : shotGenerationSuccessMessage ? (
+                  <div className="mt-3 flex items-start gap-2 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm leading-6 text-emerald-700">
+                    <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+                    <span>{shotGenerationSuccessMessage}</span>
+                  </div>
+                ) : null}
               </div>
-            ) : shotGenerationSuccessMessage ? (
-              <div className="mt-3 flex items-start gap-2 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm leading-6 text-emerald-700">
-                <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-                <span>{shotGenerationSuccessMessage}</span>
-              </div>
-            ) : null}
+
+              <aside className="min-w-0 space-y-3">
+                {renderAttributeCatalogSelection({
+                  catalog: shotsAttributeCatalog,
+                  selectedIds: shotsOptionIds,
+                  setSelectedIds: setShotsOptionIds,
+                  title: "Shots Attributes",
+                  help: "Admin-managed Shots attributes used when the Shots master prompt contains {shotsAttributes}. Required attributes keep at least one selected option.",
+                  helperPrefix: "shots",
+                  panelOpen: isShotsAttributesOpen,
+                  onPanelToggle: () =>
+                    setIsShotsAttributesOpen((current) => !current),
+                })}
+              </aside>
+            </div>
 
             <div className="mt-4 rounded-md bg-muted p-3 text-sm text-muted-foreground">
               {t("workspace.shotsSourceFromScenario")}
@@ -4538,9 +5122,6 @@ export function ProjectWorkspace({
                     setOpenShotAttributePanelIds({});
                     setIsEditingShotsResultJson(false);
                     setShotsResultJsonError("");
-                    if (nextShotPlan) {
-                      setShotDurationSeconds(nextShotPlan.durationSeconds);
-                    }
                   }}
                   className="mt-2 h-10 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
                 >
@@ -4882,6 +5463,7 @@ export function ProjectWorkspace({
   }
 
   function renderTemplateSelector() {
+    const activeTemplate = selectedTemplate ?? templates[0] ?? null;
     const selectedTemplateOptionCount = selectedTemplate
       ? selectedTemplate.attributes.reduce(
           (total, attribute) =>
@@ -4919,54 +5501,26 @@ export function ProjectWorkspace({
               {templateHelp}
             </p>
           </button>
-          <Link
-            href="/templates"
-            className="inline-flex h-9 items-center rounded-md border border-border bg-white px-3 text-sm font-medium text-foreground transition hover:bg-muted"
-          >
-            {t("workspace.templateCreateLink")}
-          </Link>
         </div>
 
         {isTemplateStepOpen ? (
           <>
-        {templates.length === 0 ? (
+        {templates.length === 0 || !activeTemplate ? (
           <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
             {t("workspace.templateNone")}
           </div>
         ) : (
           <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
             <div className="min-w-0 xl:col-start-1 xl:row-start-1">
-              <label className="block text-sm font-medium" htmlFor="template">
-                {t("workspace.templateSelect")}
-              </label>
-              <select
-                id="template"
-                value={selectedTemplateId}
-                onChange={(event) => {
-                  setSelectedTemplateId(event.target.value);
-                  setSelectedOptionIds({});
-                  setGeneratedShotPrompts({});
-                  setTemplateAnalysisCompact("");
-                  setTemplateAnalysisErrorMessage("");
-                  setRawTemplateRequest(null);
-                  setRawTemplateResponse(null);
-                  setRawShotRequest(null);
-                  setRawShotResponse(null);
-                  setShotGenerationErrorMessage("");
-                  setShotGenerationSuccessMessage("");
-                  setRawProductRequest(null);
-                  setRawProductResponse(null);
-                  setIsTemplateAttributesOpen(false);
-                  setCollapsedTemplateAttributeIds({});
-                }}
-                className="mt-2 h-10 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
-              >
-                {templates.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
+              <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
+                <div className="font-medium">Active Scenario catalog</div>
+                <p className="mt-1">{activeTemplate.name}</p>
+                {activeTemplate.description ? (
+                  <p className="mt-1 text-xs leading-5 text-sky-800">
+                    {activeTemplate.description}
+                  </p>
+                ) : null}
+              </div>
 
               {flowType === "script" ? (
                 <div className="mt-4 grid gap-4">
@@ -4984,6 +5538,7 @@ export function ProjectWorkspace({
                       setRawTemplateResponse(null);
                       setRawDataModal(null);
                     }}
+                    placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
                   />
                 </div>
               ) : null}

@@ -3,7 +3,6 @@ import { prisma, type Prisma } from "@videoai/database";
 import { z } from "zod";
 import {
   CreateTemplateRequestSchema,
-  DEFAULT_TEMPLATE_SELECTION_PROMPT,
   GenerateTemplateRequestSchema,
   TemplateAttributeSchema,
   UpdateTemplateRequestSchema,
@@ -22,24 +21,22 @@ import {
 import { ok } from "./response.js";
 
 const aiTemplateOptionSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  label: z.string().optional(),
-  value: z.string().optional(),
-  description: z.string().optional()
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  description: z.string().trim().min(1)
 });
 
 const aiTemplateAttributeSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  description: z.string().optional(),
-  options: z.array(aiTemplateOptionSchema).optional().default([])
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  options: z.array(aiTemplateOptionSchema).min(1)
 });
 
 const aiTemplateGenerationSchema = z.object({
-  name: z.string().optional(),
-  description: z.string().optional(),
-  attributes: z.array(aiTemplateAttributeSchema).optional().default([])
+  name: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  attributes: z.array(aiTemplateAttributeSchema).min(1)
 });
 
 const templateGenerationJsonSchema = {
@@ -158,8 +155,10 @@ export class TemplatesController {
     const provider = config.promptProvider;
     const model = config.promptModel;
     const requestId = `ai_req_template_${Date.now()}`;
-    const masterPrompt =
-      body.masterPrompt?.trim() || config.templateSelectionPrompt || DEFAULT_TEMPLATE_SELECTION_PROMPT;
+    const masterPrompt = this.requirePrompt(
+      body.masterPrompt ?? config.templateSelectionPrompt,
+      "Scenario master prompt"
+    );
     const prompt = this.buildTemplateGenerationPrompt(masterPrompt, body.idea);
     let rawRequest: ProviderRequest;
 
@@ -365,13 +364,10 @@ export class TemplatesController {
       null,
       2
     );
-    return this.renderOptionalPromptPlaceholders(
-      masterPrompt.trim() || DEFAULT_TEMPLATE_SELECTION_PROMPT,
-      {
-        story: idea,
-        attributes: outputContract
-      }
-    );
+    return this.renderOptionalPromptPlaceholders(masterPrompt, {
+      story: idea,
+      attributes: outputContract
+    });
   }
 
   private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {
@@ -461,8 +457,8 @@ export class TemplatesController {
     if (!apiKey) {
       throw new AiTemplateGenerationError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} scenario generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} scenario generation. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -505,8 +501,8 @@ export class TemplatesController {
     if (!apiKey) {
       throw new AiTemplateGenerationError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} scenario generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} scenario generation. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -583,49 +579,27 @@ export class TemplatesController {
   }
 
   private normalizeAiTemplate(rawResponse: ParsedProviderTemplate, rawRequest: ProviderRequest) {
-    const name = this.cleanText(rawResponse.name, "");
-    const description = this.cleanText(rawResponse.description, "");
-
-    if (!name) {
-      throw new AiTemplateGenerationError(
-        "AI_PROVIDER_FAILED",
-        "AI scenario response is missing a scenario name.",
-        { provider: rawRequest.provider, model: rawRequest.model },
-        rawRequest,
-        rawResponse
-      );
-    }
+    const name = this.cleanText(rawResponse.name);
+    const description = this.cleanText(rawResponse.description);
 
     const usedAttributeIds = new Set<string>();
     const attributes = rawResponse.attributes
-      .map((attribute, attributeIndex) => {
-        const attributeName = this.cleanText(attribute.name, "");
-        if (!attributeName) {
-          return null;
-        }
+      .map((attribute) => {
+        const attributeName = this.cleanText(attribute.name);
 
         const attributeId = this.uniqueIdentifier(
-          this.cleanText(attribute.id, attributeName),
-          `attribute-${attributeIndex + 1}`,
+          this.cleanText(attribute.id),
           usedAttributeIds
         );
         const usedOptionIds = new Set<string>();
-        const options = attribute.options
-          .map((option, optionIndex) =>
-            this.normalizeAiTemplateOption(option, attributeId, optionIndex, usedOptionIds)
-          )
-          .filter((option): option is TemplateOption => Boolean(option));
-
-        if (options.length === 0) {
-          return null;
-        }
+        const options = attribute.options.map((option) =>
+          this.normalizeAiTemplateOption(option, usedOptionIds)
+        );
 
         const normalizedAttribute: TemplateAttribute = {
           id: attributeId,
           name: attributeName,
-          ...(this.cleanText(attribute.description, "")
-            ? { description: this.cleanText(attribute.description, "") }
-            : {}),
+          description: this.cleanText(attribute.description),
           options
         };
         return normalizedAttribute;
@@ -645,37 +619,28 @@ export class TemplatesController {
 
     return {
       name,
-      description: description || null,
+      description,
       attributes: validated.data
     };
   }
 
   private normalizeAiTemplateOption(
     option: ParsedProviderTemplate["attributes"][number]["options"][number],
-    attributeId: string,
-    optionIndex: number,
     usedOptionIds: Set<string>
-  ): TemplateOption | null {
-    const label =
-      this.cleanText(option.name, "") ||
-      this.cleanText(option.label, "") ||
-      this.cleanText(option.value, "");
-    if (!label) {
-      return null;
-    }
-    const value = this.cleanText(option.value, label);
+  ): TemplateOption {
+    const label = this.cleanText(option.name);
+    const value = label;
     const optionId = this.uniqueIdentifier(
-      this.cleanText(option.id, `${attributeId}-${label}`),
-      `${attributeId}-option-${optionIndex + 1}`,
+      this.cleanText(option.id),
       usedOptionIds
     );
-    const description = this.cleanText(option.description, "");
+    const description = this.cleanText(option.description);
 
     return {
       id: optionId,
       label,
       value,
-      ...(description ? { description } : {})
+      description
     };
   }
 
@@ -831,16 +796,27 @@ export class TemplatesController {
     return provider === "chatgpt" || provider === "openai";
   }
 
-  private cleanText(value: unknown, fallback: string) {
-    if (typeof value !== "string") {
-      return fallback;
-    }
+  private cleanText(value: string) {
     const trimmed = value.replace(/\s+/g, " ").trim();
-    return trimmed || fallback;
+    if (!trimmed) {
+      throw new AiTemplateGenerationError("AI_PROVIDER_FAILED", "AI returned an empty required text field.");
+    }
+    return trimmed;
   }
 
-  private uniqueIdentifier(value: string, fallback: string, used: Set<string>) {
-    const base = this.slug(value || fallback);
+  private requirePrompt(value: string | null | undefined, label: string) {
+    const prompt = value?.trim();
+    if (!prompt) {
+      throw new AiTemplateGenerationError(
+        "AI_CONFIG_MISSING",
+        `${label} is required. Configure it in Admin > Master Prompt.`
+      );
+    }
+    return prompt;
+  }
+
+  private uniqueIdentifier(value: string, used: Set<string>) {
+    const base = this.slug(value);
     let candidate = base;
     let index = 2;
     while (used.has(candidate)) {
@@ -852,15 +828,17 @@ export class TemplatesController {
   }
 
   private slug(value: string) {
-    return (
-      value
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 64) || "item"
-    );
+    const slug = value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+    if (!slug) {
+      throw new AiTemplateGenerationError("AI_PROVIDER_FAILED", "AI returned an id that cannot be normalized.");
+    }
+    return slug;
   }
 
   private toRecord(value: unknown): Record<string, unknown> {

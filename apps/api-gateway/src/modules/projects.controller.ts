@@ -1,18 +1,17 @@
-import { BadRequestException, Body, Controller, Delete, Get, Inject, Param, Patch, Post } from "@nestjs/common";
+﻿import { BadRequestException, Body, Controller, Delete, Get, Inject, Param, Patch, Post } from "@nestjs/common";
 import { Prisma, prisma } from "@videoai/database";
 import { z } from "zod";
 import {
   AnalyzeProductRequestSchema,
   AnalyzeTemplateSelectionRequestSchema,
+  AttributeCatalogAttributeSchema,
   CreateProjectRequestSchema,
   CreateScriptRequestSchema,
   CreateVideoRequestSchema,
-  DEFAULT_SCRIPT_GENERATION_PROMPT,
-  DEFAULT_SHOT_GENERATION_PROMPT,
-  DEFAULT_TEMPLATE_SELECTION_PROMPT,
   GeneratePromptRequestSchema,
   GenerateShotsRequestSchema,
   SaveProjectStoryContentRequestSchema,
+  SaveProjectAttributeSelectionsRequestSchema,
   SaveProjectTemplateSelectionRequestSchema,
   ShotSelectionSchema,
   TemplateAttributeSchema,
@@ -23,6 +22,8 @@ import {
   type ApiError,
   type ApiErrorCode,
   type GenerateShotsJobResult,
+  type AttributeCatalog,
+  type AttributeSelection,
   type Job,
   type Provider,
   type ShotSelection,
@@ -36,6 +37,7 @@ import {
 import {
   defaultUserId,
   getActiveAiConfig,
+  getDefaultAttributeCatalog,
   mapJob,
   mapProject,
   mapVideoShotPlan,
@@ -46,21 +48,21 @@ import { ok } from "./response.js";
 import { ShotPlansService } from "./shot-plans.service.js";
 
 const aiShotAttributeSchema = z.object({
-  name: z.string().optional(),
-  value: z.string().optional()
+  name: z.string().trim().min(1),
+  value: z.string().trim().min(1)
 });
 
 const aiShotSchema = z.object({
-  title: z.string().optional(),
-  description: z.string().optional(),
-  durationSeconds: z.number().optional(),
-  attributes: z.array(aiShotAttributeSchema).optional()
+  title: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  durationSeconds: z.number().int().min(1).max(8),
+  attributes: z.array(aiShotAttributeSchema).min(1)
 });
 
 const aiShotPlanSchema = z.object({
-  name: z.string().optional(),
-  durationSeconds: z.number().optional(),
-  shots: z.array(aiShotSchema)
+  name: z.string().trim().min(1),
+  durationSeconds: z.number().int().min(1).max(8),
+  shots: z.array(aiShotSchema).min(1)
 });
 
 const aiTemplateSelectionAttributeSchema = z.object({
@@ -452,11 +454,35 @@ export class ProjectsController {
         status: "active"
       },
       data: {
-        templateSelection: body.templateSelection ? this.toJson(body.templateSelection) : Prisma.JsonNull
+        templateSelection: body.templateSelection ? this.toJson(body.templateSelection) : Prisma.JsonNull,
+        attributeSelections: this.toJson({
+          ...(await this.getExistingProjectAttributeSelections(projectId)),
+          scenario: body.templateSelection ? this.templateSelectionToAttributeSelection(body.templateSelection) : null
+        })
       }
     });
 
     return ok({ saved: result.count > 0, templateSelection: body.templateSelection });
+  }
+
+  @Patch(":projectId/attribute-selections")
+  async saveAttributeSelections(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+    const body = SaveProjectAttributeSelectionsRequestSchema.parse(rawBody);
+    const result = await prisma.projectRecord.updateMany({
+      where: {
+        id: projectId,
+        ownerUserId: defaultUserId,
+        status: "active"
+      },
+      data: {
+        attributeSelections: this.toJson(body.attributeSelections)
+      }
+    });
+
+    return ok({
+      saved: result.count > 0,
+      attributeSelections: body.attributeSelections
+    });
   }
 
   @Post(":projectId/scripts")
@@ -685,10 +711,17 @@ export class ProjectsController {
 
       if (type === "template_selection") {
         const resultRecord = this.toRecord(result);
+        const existingProject = await tx.projectRecord.findUnique({ where: { id: projectId } });
+        const existingSelections = this.toRecord(existingProject?.attributeSelections);
+        const scenarioSelection = this.templateSelectionToAttributeSelection(resultRecord.templateSelection);
         await tx.projectRecord.update({
           where: { id: projectId },
           data: {
-            templateSelection: this.toJson(resultRecord.templateSelection ?? null)
+            templateSelection: this.toJson(resultRecord.templateSelection ?? null),
+            attributeSelections: this.toJson({
+              ...existingSelections,
+              ...(scenarioSelection ? { scenario: scenarioSelection } : {})
+            })
           }
         });
       }
@@ -748,21 +781,32 @@ export class ProjectsController {
     const shotGuidance = this.createShotGuidance(payload.shotSelection);
 
     if (type === "shot_generation") {
-      const durationSeconds = this.clampDuration(Number(payload.durationSeconds ?? 8));
       const sourceText = String(payload.sourceText ?? "");
       const attributes = this.extractShotPlanAttributes(input);
+      const scenarioAttributes = this.extractVideoShotAttributes(payload.scenarioAttributes);
+      const shotsAttributes = this.extractVideoShotAttributes(payload.shotsAttributes);
       const masterPrompt = payload.masterPrompt ? String(payload.masterPrompt) : undefined;
-      return this.createShotPlanWithAi(projectId, sourceText, durationSeconds, attributes, config, masterPrompt);
+      return this.createShotPlanWithAi(
+        projectId,
+        sourceText,
+        attributes,
+        scenarioAttributes,
+        shotsAttributes,
+        config,
+        masterPrompt
+      );
     }
 
     if (type === "template_selection") {
       const inputText = String(payload.inputText ?? "");
-      const templateId = String(payload.templateId ?? "");
+      const templateId = payload.templateId ? String(payload.templateId) : undefined;
+      const catalogId = payload.catalogId ? String(payload.catalogId) : undefined;
       const masterPrompt = payload.masterPrompt ? String(payload.masterPrompt) : undefined;
       return this.createTemplateSelectionWithAi(
         projectId,
         inputText,
         templateId,
+        catalogId,
         config,
         masterPrompt,
         Boolean(payload.saveAsTemplate),
@@ -772,21 +816,31 @@ export class ProjectsController {
     }
 
     if (type === "prompt_generation") {
-      const inputText = String(payload.inputText ?? "Create a product introduction video.");
+      const inputText = String(payload.inputText ?? "").trim();
+      if (!inputText) {
+        throw new AiJobError("VALIDATION_ERROR", "inputText is required for Story Content generation.");
+      }
       const masterPrompt = payload.masterPrompt ? String(payload.masterPrompt) : config.scriptGenerationPrompt;
+      const storyAttributes = this.formatAttributeSelectionCompact(
+        this.extractAttributeSelection(payload.attributeSelections, "story")
+      );
       return this.createStoryContentWithAi(
         projectId,
         inputText,
         mediaIds,
         shotGuidance,
         templateGuidance,
+        storyAttributes,
         config,
         masterPrompt
       );
     }
 
     if (type === "product_analysis") {
-      const productUrl = String(payload.productUrl ?? "");
+      const productUrl = String(payload.productUrl ?? "").trim();
+      if (!productUrl) {
+        throw new AiJobError("VALIDATION_ERROR", "productUrl is required for product analysis.");
+      }
       const productName = this.deriveProductName(productUrl);
       return {
         analysisId: `analysis_${Date.now()}`,
@@ -806,7 +860,7 @@ export class ProjectsController {
           "3. Visual direction",
           mediaIds.length > 0
             ? `- Keep the visual style aligned with ${mediaIds.length} uploaded reference media file(s).`
-            : "- Use clear lighting, minimal props, and smooth camera movement.",
+            : "",
           templateGuidance
         ].filter(Boolean).join("\n\n"),
         provider: config.promptProvider,
@@ -915,8 +969,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${provider} video generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider, model, env: resolvedKey.envName },
+        `Missing API key for ${provider} video generation. Save a provider key in Admin > AI Config.`,
+        { provider, model },
         rawRequest
       );
     }
@@ -951,8 +1005,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${provider} video generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider, model, env: resolvedKey.envName },
+        `Missing API key for ${provider} video generation. Save a provider key in Admin > AI Config.`,
+        { provider, model },
         rawRequest
       );
     }
@@ -984,42 +1038,49 @@ export class ProjectsController {
   private async createTemplateSelectionWithAi(
     projectId: string,
     inputText: string,
-    templateId: string,
+    templateId: string | undefined,
+    catalogId: string | undefined,
     config: AiConfig,
     masterPrompt?: string,
     saveAsTemplate?: boolean,
     templateNameOverride?: string,
     templateDescriptionOverride?: string
   ): Promise<TemplateSelectionAnalysisResult> {
-    const template = await prisma.videoTemplateRecord.findFirst({
-      where: {
-        id: templateId,
-        ownerUserId: defaultUserId,
-        status: "active"
-      }
-    });
-
-    if (!template) {
-      throw new BadRequestException("Template is missing or archived.");
+    const template = templateId
+      ? await prisma.videoTemplateRecord.findFirst({
+          where: {
+            id: templateId,
+            ownerUserId: defaultUserId,
+            status: "active"
+          }
+        })
+      : null;
+    const catalog = template ? null : await this.resolveScenarioCatalog(catalogId);
+    if (!template && !catalog) {
+      throw new BadRequestException("Scenario attribute catalog is missing. Configure a default catalog in Admin > Scenario > Attribute.");
     }
 
-    const attributes = TemplateAttributeSchema.array().parse(template.attributes);
+    const attributes = template
+      ? TemplateAttributeSchema.array().parse(template.attributes)
+      : this.catalogAttributesToTemplateAttributes(catalog);
+    const sourceId = template?.id ?? catalog!.id;
+    const sourceName = template?.name ?? catalog!.name;
     const provider = config.promptProvider;
     const model = config.promptModel;
     const prompt = this.buildTemplateSelectionPrompt(
-      masterPrompt ?? config.templateSelectionPrompt ?? DEFAULT_TEMPLATE_SELECTION_PROMPT,
+      this.requirePrompt(masterPrompt ?? config.templateSelectionPrompt, "Scenario master prompt"),
       inputText,
       {
-        id: template.id,
-        name: template.name,
+        id: sourceId,
+        name: sourceName,
         attributes
       }
     );
     const rawRequest = this.buildTemplateSelectionProviderRequest(provider, model, prompt);
     const rawResponse = await this.callTemplateSelectionProvider(provider, model, rawRequest);
     let templateSelection = this.normalizeTemplateSelection(rawResponse, {
-      templateId: template.id,
-      templateName: template.name,
+      templateId: sourceId,
+      templateName: sourceName,
       attributes
     });
 
@@ -1031,11 +1092,15 @@ export class ProjectsController {
           status: "active"
         }
       });
-      const name = this.cleanText(templateNameOverride, project?.name ?? template.name).slice(0, 120);
-      const description = this.cleanText(
-        templateDescriptionOverride,
-        project?.description ?? template.description ?? ""
-      ).slice(0, 500);
+      if (!project) {
+        throw new BadRequestException("Project is missing or archived.");
+      }
+      const nameSource = templateNameOverride?.trim() || project.name.trim();
+      if (!nameSource) {
+        throw new BadRequestException("Scenario name is required before saving AI analysis.");
+      }
+      const name = nameSource.slice(0, 120);
+      const description = (templateDescriptionOverride?.trim() || project.description?.trim() || "").slice(0, 500);
       const savedTemplate = await prisma.videoTemplateRecord.create({
         data: {
           id: `template_${Date.now()}`,
@@ -1090,12 +1155,13 @@ export class ProjectsController {
       null,
       2
     );
-    const promptTemplate = masterPrompt.trim() || DEFAULT_TEMPLATE_SELECTION_PROMPT;
+    const promptTemplate = this.requirePrompt(masterPrompt, "Scenario master prompt");
     const renderedPrompt = this.renderOptionalPromptPlaceholders(
       promptTemplate,
       {
         story: inputText,
-        attributes: attributeCatalogText
+        attributes: attributeCatalogText,
+        scenarioAttributes: attributeCatalogText
       }
     );
 
@@ -1107,20 +1173,22 @@ export class ProjectsController {
     inputText: string,
     mediaIds: string[],
     shotGuidance: string,
-    templateGuidance: string
+    templateGuidance: string,
+    storyAttributes: string
   ) {
-    const masterPrompt = configuredPrompt?.trim() || DEFAULT_SCRIPT_GENERATION_PROMPT;
+    const masterPrompt = this.requirePrompt(configuredPrompt, "Story Content master prompt");
     const mediaSummary =
       mediaIds.length > 0
         ? `Use ${mediaIds.length} reference media file(s) to keep visual style, lighting, composition, and pacing consistent.`
-        : "No reference media. Use a clean modern style, soft lighting, and stable camera movement.";
-    const shotSelection = shotGuidance || "No selected shot plan.";
-    const scenarioSelection = templateGuidance || "No selected scenario options.";
+        : "";
+    const shotSelection = shotGuidance;
+    const scenarioSelection = templateGuidance;
     const renderedPrompt = this.renderOptionalPromptPlaceholders(masterPrompt, {
       inputText,
       mediaSummary,
       shotSelection,
-      scenarioSelection
+      scenarioSelection,
+      storyAttributes
     });
     return renderedPrompt;
   }
@@ -1131,6 +1199,7 @@ export class ProjectsController {
     mediaIds: string[],
     shotGuidance: string,
     templateGuidance: string,
+    storyAttributes: string,
     config: AiConfig,
     configuredPrompt: string | null | undefined
   ) {
@@ -1141,7 +1210,8 @@ export class ProjectsController {
       inputText,
       mediaIds,
       shotGuidance,
-      templateGuidance
+      templateGuidance,
+      storyAttributes
     );
     const rawRequest = this.buildStoryContentProviderRequest(provider, model, prompt);
     const result = await this.callStoryContentProvider(provider, model, rawRequest);
@@ -1226,8 +1296,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} Story Content generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} Story Content generation. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -1268,8 +1338,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} Story Content generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} Story Content generation. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -1397,8 +1467,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -1434,8 +1504,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -1538,8 +1608,9 @@ export class ProjectsController {
   private async createShotPlanWithAi(
     projectId: string,
     sourceText: string,
-    durationSeconds: number,
     attributes: VideoShotAttribute[],
+    scenarioAttributes: VideoShotAttribute[],
+    shotsAttributes: VideoShotAttribute[],
     config: AiConfig,
     masterPrompt?: string
   ): Promise<GenerateShotsJobResult> {
@@ -1548,14 +1619,14 @@ export class ProjectsController {
     const prompt = this.buildShotGenerationPrompt(
       masterPrompt ?? config.shotGenerationPrompt,
       sourceText,
-      durationSeconds,
-      attributes
+      attributes,
+      scenarioAttributes,
+      shotsAttributes
     );
     const rawResponse = await this.callShotProvider(provider, model, prompt);
     const shotPlan = this.normalizeAiShotPlan(rawResponse, {
       projectId,
       sourceText,
-      durationSeconds,
       attributes
     });
 
@@ -1590,8 +1661,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${provider} shot generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider, model, env: resolvedKey.envName }
+        `Missing API key for ${provider} shot generation. Save a provider key in Admin > AI Config.`,
+        { provider, model }
       );
     }
 
@@ -1637,8 +1708,8 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${provider} shot generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider, model, env: resolvedKey.envName }
+        `Missing API key for ${provider} shot generation. Save a provider key in Admin > AI Config.`,
+        { provider, model }
       );
     }
 
@@ -1690,20 +1761,30 @@ export class ProjectsController {
   private buildShotGenerationPrompt(
     configuredPrompt: string | null | undefined,
     sourceText: string,
-    durationSeconds: number,
-    attributes: VideoShotAttribute[]
+    attributes: VideoShotAttribute[],
+    scenarioAttributes: VideoShotAttribute[],
+    shotsAttributes: VideoShotAttribute[]
   ) {
     const attributeText = attributes
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
       .map((attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`)
-      .join("\n") || "none=No extra plan-level attributes provided;";
-    const masterPrompt = configuredPrompt?.trim() || DEFAULT_SHOT_GENERATION_PROMPT;
+      .join("\n");
+    const scenarioAttributeText = scenarioAttributes
+      .filter((attribute) => attribute.name.trim() && attribute.value.trim())
+      .map((attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`)
+      .join("\n");
+    const shotsAttributeText = shotsAttributes
+      .filter((attribute) => attribute.name.trim() && attribute.value.trim())
+      .map((attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`)
+      .join("\n");
+    const masterPrompt = this.requirePrompt(configuredPrompt, "Shots master prompt");
     const renderedPrompt = this.renderOptionalPromptPlaceholders(
       masterPrompt,
       {
         story: sourceText,
         attributes: attributeText,
-        durationSeconds: String(durationSeconds)
+        scenarioAttributes: scenarioAttributeText,
+        shotsAttributes: shotsAttributeText
       }
     );
     return renderedPrompt;
@@ -1848,7 +1929,6 @@ export class ProjectsController {
     context: {
       projectId: string;
       sourceText: string;
-      durationSeconds: number;
       attributes: VideoShotAttribute[];
     }
   ): VideoShotPlan {
@@ -1865,37 +1945,19 @@ export class ProjectsController {
 
     const now = new Date();
     const timestamp = Date.now();
-    let previousEndState = "";
-    const durationSeconds = this.clampDuration(
-      parsed.data.durationSeconds ?? context.durationSeconds
-    );
+    const durationSeconds = parsed.data.durationSeconds;
     const shots = parsed.data.shots.map((shot, index) => {
-      const normalizedDuration = this.clampDuration(
-        shot.durationSeconds ?? durationSeconds
+      const attributes = this.validateRequiredStateAttributes(
+        this.normalizeAiShotAttributes(shot.attributes, index),
+        index,
+        rawResponse
       );
-      const description = this.cleanText(
-        shot.description,
-        `Describe shot ${index + 1} as a concrete video moment.`
-      );
-      const title = this.cleanText(shot.title, `Shot ${index + 1}`);
-      const attributes = this.ensureStateAttributes(
-        this.normalizeAiShotAttributes(shot.attributes ?? [], index),
-        {
-          shotIndex: index,
-          description,
-          previousEndState
-        }
-      );
-      const endState =
-        attributes.find((attribute) => this.isNamedAttribute(attribute, "End state"))?.value ??
-        description;
-      previousEndState = endState;
 
       return {
         id: `shot_${timestamp}_${index + 1}`,
-        title,
-        description,
-        durationSeconds: normalizedDuration,
+        title: this.cleanText(shot.title),
+        description: this.cleanText(shot.description),
+        durationSeconds: shot.durationSeconds,
         attributes,
         mediaIds: []
       };
@@ -1905,7 +1967,7 @@ export class ProjectsController {
       id: `shot_plan_${timestamp}`,
       ownerUserId: defaultUserId,
       projectId: context.projectId,
-      name: this.cleanText(parsed.data.name, `Shot plan ${now.toLocaleDateString("en-CA")}`),
+      name: this.cleanText(parsed.data.name),
       sourceText: context.sourceText,
       durationSeconds,
       attributes: context.attributes,
@@ -1935,26 +1997,23 @@ export class ProjectsController {
     attributes: ParsedProviderShotPlan["shots"][number]["attributes"],
     shotIndex: number
   ): VideoShotAttribute[] {
-    return (attributes ?? [])
+    return attributes
       .map((attribute, index) => {
-        const name = this.cleanText(attribute.name, "");
-        const value = this.cleanText(attribute.value, "");
-        if (!name || !value) {
-          return null;
-        }
+        const name = this.cleanText(attribute.name);
+        const value = this.cleanText(attribute.value);
 
         return {
           id: `shot_${shotIndex + 1}_${this.slug(name)}_${index + 1}`,
           name,
           value
         };
-      })
-      .filter((attribute): attribute is VideoShotAttribute => Boolean(attribute));
+      });
   }
 
-  private ensureStateAttributes(
+  private validateRequiredStateAttributes(
     attributes: VideoShotAttribute[],
-    context: { shotIndex: number; description: string; previousEndState: string }
+    shotIndex: number,
+    rawResponse: unknown
   ) {
     const hasStartState = attributes.some((attribute) =>
       this.isNamedAttribute(attribute, "Start state")
@@ -1965,61 +2024,56 @@ export class ProjectsController {
     const hasDialogue = attributes.some((attribute) =>
       this.isNamedAttribute(attribute, "Dialogue")
     );
-    const nextAttributes = [...attributes];
-
-    if (!hasStartState) {
-      nextAttributes.unshift({
-        id: `shot_${context.shotIndex + 1}_start_state`,
-        name: "Start state",
-        value:
-          context.shotIndex === 0
-            ? `Open with: ${context.description}`
-            : `Continue from previous shot: ${context.previousEndState || context.description}`
-      });
+    if (!hasStartState || !hasEndState || !hasDialogue) {
+      throw new AiJobError(
+        "AI_PROVIDER_FAILED",
+        `AI shot ${shotIndex + 1} is missing required Start state, End state, or Dialogue attributes.`,
+        {
+          shotIndex: shotIndex + 1,
+          requiredAttributes: ["Start state", "End state", "Dialogue"]
+        },
+        rawResponse
+      );
     }
 
-    if (!hasEndState) {
-      nextAttributes.push({
-        id: `shot_${context.shotIndex + 1}_end_state`,
-        name: "End state",
-        value: `End with: ${context.description}`
-      });
-    }
-
-    if (!hasDialogue) {
-      nextAttributes.push({
-        id: `shot_${context.shotIndex + 1}_dialogue`,
-        name: "Dialogue",
-        value: "Use a short natural line, narration, or voiceover for this shot."
-      });
-    }
-
-    return nextAttributes;
+    return attributes;
   }
 
   private isNamedAttribute(attribute: VideoShotAttribute, expectedName: string) {
     return attribute.name.trim().toLowerCase() === expectedName.toLowerCase();
   }
 
-  private cleanText(value: unknown, fallback: string) {
-    if (typeof value !== "string") {
-      return fallback;
-    }
+  private cleanText(value: string) {
     const trimmed = value.replace(/\s+/g, " ").trim();
-    return trimmed || fallback;
+    if (!trimmed) {
+      throw new AiJobError("AI_PROVIDER_FAILED", "AI returned an empty required text field.");
+    }
+    return trimmed;
+  }
+
+  private requirePrompt(value: string | null | undefined, label: string) {
+    const prompt = value?.trim();
+    if (!prompt) {
+      throw new AiJobError("AI_CONFIG_MISSING", `${label} is required. Configure it in Admin > Master Prompt.`);
+    }
+    return prompt;
   }
 
   private slug(value: string) {
-    return value
+    const slug = value
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "")
-      .slice(0, 48) || "attribute";
+      .slice(0, 48);
+    if (!slug) {
+      throw new AiJobError("AI_PROVIDER_FAILED", "AI returned an attribute name that cannot be used as an id.");
+    }
+    return slug;
   }
 
   private createMediaInsights(mediaIds: string[]) {
     if (mediaIds.length === 0) {
-      return ["No reference media was attached. AI will rely on the text input or product URL."];
+      return [];
     }
 
     return [
@@ -2029,219 +2083,28 @@ export class ProjectsController {
     ];
   }
 
-  private createShotPlanDraft(projectId: string, sourceText: string, durationSeconds: number) {
-    const now = new Date();
-    const timestamp = Date.now();
-    const storyText = this.extractStoryText(sourceText);
-    const beats = this.createStoryBeats(storyText).slice(0, 20);
-    const fallbackBeats = [
-      "Establish the main character, location, and emotional context.",
-      "Show the action that changes the situation and moves the story forward.",
-      "Resolve the moment with a clear final image that can lead into the next action or call to action."
-    ];
-    const selectedBeats = [...beats];
-    for (const fallbackBeat of fallbackBeats) {
-      if (selectedBeats.length >= 3) {
-        break;
-      }
-      selectedBeats.push(fallbackBeat);
-    }
-    const titles = [
-      "Opening State",
-      "Inciting Beat",
-      "Rising Action",
-      "Turning Point",
-      "Key Detail",
-      "Emotional Shift",
-      "Payoff",
-      "Resolution"
-    ];
-    let previousEndState = "";
-    const shots = selectedBeats.map((beat, index) => {
-      const action = this.compactText(beat, 220);
-      const stateSummary = this.compactText(beat, 140);
-      const startState =
-        index === 0
-          ? `The story opens with: ${stateSummary}`
-          : `Continue from previous shot: ${previousEndState}`;
-      const endState = `The shot ends with: ${stateSummary}`;
-      previousEndState = endState;
-
-      return {
-        id: `shot_${timestamp}_${index + 1}`,
-        title: `Shot ${index + 1}: ${titles[index] ?? "Story Beat"}`,
-        description: action,
-        durationSeconds,
-        mediaIds: [],
-        attributes: [
-          {
-            id: `shot_${index + 1}_start_state`,
-            name: "Start state",
-            value: startState
-          },
-          {
-            id: `shot_${index + 1}_end_state`,
-            name: "End state",
-            value: endState
-          },
-          {
-            id: `shot_${index + 1}_camera`,
-            name: "Camera",
-            value:
-              index === 0
-                ? "Establish the scene, then move gently toward the subject."
-                : "Preserve screen direction and continue motion from the previous shot."
-          },
-          {
-            id: `shot_${index + 1}_visual`,
-            name: "Visual",
-            value:
-              index === selectedBeats.length - 1
-                ? "Clean final frame with a memorable emotional or CTA moment."
-                : "Readable composition with continuity from the previous end state."
-          },
-          {
-            id: `shot_${index + 1}_action`,
-            name: "Action",
-            value: action
-          },
-          {
-            id: `shot_${index + 1}_transition`,
-            name: "Transition",
-            value:
-              index === 0
-                ? "Open clearly from the story context."
-                : "Match the previous end state before introducing the next action."
-          }
-        ]
-      };
-    });
-
-    return {
-      id: `shot_plan_${timestamp}`,
-      ownerUserId: defaultUserId,
-      projectId,
-      name: `Shot plan ${now.toLocaleDateString("en-CA")}`,
-      sourceText,
-      durationSeconds,
-      shots,
-      status: "active",
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString()
-    };
-  }
-
-  private extractStoryText(sourceText: string) {
-    const markers = [
-      "Nội dung câu chuyện:",
-      "Noi dung cau chuyen:",
-      "Story content:",
-      "Story:"
-    ];
-    const lowerSource = sourceText.toLowerCase();
-    let markerIndex = -1;
-    let markerLength = 0;
-
-    for (const marker of markers) {
-      const index = lowerSource.lastIndexOf(marker.toLowerCase());
-      if (index > markerIndex) {
-        markerIndex = index;
-        markerLength = marker.length;
-      }
-    }
-
-    const rawStory =
-      markerIndex >= 0 ? sourceText.slice(markerIndex + markerLength) : sourceText;
-    return rawStory
-      .replace(/\{story\}/gi, "")
-      .replace(/\[(?:paste|dán|dan)[^\]]*\]/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  private createStoryBeats(storyText: string) {
-    const normalized = storyText
-      .replace(/\r/g, "")
-      .split(/\n+|(?:^|\s)(?:[-*]|\d+[.)])\s+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    const sourceParts = normalized.length > 0 ? normalized : [storyText.trim()];
-    const beats: string[] = [];
-
-    for (const part of sourceParts) {
-      const sentences = this.splitStorySentences(part);
-      if (sentences.length > 1) {
-        beats.push(...sentences.map((sentence) => this.compactText(sentence, 320)));
-        continue;
-      }
-
-      if (part.length <= 260) {
-        beats.push(part);
-        continue;
-      }
-
-      if (sentences.length === 0) {
-        beats.push(part);
-        continue;
-      }
-
-      let current = "";
-      for (const sentence of sentences) {
-        const next = current ? `${current} ${sentence}` : sentence;
-        if (next.length > 260 && current) {
-          beats.push(current);
-          current = sentence;
-        } else {
-          current = next;
-        }
-      }
-      if (current) {
-        beats.push(current);
-      }
-    }
-
-    return beats
-      .map((beat) => this.compactText(beat, 320))
-      .filter((beat) => beat.length > 0);
-  }
-
-  private splitStorySentences(value: string) {
-    return value
-      .split(/(?<=[.!?;:])\s+/)
-      .map((sentence) => sentence.trim())
-      .filter(Boolean);
-  }
-
-  private compactText(value: string, maxLength: number) {
-    const normalized = value.replace(/\s+/g, " ").trim();
-    if (normalized.length <= maxLength) {
-      return normalized;
-    }
-
-    const sliced = normalized.slice(0, maxLength - 3);
-    const lastSpace = sliced.lastIndexOf(" ");
-    return `${sliced.slice(0, lastSpace > 80 ? lastSpace : sliced.length).trim()}...`;
-  }
-
   private deriveHostname(productUrl: string) {
     try {
       return new URL(productUrl).hostname;
     } catch {
-      return "unknown source";
+      throw new AiJobError("VALIDATION_ERROR", "productUrl must be a valid URL.");
     }
   }
 
   private deriveProductName(productUrl: string) {
+    let url: URL;
     try {
-      const url = new URL(productUrl);
-      const rawSegment = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "product");
-      const titleSource = rawSegment.split("-i.")[0] ?? rawSegment;
-      const title = titleSource.replace(/-/g, " ").replace(/\s+/g, " ").trim();
-      return title || "selected product";
+      url = new URL(productUrl);
     } catch {
-      return "selected product";
+      throw new AiJobError("VALIDATION_ERROR", "productUrl must be a valid product URL.");
     }
+    const rawSegment = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
+    const titleSource = rawSegment.split("-i.")[0] ?? rawSegment;
+    const title = titleSource.replace(/-/g, " ").replace(/\s+/g, " ").trim();
+    if (!title) {
+      throw new AiJobError("VALIDATION_ERROR", "productUrl must include a product path segment.");
+    }
+    return title;
   }
 
   private toRecord(value: unknown): Record<string, unknown> {
@@ -2293,6 +2156,122 @@ export class ProjectsController {
     return parsed.success ? parsed.data : [];
   }
 
+  private extractVideoShotAttributes(value: unknown): VideoShotAttribute[] {
+    const parsed = VideoShotAttributeSchema.array().safeParse(value);
+    return parsed.success ? parsed.data : [];
+  }
+
+  private extractAttributeSelection(value: unknown, type: "story" | "scenario" | "shots"): AttributeSelection | null {
+    const payload = this.toRecord(value);
+    const selections = this.toRecord(payload.attributeSelections ?? payload);
+    const parsed = z.object({
+      catalogId: z.string(),
+      catalogName: z.string(),
+      type: z.literal(type),
+      attributes: z.array(z.object({
+        id: z.string(),
+        name: z.string(),
+        required: z.boolean().default(false),
+        options: z.array(z.object({
+          id: z.string(),
+          name: z.string(),
+          description: z.string().optional()
+        }))
+      }))
+    }).safeParse(selections[type]);
+    return parsed.success ? parsed.data : null;
+  }
+
+  private formatAttributeSelectionCompact(selection: AttributeSelection | null) {
+    if (!selection) {
+      return "";
+    }
+    return selection.attributes
+      .filter((attribute) => attribute.options.length > 0)
+      .map((attribute) => `${attribute.id}=${attribute.options.map((option) => option.name).join(",")};`)
+      .join("\n");
+  }
+
+  private templateSelectionToAttributeSelection(value: unknown): AttributeSelection | null {
+    const parsed = TemplateSelectionSchema.safeParse(value);
+    if (!parsed.success) {
+      return null;
+    }
+    return {
+      catalogId: parsed.data.templateId,
+      catalogName: parsed.data.templateName,
+      type: "scenario",
+      attributes: parsed.data.attributes.map((attribute) => ({
+        id: attribute.id,
+        name: attribute.name,
+        required: false,
+        options: attribute.options.map((option) => ({
+          id: option.id,
+          name: option.label,
+          ...(option.description ? { description: option.description } : {})
+        }))
+      }))
+    };
+  }
+
+  private async getExistingProjectAttributeSelections(projectId: string) {
+    const project = await prisma.projectRecord.findFirst({
+      where: {
+        id: projectId,
+        ownerUserId: defaultUserId,
+        status: "active"
+      }
+    });
+    return this.toRecord(project?.attributeSelections);
+  }
+
+  private async resolveScenarioCatalog(catalogId?: string): Promise<AttributeCatalog> {
+    if (catalogId) {
+      const catalog = await prisma.scenarioAttributeCatalog.findFirst({
+        where: {
+          id: catalogId,
+          status: "active"
+        }
+      });
+      if (catalog) {
+        return {
+          id: catalog.id,
+          type: "scenario",
+          name: catalog.name,
+          ...(catalog.description ? { description: catalog.description } : {}),
+          attributes: AttributeCatalogAttributeSchema.array().parse(catalog.attributes),
+          isDefault: catalog.isDefault,
+          status: catalog.status === "archived" ? "archived" : "active",
+          createdAt: catalog.createdAt.toISOString(),
+          updatedAt: catalog.updatedAt.toISOString()
+        };
+      }
+    }
+    const defaultCatalog = await getDefaultAttributeCatalog("scenario");
+    if (!defaultCatalog) {
+      throw new BadRequestException("Default Scenario attribute catalog is missing.");
+    }
+    return defaultCatalog;
+  }
+
+  private catalogAttributesToTemplateAttributes(catalog: AttributeCatalog | null): TemplateAttribute[] {
+    if (!catalog) {
+      return [];
+    }
+    return catalog.attributes.map((attribute) => ({
+      id: attribute.id,
+      name: attribute.name,
+      ...(attribute.description ? { description: attribute.description } : {}),
+      required: attribute.required,
+      options: attribute.options.map((option) => ({
+        id: option.id,
+        label: option.name,
+        value: option.name,
+        ...(option.description ? { description: option.description } : {})
+      }))
+    }));
+  }
+
   private async validateMediaIds(projectId: string, mediaIds: string[]) {
     const uniqueMediaIds = [...new Set(mediaIds)];
     if (uniqueMediaIds.length === 0) {
@@ -2327,7 +2306,15 @@ export class ProjectsController {
     });
 
     if (!template) {
-      throw new BadRequestException("Template is missing or archived.");
+      const catalog = await prisma.scenarioAttributeCatalog.findFirst({
+        where: {
+          id: templateSelection.templateId,
+          status: "active"
+        }
+      });
+      if (!catalog) {
+        throw new BadRequestException("Scenario catalog is missing or archived.");
+      }
     }
   }
 
@@ -2394,13 +2381,6 @@ export class ProjectsController {
       ...(planAttributes.length > 0 ? ["Plan-level attributes:", ...planAttributes] : []),
       ...shots
     ].join("\n");
-  }
-
-  private clampDuration(value: number) {
-    if (!Number.isFinite(value)) {
-      return 8;
-    }
-    return Math.min(8, Math.max(1, Math.round(value)));
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

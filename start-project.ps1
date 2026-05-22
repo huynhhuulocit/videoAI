@@ -37,6 +37,59 @@ function Assert-Command {
   }
 }
 
+function Read-DotEnv {
+  param([string]$Path)
+
+  $values = @{}
+  foreach ($line in Get-Content -LiteralPath $Path) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith("#")) {
+      continue
+    }
+
+    $separator = $trimmed.IndexOf("=")
+    if ($separator -lt 1) {
+      continue
+    }
+
+    $key = $trimmed.Substring(0, $separator).Trim()
+    $value = $trimmed.Substring($separator + 1).Trim()
+    if (
+      ($value.StartsWith('"') -and $value.EndsWith('"')) -or
+      ($value.StartsWith("'") -and $value.EndsWith("'"))
+    ) {
+      $value = $value.Substring(1, $value.Length - 2)
+    }
+    $values[$key] = $value
+  }
+  return $values
+}
+
+function Import-DotEnvIntoProcess {
+  param([string]$Path)
+
+  $values = Read-DotEnv -Path $Path
+  foreach ($key in $values.Keys) {
+    [Environment]::SetEnvironmentVariable($key, [string]$values[$key], "Process")
+  }
+}
+
+function Assert-RequiredEnv {
+  param([string[]]$Keys)
+
+  $missing = @()
+  foreach ($key in $Keys) {
+    $value = [Environment]::GetEnvironmentVariable($key, "Process")
+    if ([string]::IsNullOrWhiteSpace($value)) {
+      $missing += $key
+    }
+  }
+
+  if ($missing.Count -gt 0) {
+    throw "Missing required .env value(s): $($missing -join ', '). Update .env from .env.example before starting the project."
+  }
+}
+
 function Invoke-Checked {
   param(
     [string]$FilePath,
@@ -55,6 +108,87 @@ function Test-Port {
   return $null -ne $connection
 }
 
+function Get-WorkspaceProcess {
+  param([int]$ProcessId)
+  $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+  if (-not $process) {
+    return $null
+  }
+
+  $commandLine = [string]$process.CommandLine
+  if ($commandLine.IndexOf($Root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+    return $process
+  }
+
+  return $null
+}
+
+function Stop-ProcessTree {
+  param([int]$ProcessId)
+
+  $processIds = New-Object System.Collections.Generic.HashSet[int]
+  $queue = New-Object System.Collections.Generic.Queue[int]
+  [void]$queue.Enqueue($ProcessId)
+
+  while ($queue.Count -gt 0) {
+    $currentId = $queue.Dequeue()
+    if (-not $processIds.Add($currentId)) {
+      continue
+    }
+
+    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$currentId" -ErrorAction SilentlyContinue
+    foreach ($child in $children) {
+      [void]$queue.Enqueue([int]$child.ProcessId)
+    }
+  }
+
+  foreach ($id in ($processIds | Sort-Object -Descending)) {
+    Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Stop-WorkspaceProcessTree {
+  param([int]$ProcessId)
+
+  $workspaceProcess = Get-WorkspaceProcess -ProcessId $ProcessId
+  if (-not $workspaceProcess) {
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    return
+  }
+
+  $processIds = New-Object System.Collections.Generic.HashSet[int]
+  $queue = New-Object System.Collections.Generic.Queue[int]
+  [void]$queue.Enqueue($ProcessId)
+
+  $parentId = [int]$workspaceProcess.ParentProcessId
+  while ($parentId -gt 0) {
+    $parent = Get-WorkspaceProcess -ProcessId $parentId
+    if (-not $parent) {
+      break
+    }
+    [void]$queue.Enqueue($parentId)
+    $parentId = [int]$parent.ParentProcessId
+  }
+
+  while ($queue.Count -gt 0) {
+    $currentId = $queue.Dequeue()
+    if (-not $processIds.Add($currentId)) {
+      continue
+    }
+
+    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$currentId" -ErrorAction SilentlyContinue
+    foreach ($child in $children) {
+      if (Get-WorkspaceProcess -ProcessId ([int]$child.ProcessId)) {
+        [void]$queue.Enqueue([int]$child.ProcessId)
+      }
+    }
+  }
+
+  foreach ($id in ($processIds | Sort-Object -Descending)) {
+    Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Stop-Port {
   param([int]$Port)
   $processIds = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
@@ -62,8 +196,26 @@ function Stop-Port {
 
   foreach ($processId in $processIds) {
     if ($processId -and $processId -ne 0) {
-      Stop-Process -Id $processId -Force
+      Stop-WorkspaceProcessTree -ProcessId $processId
     }
+  }
+}
+
+function Stop-WorkspaceDevProcesses {
+  $allProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+  $devProcesses = $allProcesses | Where-Object {
+    $commandLine = [string]$_.CommandLine
+    $isWorkspaceProcess = $commandLine.IndexOf($Root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    $commandLine -like "*npm*--workspace @videoai/api-gateway run dev*" -or
+      $commandLine -like "*npm*--workspace @videoai/web run dev*" -or
+      $commandLine -like "*tsx*watch*src*main.ts*" -or
+      ($isWorkspaceProcess -and
+      $commandLine -like "*next*dev --port 3000*"
+    )
+  }
+
+  foreach ($process in $devProcesses) {
+    Stop-ProcessTree -ProcessId ([int]$process.ProcessId)
   }
 }
 
@@ -195,6 +347,20 @@ if (-not (Test-Path -LiteralPath $EnvFile)) {
   Write-Ok "Created .env from .env.example"
 }
 
+Import-DotEnvIntoProcess -Path $EnvFile
+Assert-RequiredEnv @(
+  "DATABASE_URL",
+  "REDIS_URL",
+  "API_GATEWAY_URL",
+  "PORT",
+  "NEXTAUTH_SECRET",
+  "AI_CONFIG_ENCRYPTION_KEY",
+  "WEB_ORIGIN"
+)
+if ($env:SITE_GATE_ENABLED -eq "true") {
+  Assert-RequiredEnv @("SITE_GATE_USERNAME", "SITE_GATE_PASSWORD", "SITE_GATE_SECRET")
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $Root "node_modules"))) {
   Write-Step "Installing npm dependencies"
   Invoke-Checked "npm.cmd" @("install")
@@ -202,6 +368,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root "node_modules"))) {
 
 if ($Restart) {
   Write-Step "Stopping existing Web/API listeners"
+  Stop-WorkspaceDevProcesses
   Stop-Port -Port 3000
   Stop-Port -Port 4000
   Start-Sleep -Seconds 2
@@ -232,12 +399,12 @@ if (-not $SkipDbSetup) {
 }
 
 Write-Step "Starting API Gateway and Web"
-Start-DevProcess -Name "API Gateway" -Port 4000 -NpmArgs @("run", "dev:api") -LogPrefix "api"
+Start-DevProcess -Name "API Gateway" -Port 4000 -NpmArgs @("--workspace", "@videoai/api-gateway", "run", "dev") -LogPrefix "api"
 if (-not (Test-Port -Port 3000)) {
   Write-Step "Cleaning Web build cache"
   Clear-WebBuildCache
 }
-Start-DevProcess -Name "Web app" -Port 3000 -NpmArgs @("run", "dev:web") -LogPrefix "web"
+Start-DevProcess -Name "Web app" -Port 3000 -NpmArgs @("--workspace", "@videoai/web", "run", "dev") -LogPrefix "web"
 
 Write-Step "Verifying HTTP endpoints"
 Wait-Http -Url "http://localhost:4000/api/v1/health" -Name "API Gateway"

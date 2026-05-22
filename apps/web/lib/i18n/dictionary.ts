@@ -30,8 +30,16 @@ const messages = {
   "shell.masterPromptStory": "Story Content",
   "shell.oneClick": "One Click",
   "shell.projectWorkspace": "Projects",
+  "shell.scenario": "Scenario",
+  "shell.scenarioAttribute": "Scenario Attribute",
+  "shell.scenarioMasterPrompt": "Scenario Master Prompt",
   "shell.shotPrompt": "Master Prompt",
-  "shell.shots": "Scripts",
+  "shell.shotsAttribute": "Shots Attribute",
+  "shell.shotsGroup": "Shots",
+  "shell.shotsMasterPrompt": "Shots Master Prompt",
+  "shell.story": "Story",
+  "shell.storyAttribute": "Story Attribute",
+  "shell.storyMasterPrompt": "Story Master Prompt",
   "shell.templates": "Scenario",
   "home.adminConfig": "Admin config",
   "home.cardAdminBody":
@@ -63,13 +71,12 @@ const messages = {
   "dashboard.project": "Project",
   "dashboard.projects": "Projects",
   "dashboard.recentProjects": "Recent projects",
-  "dashboard.scripts": "Scripts",
   "dashboard.status": "Status",
   "dashboard.title": "Projects",
   "dashboard.updated": "Updated",
   "dashboard.videos": "Videos",
   "projects.description":
-    "All of your Script Flow and Product Flow projects, ready to reopen or extend.",
+    "All of your Scenario and Product Flow projects, ready to reopen or extend.",
   "projects.delete": "Delete project",
   "projects.deleteConfirm":
     "Delete project \"{name}\"? It will be hidden from the project list.",
@@ -78,7 +85,7 @@ const messages = {
   "projects.listTitle": "All projects",
   "projects.title": "Projects",
   "flow.product": "Product Flow",
-  "flow.script": "Script Flow",
+  "flow.script": "Scenario",
   "projectCreate.cardFlow": "Choose how to start",
   "projectCreate.cardInfo": "Project information",
   "projectCreate.create": "Create project",
@@ -86,7 +93,7 @@ const messages = {
     "Create clear, friendly product introduction content.",
   "projectCreate.defaultName": "Product introduction campaign",
   "projectCreate.description":
-    "Choose Script Flow or Product Flow up front so the workspace stays focused.",
+    "Choose Scenario or Product Flow up front so the workspace stays focused.",
   "projectCreate.descriptionField": "Short description",
   "projectCreate.errorName": "Enter a project name.",
   "projectCreate.errorSubmit": "Cannot create project.",
@@ -94,13 +101,13 @@ const messages = {
   "projectCreate.productDescription":
     "Start from a product link, images, or reference videos so AI can analyze the strongest selling points.",
   "projectCreate.scriptDescription":
-    "Start from an idea or existing script, then let AI suggest stronger content.",
+    "Start from an idea, prompt, or scenario, then let AI suggest stronger content.",
   "projectCreate.title": "Create new project",
   "oneClick.backStep": "Back",
   "oneClick.create": "Create One Click project",
   "oneClick.createFailed": "Cannot create One Click project.",
   "oneClick.description":
-    "Create a Script Flow project through a guided Story Content, Scenario and Shots wizard.",
+    "Create a Scenario project through a guided Story Content, Scenario and Shots wizard.",
   "oneClick.errorName": "Enter a project name.",
   "oneClick.name": "Project name",
   "oneClick.namePlaceholder": "One Click video project",
@@ -109,7 +116,7 @@ const messages = {
   "oneClick.shortcutBadge": "Guided shortcut",
   "oneClick.setupDescription": "Description",
   "oneClick.startHelp":
-    "One Click creates a normal Script Flow project, then guides you through Story Content, Scenario analysis, and shot generation.",
+    "One Click creates a normal Scenario project, then guides you through Story Content, Scenario analysis, and shot generation.",
   "oneClick.startTitle": "Start One Click",
   "oneClick.step1Short": "Story Content",
   "oneClick.step2DefaultScenario": "Scenario catalog used for analysis: {name}",
@@ -133,7 +140,7 @@ const messages = {
   "oneClick.storySaving": "Saving Story Content...",
   "oneClick.title": "One Click",
   "oneClick.wizardDescription":
-    "A guided Script Flow shortcut with Story Content, Scenario analysis, and editable shot generation.",
+    "A guided Scenario shortcut with Story Content, Scenario analysis, and editable shot generation.",
   "oneClick.wizardTitle": "One Click Wizard",
   "projectDetail.defaultPrompt":
     "Create a short product introduction video in a friendly style, clearly stating the key benefit and why customers should care.",
@@ -196,7 +203,6 @@ const messages = {
   "workspace.shotDialogueEmpty": "No dialogue yet.",
   "workspace.shotDialoguePlaceholder":
     "Enter dialogue, voiceover, or narration for this shot.",
-  "workspace.shotsDuration": "Seconds/shot",
   "workspace.shotsDurationInput": "Shot {index} duration",
   "workspace.shotsGenerate": "Generate shots",
   "workspace.shotsGenerateFailed": "Shot generation failed",
@@ -284,19 +290,19 @@ const messages = {
   "workspace.shotMediaTitle": "Shot reference media",
   "workspace.templateCreateLink": "Create scenario",
   "workspace.templateHelp":
-    "Select the options from Story Content that AI should use as structure when generating the prompt.",
+    "Use the active Admin Scenario attribute catalog to select structure for the prompt.",
   "workspace.templateAttributesHelp":
-    "Open Attributes to review, select, or edit the options used for analysis and prompt generation.",
-  "workspace.templateAttributesTitle": "Attributes",
+    "Open Scenario Attributes to review or select options used for analysis and prompt generation. Required attributes always keep at least one option selected.",
+  "workspace.templateAttributesTitle": "Scenario Attributes",
   "workspace.scenarioHelperDescription": "Description",
   "workspace.scenarioHelperOpen": "Show scenario translate and description",
   "workspace.scenarioHelperTranslate": "Translate",
   "workspace.templateMasterPromptHelp":
-    "This default prompt is managed by admin. You can edit it temporarily for this analysis.",
+    "This default prompt is managed by admin. You can edit it temporarily for this analysis. Use {scenarioAttributes} to include the active Scenario catalog.",
   "workspace.templateMasterPromptLabel": "Scenario analysis master prompt",
   "workspace.templateMasterPromptMissing": "Enter a master prompt before analyzing the scenario.",
   "workspace.templateNone":
-    "No scenarios yet. Create a scenario first to use attributes/options for prompts.",
+    "No active Admin Scenario attribute catalog is configured.",
   "workspace.templateSelect": "Choose scenario",
   "workspace.templateStoryHelp":
     "This content is combined with the master prompt for option analysis and reused as the shot-generation source.",
@@ -308,8 +314,8 @@ const messages = {
   "workspace.aiErrorActiveProvider": "the active provider",
   "workspace.aiErrorCode": "Error code: {code}",
   "workspace.aiErrorConfigMissing":
-    "Missing API key for {provider}. Save a key in Admin > AI Config, or configure the {env} environment variable, then try again.",
-  "workspace.aiErrorEnv": "Environment fallback: {env}",
+    "Missing API key for {provider}. Save a key in Admin > AI Config, then try again.",
+  "workspace.aiErrorEnv": "Key source hint: {env}",
   "workspace.aiErrorIssues":
     "Schema/JSON issue: {count} issue(s). First issue: {firstIssue}",
   "workspace.aiErrorJobId": "Job ID: {jobId}",
@@ -318,7 +324,7 @@ const messages = {
   "workspace.aiErrorModel": "Model: {model}",
   "workspace.aiErrorNoIssuePreview": "no detailed issue available",
   "workspace.aiErrorProvider": "Provider: {provider}",
-  "workspace.aiErrorProviderEnv": "the provider API key environment variable",
+  "workspace.aiErrorProviderEnv": "the saved provider API key",
   "workspace.aiErrorProviderFailed":
     "The provider/model returned an error or did not return the required JSON. Check provider/model, the master prompt, and AI Logs for the redacted raw response.",
   "workspace.aiErrorProviderMessage": "Technical message: {message}",
@@ -358,7 +364,7 @@ const messages = {
     "This content is the shared source for scenario analysis, shot generation, and script creation in the following steps. You can enter it directly or use AI to normalize it into story content.",
   "workspace.storyInputLabel": "Story Content",
   "workspace.storyMasterPromptHelp":
-    "The admin-managed Story Content master prompt turns your source text into a richer story for later Scenario and Shots steps. You can edit it temporarily for this run; runtime data is included only through placeholders in this prompt.",
+    "The admin-managed Story Content master prompt turns your source text into a richer story for later Scenario and Shots steps. Use {inputText} and {storyAttributes} to include runtime data.",
   "workspace.storyMasterPromptLabel": "Story Content master prompt",
   "workspace.storyMasterPromptMissing":
     "Enter a Story Content master prompt before generating content.",
@@ -383,7 +389,7 @@ const messages = {
     "The provider response before the system writes the generated text back into Story Content.",
   "workspace.scenarioFullPrompt": "Full Scenario analysis prompt",
   "workspace.scenarioFullPromptHelp":
-    "The exact Scenario master prompt after replacing any {story}/{attributes} placeholders present in it.",
+    "The exact Scenario master prompt after replacing any {story}/{scenarioAttributes} placeholders present in it.",
   "workspace.scenarioRawRequest": "Raw Scenario analysis request",
   "workspace.scenarioRawRequestHelp":
     "The redacted provider payload with the exact rendered Scenario master prompt sent to AI.",
@@ -392,7 +398,7 @@ const messages = {
     "The provider response before the system normalizes it and selects matching options.",
   "workspace.shotsFullPrompt": "Full Shots prompt",
   "workspace.shotsFullPromptHelp":
-    "The exact Shots master prompt after replacing any {story}/{attributes}/{durationSeconds} placeholders present in it.",
+    "The exact Shots master prompt after replacing any {story}/{scenarioAttributes}/{shotsAttributes} placeholders present in it.",
   "workspace.productRawRequest": "Raw product analysis request",
   "workspace.productRawRequestHelp":
     "The request payload used for the current product analysis, with sensitive data removed.",
@@ -429,13 +435,13 @@ const messages = {
     "You are an exceptional screenwriter for AI Veo video.\n\nTask: read the story below and split it into many short shots, each up to 8 seconds. Every shot must include a clear Start state and End state. The next shot's Start state must continue from the previous shot's End state so the video stays continuous by last-state / end-state logic.\n\nFor every shot, create action, setting, camera, emotion, transition point, and beginning/ending state details. Prefer concrete, filmable, emotionally clear visuals with no abrupt scene jumps.\n\nStory content:\n{story}",
   "shots.description":
     "Create reusable scripts/shot plans for your account, save them to the database, and select them in any project workspace.",
-  "shots.delete": "Delete script",
-  "shots.deleteConfirm": "Delete script \"{name}\"?",
-  "shots.deleteFailed": "Cannot delete script.",
-  "shots.defaultFailed": "Cannot set the default script.",
-  "shots.editorDescription": "Add or edit a reusable script/shot plan.",
-  "shots.editTitle": "Edit script",
-  "shots.emptyList": "No scripts yet. Add a script to get started.",
+  "shots.delete": "Delete shot plan",
+  "shots.deleteConfirm": "Delete shot plan \"{name}\"?",
+  "shots.deleteFailed": "Cannot delete shot plan.",
+  "shots.defaultFailed": "Cannot set the default shot plan.",
+  "shots.editorDescription": "Add or edit a reusable shot plan.",
+  "shots.editTitle": "Edit shot plan",
+  "shots.emptyList": "No shot plans yet.",
   "shots.loadFailed": "Cannot load shot plans.",
   "shots.loading": "Loading shot plans...",
   "shots.invalidAiJson": "AI returned invalid JSON.",
@@ -446,11 +452,11 @@ const messages = {
   "shots.fixedPromptHelp":
     "The system uses an admin-managed fixed prompt with Start state / End state continuity. You only see the summary and enter story content below.",
   "shots.noPlanAttributes": "No shot plan attributes yet.",
-  "shots.new": "Add script",
-  "shots.newTitle": "Add script",
-  "shots.noProjects": "No scripts yet. Enter a story and create the first script.",
-  "shots.noScriptProjects": "No Script Flow project exists yet. Create a Script Flow project before generating shots.",
-  "shots.notFound": "Script not found.",
+  "shots.new": "Add shot plan",
+  "shots.newTitle": "Add shot plan",
+  "shots.noProjects": "No shot plans yet. Enter a story and create the first shot plan.",
+  "shots.noScriptProjects": "No Scenario project exists yet. Create a Scenario project before generating shots.",
+  "shots.notFound": "Shot plan not found.",
   "shots.openProject": "Open project workspace",
   "shots.planAttributes": "Shot plan attributes",
   "shots.planAttributesHelp":
@@ -464,8 +470,8 @@ const messages = {
   "shots.rawResponseHelp":
     "This data is used to build the editable shot plan below after normalization. Raw JSON is only kept in the job result and AI logs.",
   "shots.refresh": "Refresh",
-  "shots.listTitle": "Scripts list",
-  "shots.savedTitle": "Saved scripts",
+  "shots.listTitle": "Shot plans list",
+  "shots.savedTitle": "Saved shot plans",
   "shots.shotCount": "{count} shot(s)",
   "shots.savedPlanAttributesHelp":
     "These attributes are saved with the shot plan and used when the plan is selected for prompt composition.",
@@ -474,7 +480,7 @@ const messages = {
   "shots.storyPlaceholder": "Paste or write the story content that should be split into shots.",
   "shots.storyText": "Story content",
   "shots.sourceText": "Source content",
-  "shots.title": "Scripts",
+  "shots.title": "Shot plans",
   "shots.updated": "Updated {date}",
   "template.addAttribute": "Add attribute",
   "template.addOption": "Add option",
@@ -533,9 +539,9 @@ const messages = {
   "template.title": "Scenario",
   "template.attributeCount": "{count} attributes",
   "adminConfig.apiKey": "API key",
-  "adminConfig.apiKeyPlaceholder": "Enter a new key or leave blank to use the saved key/env",
+  "adminConfig.apiKeyPlaceholder": "Enter a new key or leave blank to use the saved key",
   "adminConfig.chatGptApiNote":
-    "ChatGPT Plus is for the ChatGPT app. This app still needs an OpenAI API key or OPENAI_API_KEY env var for the ChatGPT/OpenAI provider.",
+    "ChatGPT Plus is for the ChatGPT app. This app still needs an OpenAI API key saved in Admin > AI Config for the ChatGPT/OpenAI provider.",
   "adminConfig.contentMode": "Content mode",
   "adminConfig.createScript": "Create Script",
   "adminConfig.createScriptHelp":
@@ -553,7 +559,7 @@ const messages = {
   "adminConfig.keySaved": "Key saved",
   "adminConfig.keySaveFailed": "Cannot save key",
   "adminConfig.keyStatusConfigured": "configured",
-  "adminConfig.keyStatusEnv": "env",
+  "adminConfig.keyStatusEnv": "missing",
   "adminConfig.keyStatusMissing": "missing",
   "adminConfig.promptProviderHelp":
     "Enter any provider/model. Gemini and ChatGPT/OpenAI have live adapters; other providers need matching adapters.",

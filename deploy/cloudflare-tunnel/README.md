@@ -4,6 +4,12 @@ This folder publishes the local VideoAI dev app through a fixed Cloudflare Tunne
 
 Cloudflare Tunnel should be used with Cloudflare Access. Access provides the customer-facing gate before the request reaches your local app.
 
+Vietnamese step-by-step guide:
+
+```text
+deploy/cloudflare-tunnel/HUONG_DAN_TIENG_VIET.md
+```
+
 ## Network Model
 
 Traffic flow:
@@ -122,6 +128,18 @@ Cloudflare tunnel credentials are stored by `cloudflared` in your user profile, 
 ```
 
 ## Useful Commands
+
+Start a temporary trycloudflare URL:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\cloudflare-tunnel\start-trycloudflare.ps1
+```
+
+Stop all quick tunnel `cloudflared` processes and verify none remain:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\cloudflare-tunnel\stop-trycloudflare.ps1
+```
 
 Show script help:
 

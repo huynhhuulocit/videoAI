@@ -1,5 +1,5 @@
-import { renderMasterPromptPage } from "../master-prompt-page";
+import { redirect } from "next/navigation";
 
 export default async function ShotsMasterPromptPage() {
-  return renderMasterPromptPage("shots");
+  redirect("/admin/shots/master-prompt");
 }

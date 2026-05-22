@@ -211,7 +211,7 @@ Rules:
 
 ### 3.5.2. `content.video_shot_plans`
 
-Purpose: user-owned reusable shot plans generated from story or Script Flow content.
+Purpose: user-owned reusable shot plans generated from story or Scenario content.
 
 Fields:
 
@@ -224,7 +224,7 @@ Fields:
 - `duration_seconds`: default project shot duration, 1-8 seconds
 - `attributes`: JSONB list of plan-level attributes applied to every shot in the plan
 - `shots`: JSONB list of shot definitions
-- `is_default`: legacy compatibility flag; user-facing Scripts default selection is removed
+- `is_default`: legacy compatibility flag; user-facing standalone shot-plan default selection is removed
 - `status`: `active`, `archived`
 - `created_at`
 - `updated_at`
@@ -257,7 +257,7 @@ Rules:
 - A shot duration must be between 1 and 8 seconds to match current Veo constraints.
 - User can edit plan-level attributes; those attributes are saved with the shot plan and included when the plan is selected for prompt composition.
 - User can edit shots, add/remove shots and add/remove arbitrary shot attributes.
-- Each shot can store `mediaIds` so Script Flow prompts can use media references scoped to that shot.
+- Each shot can store `mediaIds` so Scenario prompts can use media references scoped to that shot.
 - Shot selections used for prompt generation should be persisted in AI request payload and prompt provider metadata.
 
 ### 3.6. `config.ai_site_configs`
@@ -283,7 +283,7 @@ Fields:
 Rules:
 
 - Only one active config should exist at a time.
-- `shot_generation_prompt` and `template_selection_prompt` remain fallback/read compatibility columns during migration to `config.master_prompts`.
+- `shot_generation_prompt` and `template_selection_prompt` remain read-compatibility columns during migration to `config.master_prompts`; runtime AI requests do not use them as fallback.
 - Runtime master prompts keep a recommended placeholder format, but placeholder replacement is optional compatibility; backend does not append hidden runtime context to the selected prompt.
 - Config updates should create audit records.
 
@@ -313,9 +313,9 @@ Rules:
 - Admin CRUD for master prompts writes this table, not the legacy prompt columns in `config.ai_site_configs`.
 - Exactly one active default prompt should be selected per `type`.
 - Deleting/archiving the current default is blocked until another active prompt of the same type is set as default.
-- If no active prompt exists for a type, runtime uses the built-in default read-only prompt; legacy `ai_site_configs` prompt columns may be used as fallback during migration.
+- If no active prompt exists for a type, runtime AI requests fail with `AI_CONFIG_MISSING`. Built-in prompt text is setup guidance only, not runtime fallback.
 - Prompt content is required but placeholders are optional.
-- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{durationSeconds}`.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`.
 
 ### 3.8. `config.ai_provider_keys`
 
@@ -337,7 +337,7 @@ Rules:
 - Never store plain text API keys.
 - Never return `encrypted_key` to clients.
 - A provider key can be used by either prompt or video workflows when the active config references that provider.
-- If no decryptable saved key exists, runtime may fallback to a provider-specific env var without creating a database row.
+- If no decryptable saved key exists, runtime AI requests fail with `AI_CONFIG_MISSING`. Environment API keys are not runtime fallback sources.
 
 ### 3.9. `video.video_generations`
 
@@ -452,7 +452,7 @@ Database-backed records are required for:
 - AI config and provider-key status.
 - AI request and response logs.
 - Prompt and product analysis results.
-- Scripts.
+- Script records.
 - Video templates and template attribute/option JSON.
 - Template selections stored with project metadata and prompt request/log metadata.
 - Video shot plans and shot JSON.
@@ -500,3 +500,14 @@ Recommended defaults:
 - Cross-schema foreign keys may be used in early phase only when they do not block future separation.
 - Prefer application-level references across service boundaries for future database-per-service migration.
 - Migration names should describe the feature, not only the table name.
+## 9. Admin Attribute Catalogs
+
+- Scenario management is now admin-only. User-owned `content.video_templates` remains only as a legacy compatibility table for older links and saved data.
+- Admin-managed catalogs are stored separately from Master Prompts:
+  - `content.story_attribute_catalogs`
+  - `content.scenario_attribute_catalogs`
+  - `content.shot_attribute_catalogs`
+- Each catalog stores `id`, `name`, optional `description`, `attributes` JSONB, `is_default`, `status`, `created_by_admin_id`, `created_at`, and `updated_at`.
+- Catalog JSON uses `id`, `name`, `description`, `required`, and `options[]` with the same `id`, `name`, and `description` fields.
+- `config.attribute_generation_prompts` stores one Attribute Generation Prompt per type (`story`, `scenario`, `shots`). This prompt is not a Master Prompt and is used only to generate catalog JSON.
+- `projects.projects.attribute_selections` stores selected options keyed by `story`, `scenario`, and `shots`. Required attributes default to the first option but remain user-changeable as multi-select, as long as at least one option stays selected.

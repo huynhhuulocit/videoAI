@@ -5,6 +5,8 @@ import {
   DEFAULT_SCRIPT_GENERATION_PROMPT,
   DEFAULT_SHOT_GENERATION_PROMPT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
+  AttributeCatalogAttributeSchema,
+  AttributeCatalogTypeSchema,
   FlowTypeSchema,
   JobStatusSchema,
   MasterPromptStatusSchema,
@@ -12,11 +14,14 @@ import {
   ProviderSchema,
   TemplateAttributeSchema,
   TemplateSelectionSchema,
+  ProjectAttributeSelectionsSchema,
   UserRoleSchema,
   UserStatusSchema,
   VideoShotSchema,
   VideoShotAttributeSchema,
   type AiConfig,
+  type AttributeCatalog,
+  type AttributeCatalogType,
   type AiLog,
   type AiLogDetail,
   type ApiError,
@@ -41,6 +46,9 @@ type DbConfig = Awaited<ReturnType<typeof prisma.aiSiteConfig.findFirstOrThrow>>
 type DbJob = Awaited<ReturnType<typeof prisma.jobStatusRecord.findFirstOrThrow>>;
 type DbMediaAsset = Awaited<ReturnType<typeof prisma.mediaAsset.findFirstOrThrow>>;
 type DbVideoTemplate = Awaited<ReturnType<typeof prisma.videoTemplateRecord.findFirstOrThrow>>;
+type DbStoryAttributeCatalog = Awaited<ReturnType<typeof prisma.storyAttributeCatalog.findFirstOrThrow>>;
+type DbScenarioAttributeCatalog = Awaited<ReturnType<typeof prisma.scenarioAttributeCatalog.findFirstOrThrow>>;
+type DbShotAttributeCatalog = Awaited<ReturnType<typeof prisma.shotAttributeCatalog.findFirstOrThrow>>;
 type DbVideoShotPlan = Awaited<ReturnType<typeof prisma.videoShotPlanRecord.findFirstOrThrow>>;
 type DbMasterPrompt = Awaited<ReturnType<typeof prisma.masterPrompt.findFirstOrThrow>>;
 type DbAiLog = Awaited<ReturnType<typeof prisma.aiRequestLog.findFirstOrThrow>> & {
@@ -62,19 +70,11 @@ function normalizeProvider(provider: string): Provider {
   return ProviderSchema.parse(provider);
 }
 
-export function getProviderEnvName(provider: string) {
-  const normalizedProvider = normalizeProvider(provider);
-  if (normalizedProvider === "chatgpt" || normalizedProvider === "openai") {
-    return "OPENAI_API_KEY";
-  }
-  if (normalizedProvider === "gemini" || normalizedProvider === "google") {
-    return "GEMINI_API_KEY";
-  }
-  return `${normalizedProvider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
-}
-
 function getProviderEncryptionKey() {
-  const seed = process.env.AI_CONFIG_ENCRYPTION_KEY?.trim() || "videoai-local-development-provider-key";
+  const seed = process.env.AI_CONFIG_ENCRYPTION_KEY?.trim();
+  if (!seed) {
+    throw new Error("AI_CONFIG_ENCRYPTION_KEY is required to store or read provider API keys.");
+  }
   return createHash("sha256").update(seed).digest();
 }
 
@@ -189,6 +189,9 @@ export function mapProject(row: DbProject): Project {
   if (row.templateSelection) {
     project.templateSelection = TemplateSelectionSchema.parse(row.templateSelection);
   }
+  if (row.attributeSelections) {
+    project.attributeSelections = ProjectAttributeSelectionsSchema.parse(row.attributeSelections);
+  }
 
   return project;
 }
@@ -239,6 +242,45 @@ export function mapVideoTemplate(row: DbVideoTemplate): VideoTemplate {
   return template;
 }
 
+type DbAttributeCatalog = DbStoryAttributeCatalog | DbScenarioAttributeCatalog | DbShotAttributeCatalog;
+
+export function mapAttributeCatalog(type: AttributeCatalogType, row: DbAttributeCatalog): AttributeCatalog {
+  return {
+    id: row.id,
+    type,
+    name: row.name,
+    ...(row.description ? { description: row.description } : {}),
+    attributes: AttributeCatalogAttributeSchema.array().parse(row.attributes),
+    isDefault: row.isDefault,
+    status: row.status === "archived" ? "archived" : "active",
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString()
+  };
+}
+
+export async function getDefaultAttributeCatalog(typeInput: AttributeCatalogType) {
+  const type = AttributeCatalogTypeSchema.parse(typeInput);
+  if (type === "story") {
+    const row = await prisma.storyAttributeCatalog.findFirst({
+      where: { status: "active", isDefault: true },
+      orderBy: { updatedAt: "desc" }
+    });
+    return row ? mapAttributeCatalog(type, row) : null;
+  }
+  if (type === "scenario") {
+    const row = await prisma.scenarioAttributeCatalog.findFirst({
+      where: { status: "active", isDefault: true },
+      orderBy: { updatedAt: "desc" }
+    });
+    return row ? mapAttributeCatalog(type, row) : null;
+  }
+  const row = await prisma.shotAttributeCatalog.findFirst({
+    where: { status: "active", isDefault: true },
+    orderBy: { updatedAt: "desc" }
+  });
+  return row ? mapAttributeCatalog(type, row) : null;
+}
+
 export function mapVideoShotPlan(row: DbVideoShotPlan): VideoShotPlan {
   return {
     id: row.id,
@@ -281,19 +323,19 @@ export function mapAiConfig(
   row: DbConfig,
   promptKeyStatus: ProviderKeyStatus,
   videoKeyStatus: ProviderKeyStatus,
-  masterPrompts?: {
-    scenarioPrompt?: string;
-    shotsPrompt?: string;
-    scriptsPrompt?: string;
+  masterPrompts: {
+    scenarioPrompt: string;
+    shotsPrompt: string;
+    scriptsPrompt: string;
   }
 ): AiConfig {
   return {
     contentMode: ContentModeSchema.parse(row.contentMode),
     promptProvider: normalizeProvider(row.promptProvider),
     promptModel: row.promptModel,
-    shotGenerationPrompt: masterPrompts?.shotsPrompt ?? row.shotGenerationPrompt,
-    scriptGenerationPrompt: masterPrompts?.scriptsPrompt,
-    templateSelectionPrompt: masterPrompts?.scenarioPrompt ?? row.templateSelectionPrompt,
+    shotGenerationPrompt: masterPrompts.shotsPrompt,
+    scriptGenerationPrompt: masterPrompts.scriptsPrompt,
+    templateSelectionPrompt: masterPrompts.scenarioPrompt,
     promptKeyStatus,
     videoProvider: normalizeProvider(row.videoProvider),
     videoModel: row.videoModel,
@@ -468,13 +510,11 @@ export async function getStoredProviderKey(provider: string) {
 
 export async function resolveProviderApiKey(provider: string, overrideKey?: string) {
   const normalizedProvider = normalizeProvider(provider);
-  const envName = getProviderEnvName(normalizedProvider);
   const trimmedOverrideKey = overrideKey?.trim();
   if (trimmedOverrideKey) {
     return {
       apiKey: trimmedOverrideKey,
-      source: "input" as ProviderKeySource,
-      envName
+      source: "input" as ProviderKeySource
     };
   }
 
@@ -482,24 +522,13 @@ export async function resolveProviderApiKey(provider: string, overrideKey?: stri
   if (storedApiKey) {
     return {
       apiKey: storedApiKey,
-      source: "stored" as ProviderKeySource,
-      envName
-    };
-  }
-
-  const envApiKey = process.env[envName]?.trim();
-  if (envApiKey) {
-    return {
-      apiKey: envApiKey,
-      source: "env" as ProviderKeySource,
-      envName
+      source: "stored" as ProviderKeySource
     };
   }
 
   return {
     apiKey: null,
-    source: "missing" as ProviderKeySource,
-    envName
+    source: "missing" as ProviderKeySource
   };
 }
 
@@ -507,9 +536,6 @@ export async function getProviderKeyStatus(provider: string): Promise<ProviderKe
   const resolved = await resolveProviderApiKey(provider);
   if (resolved.source === "stored") {
     return "configured";
-  }
-  if (resolved.source === "env") {
-    return "env";
   }
   return "missing";
 }
@@ -528,8 +554,8 @@ export async function getActiveAiConfig(): Promise<AiConfig> {
   ] = await Promise.all([
     getProviderKeyStatus(config.promptProvider),
     getProviderKeyStatus(config.videoProvider),
-    getDefaultMasterPromptContent("scenario", config.templateSelectionPrompt),
-    getDefaultMasterPromptContent("shots", config.shotGenerationPrompt),
+    getDefaultMasterPromptContent("scenario"),
+    getDefaultMasterPromptContent("shots"),
     getDefaultMasterPromptContent("scripts")
   ]);
   return mapAiConfig(config, promptKeyStatus, videoKeyStatus, {

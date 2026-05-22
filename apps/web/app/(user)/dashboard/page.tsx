@@ -1,4 +1,4 @@
-import { Activity, CirclePlus, FileText, Video } from "lucide-react";
+import { Activity, CirclePlus, Video } from "lucide-react";
 import { redirect } from "next/navigation";
 import { DashboardShell } from "../../../components/shell/dashboard-shell";
 import { I18nText } from "../../../components/i18n/i18n-text";
@@ -33,7 +33,7 @@ export default async function DashboardPage() {
           <I18nText id="dashboard.createProject" />
         </LinkButton>
       </div>
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">
@@ -42,15 +42,6 @@ export default async function DashboardPage() {
             <Activity size={18} className="text-sky-600" />
           </div>
           <p className="mt-3 text-3xl font-semibold">{projects.length}</p>
-        </Card>
-        <Card>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              <I18nText id="dashboard.scripts" />
-            </span>
-            <FileText size={18} className="text-sky-600" />
-          </div>
-          <p className="mt-3 text-3xl font-semibold">4</p>
         </Card>
         <Card>
           <div className="flex items-center justify-between">

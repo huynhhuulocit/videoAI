@@ -56,7 +56,7 @@ Use React Hook Form with Zod.
 Forms:
 
 - Login form.
-- Create project form with required `Script Flow` or `Product Flow` selection.
+- Create project form with required `Scenario` or `Product Flow` selection.
 - Prompt/script input form.
 - Product URL form.
 - Admin AI config form.

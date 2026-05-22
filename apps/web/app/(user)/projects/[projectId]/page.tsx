@@ -31,6 +31,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
         projectDescription={project?.description ?? null}
         flowType={project?.flowType ?? "product"}
         savedTemplateSelection={project?.templateSelection ?? null}
+        savedAttributeSelections={project?.attributeSelections ?? null}
         defaultPrompt=""
         defaultProductUrl="https://shopee.vn/Kinh-ram-phan-cuc-nam-VEITHDIA-2462-gong-vuong-co-dien-i.75453101.1255972028"
       />

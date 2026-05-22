@@ -8,6 +8,7 @@ Tai lieu nay mo ta cach start VideoAI tren may local bang Windows PowerShell.
 - Docker Desktop dang chay.
 - Chay lenh tu thu muc goc repo: `D:\lochuynh\research_loc_huynh\videoAI`.
 - File `.env` ton tai. Neu chua co, copy tu `.env.example`.
+- `.env` phai co cac bien bat buoc: `DATABASE_URL`, `REDIS_URL`, `API_GATEWAY_URL`, `PORT`, `NEXTAUTH_SECRET`, `AI_CONFIG_ENCRYPTION_KEY`, `WEB_ORIGIN`. Local API Gateway dung `PORT="4000"`.
 
 ## 2. Start nhanh bang mot file
 
@@ -65,6 +66,7 @@ Mo terminal thu nhat de start API Gateway:
 
 ```powershell
 cd D:\lochuynh\research_loc_huynh\videoAI
+$env:PORT="4000"
 npm.cmd run dev:api
 ```
 
@@ -90,19 +92,15 @@ Admin sau khi login se vao khu vuc admin. User sau khi login se vao dashboard us
 
 ## 6. Cau hinh AI provider cho Generate shots
 
-Feature `Generate shots` khong dung mock data. API Gateway se goi provider prompt dang active trong Admin AI Config:
+Feature `Generate shots` khong dung mock data. API Gateway se goi provider prompt dang active trong Admin AI Config va chi su dung API key da luu trong Admin > AI Config.
 
-- `gemini` can `GEMINI_API_KEY` trong `.env`.
-- `chatgpt` can `OPENAI_API_KEY` trong `.env`.
-
-De chay local, them key vao `.env`:
+De chay local, can co `AI_CONFIG_ENCRYPTION_KEY` trong `.env` de ma hoa/giai ma key da luu:
 
 ```env
-GEMINI_API_KEY=""
-OPENAI_API_KEY=""
+AI_CONFIG_ENCRYPTION_KEY="change-me-provider-key-encryption-secret"
 ```
 
-Neu thieu key cua provider dang active, job `shot_generation` se failed voi ma loi `AI_CONFIG_MISSING` va khong tao shot plan gia.
+Neu thieu key da luu cua provider dang active, job `shot_generation` se failed voi ma loi `AI_CONFIG_MISSING` va khong tao shot plan gia.
 
 ## 7. Start bang background process
 

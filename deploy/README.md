@@ -17,6 +17,7 @@ If you want to share your current local app from `localhost:3000` with a small n
 
 ```text
 deploy/cloudflare-tunnel/README.md
+deploy/cloudflare-tunnel/HUONG_DAN_TIENG_VIET.md
 ```
 
 That mode keeps the app on your local machine, routes `https://YOUR_HOSTNAME/api/*` to `localhost:4000`, routes all other traffic to `localhost:3000`, and expects Cloudflare Access with an explicit email allowlist in front of the app. Use this VPS/Caddy deploy when you want the product to keep running on a server without your local machine.

@@ -130,6 +130,351 @@ async function main() {
     }
   });
 
+  await prisma.storyAttributeCatalog.upsert({
+    where: { id: "story_catalog_default" },
+    update: {
+      name: "Default Story attributes",
+      description: "Story-level controls used before Story Content generation.",
+      attributes: [
+        {
+          id: "story-tone",
+          name: "Story tone",
+          description: "Overall emotional tone of the expanded Story Content.",
+          required: true,
+          options: [
+            {
+              id: "story-tone-vivid",
+              name: "Vivid",
+              description: "Energetic and descriptive.",
+            },
+            {
+              id: "story-tone-warm",
+              name: "Warm",
+              description: "Friendly and approachable.",
+            },
+            {
+              id: "story-tone-cinematic",
+              name: "Cinematic",
+              description: "Visual and scene-driven.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+    create: {
+      id: "story_catalog_default",
+      name: "Default Story attributes",
+      description: "Story-level controls used before Story Content generation.",
+      attributes: [
+        {
+          id: "story-tone",
+          name: "Story tone",
+          description: "Overall emotional tone of the expanded Story Content.",
+          required: true,
+          options: [
+            {
+              id: "story-tone-vivid",
+              name: "Vivid",
+              description: "Energetic and descriptive.",
+            },
+            {
+              id: "story-tone-warm",
+              name: "Warm",
+              description: "Friendly and approachable.",
+            },
+            {
+              id: "story-tone-cinematic",
+              name: "Cinematic",
+              description: "Visual and scene-driven.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+  });
+
+  await prisma.scenarioAttributeCatalog.upsert({
+    where: { id: "scenario_catalog_product_intro" },
+    update: {
+      name: "Product introduction Scenario attributes",
+      description: "Default Scenario catalog for product or script analysis.",
+      attributes: [
+        {
+          id: "mood",
+          name: "Mood",
+          description: "Primary feeling the video should communicate.",
+          required: true,
+          options: [
+            {
+              id: "mood-friendly",
+              name: "Friendly",
+              description: "Warm and approachable.",
+            },
+            {
+              id: "mood-premium",
+              name: "Premium",
+              description: "Polished and high-end.",
+            },
+            {
+              id: "mood-energetic",
+              name: "Energetic",
+              description: "Fast, bright, and active.",
+            },
+          ],
+        },
+        {
+          id: "visual-style",
+          name: "Visual style",
+          description: "Primary visual presentation style.",
+          required: false,
+          options: [
+            {
+              id: "visual-closeup",
+              name: "Product close-up",
+              description: "Focus the frame around product details.",
+            },
+            {
+              id: "visual-lifestyle",
+              name: "Lifestyle",
+              description: "Show the product in everyday context.",
+            },
+            {
+              id: "visual-minimal",
+              name: "Minimal",
+              description: "Clean layout with fewer distractions.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+    create: {
+      id: "scenario_catalog_product_intro",
+      name: "Product introduction Scenario attributes",
+      description: "Default Scenario catalog for product or script analysis.",
+      attributes: [
+        {
+          id: "mood",
+          name: "Mood",
+          description: "Primary feeling the video should communicate.",
+          required: true,
+          options: [
+            {
+              id: "mood-friendly",
+              name: "Friendly",
+              description: "Warm and approachable.",
+            },
+            {
+              id: "mood-premium",
+              name: "Premium",
+              description: "Polished and high-end.",
+            },
+            {
+              id: "mood-energetic",
+              name: "Energetic",
+              description: "Fast, bright, and active.",
+            },
+          ],
+        },
+        {
+          id: "visual-style",
+          name: "Visual style",
+          description: "Primary visual presentation style.",
+          required: false,
+          options: [
+            {
+              id: "visual-closeup",
+              name: "Product close-up",
+              description: "Focus the frame around product details.",
+            },
+            {
+              id: "visual-lifestyle",
+              name: "Lifestyle",
+              description: "Show the product in everyday context.",
+            },
+            {
+              id: "visual-minimal",
+              name: "Minimal",
+              description: "Clean layout with fewer distractions.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+  });
+
+  await prisma.shotAttributeCatalog.upsert({
+    where: { id: "shots_catalog_default" },
+    update: {
+      name: "Default Shots attributes",
+      description: "Shot-level controls used during shot plan generation.",
+      attributes: [
+        {
+          id: "camera-style",
+          name: "Camera style",
+          description: "How the camera should frame and move through shots.",
+          required: true,
+          options: [
+            {
+              id: "camera-style-stable",
+              name: "Stable cinematic",
+              description: "Smooth, controlled, and easy to follow.",
+            },
+            {
+              id: "camera-style-dynamic",
+              name: "Dynamic movement",
+              description: "More movement and energy between beats.",
+            },
+          ],
+        },
+        {
+          id: "transition-style",
+          name: "Transition style",
+          description: "How scenes should move from one shot to the next.",
+          required: false,
+          options: [
+            {
+              id: "transition-style-cut",
+              name: "Clean cuts",
+              description: "Direct edits between shots.",
+            },
+            {
+              id: "transition-style-soft",
+              name: "Soft transitions",
+              description: "Gentle transitions with smooth pacing.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+    create: {
+      id: "shots_catalog_default",
+      name: "Default Shots attributes",
+      description: "Shot-level controls used during shot plan generation.",
+      attributes: [
+        {
+          id: "camera-style",
+          name: "Camera style",
+          description: "How the camera should frame and move through shots.",
+          required: true,
+          options: [
+            {
+              id: "camera-style-stable",
+              name: "Stable cinematic",
+              description: "Smooth, controlled, and easy to follow.",
+            },
+            {
+              id: "camera-style-dynamic",
+              name: "Dynamic movement",
+              description: "More movement and energy between beats.",
+            },
+          ],
+        },
+        {
+          id: "transition-style",
+          name: "Transition style",
+          description: "How scenes should move from one shot to the next.",
+          required: false,
+          options: [
+            {
+              id: "transition-style-cut",
+              name: "Clean cuts",
+              description: "Direct edits between shots.",
+            },
+            {
+              id: "transition-style-soft",
+              name: "Soft transitions",
+              description: "Gentle transitions with smooth pacing.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+  });
+
+  const attributeJsonFormat = [
+    "Return strict JSON only:",
+    "{",
+    '  "attributes": [',
+    '    {',
+    '      "id": "mood",',
+    '      "name": "Mood",',
+    '      "description": "Primary feeling.",',
+    '      "required": true,',
+    '      "options": [',
+    '        { "id": "mood-friendly", "name": "Friendly", "description": "Warm and approachable." }',
+    "      ]",
+    "    }",
+    "  ]",
+    "}",
+  ].join("\n");
+
+  for (const [type, content] of [
+    [
+      "story",
+      [
+        "Create Story attribute JSON for the source text.",
+        "",
+        "Source:",
+        "{inputText}",
+        "",
+        "{attributeJsonFormat}",
+      ].join("\n"),
+    ],
+    [
+      "scenario",
+      [
+        "Create Scenario attribute JSON for the video idea or script.",
+        "",
+        "Source:",
+        "{inputText}",
+        "",
+        "{attributeJsonFormat}",
+      ].join("\n"),
+    ],
+    [
+      "shots",
+      [
+        "Create Shots attribute JSON for shot generation controls.",
+        "",
+        "Source:",
+        "{inputText}",
+        "",
+        "{attributeJsonFormat}",
+      ].join("\n"),
+    ],
+  ] as const) {
+    await prisma.attributeGenerationPrompt.upsert({
+      where: { type },
+      update: {
+        content: content.replace("{attributeJsonFormat}", attributeJsonFormat),
+        createdByAdminId: "admin_001",
+      },
+      create: {
+        type,
+        content: content.replace("{attributeJsonFormat}", attributeJsonFormat),
+        createdByAdminId: "admin_001",
+      },
+    });
+  }
+
   await prisma.aiSiteConfig.updateMany({
     where: { isActive: true },
     data: { isActive: false }

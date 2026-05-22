@@ -32,6 +32,7 @@ model ProjectRecord {
   description String?
   flowType    String   @map("flow_type")
   templateSelection Json?   @map("template_selection")
+  attributeSelections Json?   @map("attribute_selections")
   status      String   @default("active")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
@@ -83,6 +84,57 @@ model VideoTemplateRecord {
   @@index([ownerUserId, isDefault])
   @@index([status])
   @@map("video_templates")
+  @@schema("content")
+}
+
+model StoryAttributeCatalog {
+  id               String   @id
+  name             String
+  description      String?
+  attributes       Json
+  isDefault        Boolean  @default(false) @map("is_default")
+  status           String   @default("active")
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([isDefault])
+  @@map("story_attribute_catalogs")
+  @@schema("content")
+}
+
+model ScenarioAttributeCatalog {
+  id               String   @id
+  name             String
+  description      String?
+  attributes       Json
+  isDefault        Boolean  @default(false) @map("is_default")
+  status           String   @default("active")
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([isDefault])
+  @@map("scenario_attribute_catalogs")
+  @@schema("content")
+}
+
+model ShotAttributeCatalog {
+  id               String   @id
+  name             String
+  description      String?
+  attributes       Json
+  isDefault        Boolean  @default(false) @map("is_default")
+  status           String   @default("active")
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([isDefault])
+  @@map("shot_attribute_catalogs")
   @@schema("content")
 }
 
@@ -224,6 +276,17 @@ model MasterPrompt {
   @@index([type, status])
   @@index([type, isDefault])
   @@map("master_prompts")
+  @@schema("config")
+}
+
+model AttributeGenerationPrompt {
+  type             String   @id
+  content          String   @db.Text
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("attribute_generation_prompts")
   @@schema("config")
 }
 

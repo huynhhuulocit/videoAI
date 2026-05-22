@@ -24,7 +24,7 @@ Responsibilities:
 - Call the NestJS API Gateway through typed clients.
 - Display asynchronous AI/video job progress.
 - Provide admin configuration and observability screens.
-- Provide a visible `Scripts` user route label backed by the compatibility `/shots` route for user-owned reusable shot plan creation and review.
+- Do not expose a user `Scripts` route in the sidebar. The old `/shots`, `/shots/new`, and `/shots/[shotPlanId]` routes redirect to `/projects`; shot-plan creation remains inside Project and One Click workflows.
 
 Non-responsibilities:
 
@@ -84,11 +84,11 @@ Each feature module should own:
 - Feature components.
 - State mapping from API status to UI status.
 
-`shot-media-upload` is a Script Flow UI concern: the upload control is rendered inside each shot card, stores validated media IDs in the shot JSON and feeds the local per-shot prompt composer. Product Flow continues to use project-level `media-upload`.
+`shot-media-upload` is a Scenario UI concern: the upload control is rendered inside each shot card, stores validated media IDs in the shot JSON and feeds the local per-shot prompt composer. Product Flow continues to use project-level `media-upload`.
 
-In the project workspace Script Flow, the main Script Flow card spans the full available workspace width so Step 1, Step 2 and Step 3 are not constrained to a half-width dashboard column. Step 1 is `Story Content`: it renders the admin-managed `Story Content` master prompt and the source textarea. The underlying master-prompt type key remains `scripts` for API/data compatibility. On open, Script Flow and One Click workspaces load the latest saved database Story Content into that textarea before the user edits it. Generated content replaces that textarea and becomes the source for later steps. Step 2 keeps the Scenario master prompt/action surface in the left main content column and renders scenario attributes/options in a desktop right-column `Attributes` panel. The `Attributes` panel is collapsed by default, widened for label/count readability, and individual attribute groups remain collapsible with selected-count badges. Attribute and option rows expose saved Scenario description metadata through compact helper icons that open on hover or click. AI action rows expose a `Prompt` button before adjacent `Request` and `Response` buttons; `Prompt` opens exactly the rendered provider prompt after placeholder replacement with no hidden runtime context appended, while `Request`/`Response` open read-only raw-data popups for the latest successful AI run.
+In the project workspace Scenario flow, the main Scenario card spans the full available workspace width so Step 1, Step 2 and Step 3 are not constrained to a half-width dashboard column. Step 1 is `Story Content`: it renders the admin-managed `Story Content` master prompt and the source textarea in the left content column, with `Story Attributes` in a desktop right-column panel that is collapsed by default. The underlying master-prompt type key remains `scripts` for API/data compatibility. On open, Scenario and One Click workspaces load the latest saved database Story Content into that textarea before the user edits it. Generated content replaces that textarea and becomes the source for later steps. Step 2 keeps the Scenario master prompt/action surface in the left main content column and renders scenario attributes/options in a desktop right-column `Attributes` panel. The `Attributes` panel is collapsed by default, widened for label/count readability, and individual attribute groups remain collapsible with selected-count badges. Attribute and option rows expose saved Scenario description metadata through compact helper icons that open on hover or click. AI action rows expose a `Prompt` button before adjacent `Request` and `Response` buttons; `Prompt` opens exactly the rendered provider prompt after placeholder replacement with no hidden runtime context appended, while `Request`/`Response` open read-only raw-data popups for the latest successful AI run.
 
-Step 3 renders the active admin-managed `Shots` master prompt in an editable `TextareaWithCounter` before duration/generate controls. Changes are temporary workspace state and are sent as the optional `masterPrompt` request override for shot generation; the admin default remains unchanged. Step 3 always shows a `Shots result` JSON textarea directly below the generate action row. It is empty until a shot plan exists or the user pastes JSON; when populated, it is the normalized shot plan used to build the editable shot cards. Users can edit it and apply it back to the cards before saving. `Generate shots` renders inline success/error feedback directly below the JSON editor/action area, with AI provider/config/schema failures formatted as detailed multi-line messages using stable error codes and job metadata when available. Per-shot `Attributes` panels also sit in the same wider right column on desktop.
+Step 3 renders the active admin-managed `Shots` master prompt in an editable `TextareaWithCounter` before the generate controls. Changes are temporary workspace state and are sent as the optional `masterPrompt` request override for shot generation; the admin default remains unchanged. Only `Shots Attributes` render in the desktop right-column attribute area beside the Shots master prompt and generation controls; the panel is collapsed by default while keeping selected-count and attribute-count badges visible. Scenario options are managed in Step 2 and can feed `{scenarioAttributes}` when the Shots prompt contains that placeholder. Step 3 always shows a `Shots result` JSON textarea directly below the generate action row. It is empty until a shot plan exists or the user pastes JSON; when populated, it is the normalized shot plan used to build the editable shot cards. Users can edit it and apply it back to the cards before saving. `Generate shots` renders inline success/error feedback directly below the JSON editor/action area, with AI provider/config/schema failures formatted as detailed multi-line messages using stable error codes and job metadata when available. Per-shot `Attributes` panels also sit in the same wider right column on desktop.
 
 ## 5. UI State Strategy
 
@@ -118,20 +118,18 @@ User shell navigation includes:
 - `/projects`
 - `/one-click`
 - `/one-click/[projectId]`
-- `/shots` with visible label `Scripts`
-- `/shots/new`
-- `/shots/[shotPlanId]`
+- `/shots`, `/shots/new`, and `/shots/[shotPlanId]` redirect to `/projects` because standalone shot-plan management is no longer exposed.
 - `/templates`
 - `/templates/new`
 - `/templates/[templateId]`
 
-The `/projects` route lists active projects owned by the signed-in user, links to each project workspace at `/projects/[projectId]`, and exposes a compact delete/archive action per row. `/shots` and `/templates` are list-only routes; creation and editing are handled by their `/new` and dynamic detail routes. User shell should prioritize project context, active jobs and fast creation actions.
+The `/projects` route lists active projects owned by the signed-in user, links to each project workspace at `/projects/[projectId]`, and exposes a compact delete/archive action per row. User shell should prioritize project context, One Click, active jobs and fast creation actions.
 
-The `/one-click` route is a guided Script Flow shortcut, not a new backend project flow. It creates a normal `script` project from setup name/description, then `/one-click/[projectId]` renders `ProjectWorkspace` in One Click mode: Step 1 Story Content, Step 2 Scenario analysis using a scenario catalog without showing a `Choose scenario` dropdown, and Step 3 Shots master prompt plus editable shot generation. Step 2 also embeds the Scenario content editor pattern from `/templates/[templateId]` so the active scenario name, description, schema JSON and attributes/options can be reviewed or saved inline. One Click persists each step: Story Content is saved before Step 2, Scenario analysis writes `templateSelection` to the project and creates a Scenario named/described from setup, and Step 3 generates a project-linked shot plan named/described from setup without showing an existing shot-plan selector.
+The `/one-click` route is a guided Scenario shortcut, not a new backend project flow. It creates a normal internal `script` project from setup name/description, then `/one-click/[projectId]` renders `ProjectWorkspace` in One Click mode: Step 1 Story Content, Step 2 Scenario analysis using a scenario catalog without showing a `Choose scenario` dropdown, and Step 3 Shots master prompt plus editable shot generation. One Click persists each step: Story Content is saved before Step 2, Scenario analysis writes `templateSelection` to the project and creates a Scenario named/described from setup, and Step 3 generates a project-linked shot plan named/described from setup without showing an existing shot-plan selector.
 
 Scenario create/edit routes (`/templates/new` and `/templates/[templateId]`) render the active admin-managed `Scenario` master prompt above the video idea textarea. The prompt can be edited temporarily for that AI generation request, and provider failures must be displayed inline as detailed multi-line errors without falling back to sample scenario data. The AI generation row exposes `Prompt`, `Request` and `Response` buttons: `Prompt` opens the full rendered provider prompt, while `Request`/`Response` open the redacted raw provider payloads returned by the latest successful `/api/v1/templates/generate` call. Prompt and raw-data popups expose a header copy icon.
 
-Scripts create/edit routes (`/shots/new` and `/shots/[shotPlanId]`) use the same AI debug action pattern for shot-generation. The generated full prompt is available before submission, and the latest job result raw request/response opens in read-only popups instead of inline collapsible panels.
+Standalone shot-plan create/edit routes are no longer user-facing. Shot generation uses the same AI debug action pattern inside Project and One Click workspaces.
 
 Scenario create/edit routes store human-readable explanations directly in the main JSON-first schema. Each attribute and option can include `description`; options use `name` in JSON and the editor converts it to the internal processing label/value. `Parse schema` and `Save scenario` keep the visual description fields synchronized with the JSON textarea. Legacy `translate`, `label` and `value` fields remain parse-compatible for older scenarios, but the editor emits the shorter `id/name/description/options` format. The schema parser still accepts compact `attribute=option1,option2;` text for compatibility.
 
@@ -164,3 +162,18 @@ Frontend changes should be verified with:
 - Playwright screenshots for desktop and mobile dashboards.
 
 For UI-heavy changes, screenshots are part of implementation verification, not optional polish.
+## 9. Admin Attribute Navigation
+
+- Admin navigation groups Story, Scenario, and Shots as non-clickable parents.
+- Each parent exposes two child routes: `Master Prompt` and `Attribute`.
+- Canonical routes are:
+  - `/admin/story/master-prompt`
+  - `/admin/story/attributes`
+  - `/admin/scenario/master-prompt`
+  - `/admin/scenario/attributes`
+  - `/admin/shots/master-prompt`
+  - `/admin/shots/attributes`
+- The `Attribute` child routes are catalog list pages only. Catalog creation and editing use dedicated routes under the same type, such as `/admin/story/attributes/new` and `/admin/story/attributes/{catalogId}`.
+- Attribute editor pages share the same prompt/source/JSON/visual editor pattern. `Prompt`, `Request`, and `Response` actions sit next to the AI generation button so raw debug controls stay tied to generation.
+- Old `/admin/shot-prompt/...` routes should redirect to the matching new Master Prompt routes.
+- User navigation no longer exposes Scenario management. Project and One Click screens read admin default catalogs instead.

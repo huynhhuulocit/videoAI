@@ -1,5 +1,10 @@
 import { Module } from "@nestjs/common";
 import { AdminController } from "./admin.controller.js";
+import {
+  AdminAttributeCatalogsController,
+  AdminAttributeGenerationPromptsController,
+  AttributeCatalogsController
+} from "./attribute-catalogs.controller.js";
 import { HealthController } from "./health.controller.js";
 import { JobsController } from "./jobs.controller.js";
 import { MediaController } from "./media.controller.js";
@@ -18,6 +23,9 @@ import { TemplatesController } from "./templates.controller.js";
     TemplatesController,
     ShotsController,
     JobsController,
+    AttributeCatalogsController,
+    AdminAttributeCatalogsController,
+    AdminAttributeGenerationPromptsController,
     AdminController
   ],
   providers: [ShotPlansService]

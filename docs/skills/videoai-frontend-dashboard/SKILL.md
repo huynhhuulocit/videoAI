@@ -24,7 +24,7 @@ For screen-level layout patterns, read `references/ui-patterns.md`.
 
 ## Implementation Workflow
 
-1. Identify the screen type: user dashboard, project workspace, script flow, product flow, media upload, admin config, or admin logs.
+1. Identify the screen type: user dashboard, project workspace, scenario flow, product flow, media upload, admin config, or admin logs.
 2. Select the expected components from `docs/frontend/component-inventory.md`.
 3. Build with Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, Radix primitives, Lucide icons, TanStack Query/Table, React Hook Form, Zod, Recharts, and Motion only where useful.
 4. Keep the app surface dashboard-first: no marketing hero inside authenticated user/admin routes.

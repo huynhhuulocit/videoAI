@@ -1,6 +1,9 @@
 import type { AiConfig, AiLog, ApiSuccess, MasterPromptConfig, Project } from "@videoai/contracts";
 
-const baseUrl = process.env.API_GATEWAY_URL ?? "http://localhost:4000";
+const baseUrl = process.env.API_GATEWAY_URL?.trim();
+if (!baseUrl) {
+  throw new Error("API_GATEWAY_URL is required for server-side API calls.");
+}
 
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(`${baseUrl}/api/v1${path}`, {

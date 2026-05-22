@@ -54,6 +54,19 @@ function Write-Ok {
 
 function Assert-Command {
   param([string]$CommandName)
+  if ($CommandName -eq "cloudflared" -and -not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
+    $knownCloudflaredPaths = @(
+      "C:\Program Files\cloudflared",
+      "C:\Program Files (x86)\cloudflared"
+    )
+    foreach ($knownPath in $knownCloudflaredPaths) {
+      $exePath = Join-Path $knownPath "cloudflared.exe"
+      if (Test-Path -LiteralPath $exePath) {
+        $env:Path = "$knownPath;$env:Path"
+        break
+      }
+    }
+  }
   if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
     throw "Missing command '$CommandName'. Install it first, then run this script again."
   }

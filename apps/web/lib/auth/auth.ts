@@ -2,8 +2,13 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { verifyCredentials } from "./credentials";
 
+const nextAuthSecret = process.env.NEXTAUTH_SECRET?.trim();
+if (!nextAuthSecret) {
+  throw new Error("NEXTAUTH_SECRET is required.");
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  secret: process.env.NEXTAUTH_SECRET ?? "dev-videoai-auth-secret-change-me",
+  secret: nextAuthSecret,
   trustHost: true,
   session: { strategy: "jwt" },
   providers: [

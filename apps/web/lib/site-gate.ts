@@ -38,7 +38,7 @@ function base64UrlDecodeText(value: string) {
 }
 
 function getSiteGateSecret() {
-  return process.env.SITE_GATE_SECRET ?? "";
+  return process.env.SITE_GATE_SECRET?.trim() ?? "";
 }
 
 export function isSiteGateEnabled() {
@@ -46,7 +46,7 @@ export function isSiteGateEnabled() {
 }
 
 export function getSiteGateUsername() {
-  return process.env.SITE_GATE_USERNAME || "videoai";
+  return process.env.SITE_GATE_USERNAME?.trim() ?? "";
 }
 
 function getSiteGatePassword() {

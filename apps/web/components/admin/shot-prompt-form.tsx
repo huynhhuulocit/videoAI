@@ -5,6 +5,7 @@ import {
   DEFAULT_SCRIPT_GENERATION_PROMPT,
   DEFAULT_SHOT_GENERATION_PROMPT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
+  MASTER_PROMPT_PLACEHOLDERS,
   type MasterPrompt,
   type MasterPromptConfig,
   type MasterPromptType
@@ -17,7 +18,7 @@ import { Card } from "../ui/card";
 import { MasterPromptField } from "../ui/master-prompt-field";
 
 const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:4000";
+  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
 
 type ApiSuccess<T> = {
   data: T;
@@ -119,6 +120,16 @@ export function ShotPromptForm({ config: initialConfig, initialType = "scripts" 
 
   function openEditor(prompt: MasterPrompt) {
     setSelectedIds((current) => ({ ...current, [activeType]: prompt.id }));
+    if (prompt.isBuiltIn) {
+      setIsCreating(true);
+      setIsEditorOpen(true);
+      setDraftName(`${typeTitle(activeType)} master prompt`);
+      setDraftContent(prompt.content);
+      setStatusMessage("");
+      setErrorMessage("");
+      return;
+    }
+
     setIsCreating(false);
     setIsEditorOpen(true);
     setStatusMessage("");
@@ -398,6 +409,7 @@ export function ShotPromptForm({ config: initialConfig, initialType = "scripts" 
                   value={draftContent}
                   onChange={(event) => setDraftContent(event.target.value)}
                   disabled={selectedPrompt.isBuiltIn && !isCreating}
+                  placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS[activeType]}
                   className="min-h-[420px] resize-y"
                 />
                 {selectedPrompt.isBuiltIn && !isCreating ? (

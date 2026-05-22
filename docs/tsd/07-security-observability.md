@@ -65,7 +65,7 @@ Current phase:
 
 - Use an application encryption key from environment variables.
 - The local vertical slice encrypts provider keys with an application-derived key from `AI_CONFIG_ENCRYPTION_KEY`, returns only key status and never returns plain key material.
-- Provider execution resolves secrets in this order: encrypted saved key, then provider-specific environment fallback. Admin test connection may test an unsaved key supplied in the request body, but that key is not persisted unless the admin explicitly saves it.
+- Provider execution uses the encrypted saved key for the selected provider. Environment API keys are not runtime fallback sources. Admin test connection may test an unsaved key supplied in the request body, but that key is not persisted unless the admin explicitly saves it.
 
 Future phase:
 

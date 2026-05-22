@@ -17,7 +17,6 @@ import {
   archiveMasterPrompt,
   createMasterPrompt,
   getDefaultMasterPrompt,
-  getProviderEnvName,
   getActiveAiConfig,
   getMasterPromptConfig,
   mapAiLog,
@@ -60,7 +59,7 @@ export class AdminController {
         model: body.model,
         status: "failed" as const,
         keySource: resolvedKey.source,
-        message: `Missing API key. Save a key for ${body.provider} or set ${resolvedKey.envName}.`
+        message: `Missing API key. Save a key for ${body.provider} in Admin > AI Config.`
       });
     }
 
@@ -77,7 +76,7 @@ export class AdminController {
       model: body.model,
       status: "success" as const,
       keySource: resolvedKey.source,
-      message: `Key source is available. No live test adapter is defined for ${body.provider}; env fallback would use ${getProviderEnvName(body.provider)}.`
+      message: `Key source is available. No live test adapter is defined for ${body.provider}.`
     });
   }
 

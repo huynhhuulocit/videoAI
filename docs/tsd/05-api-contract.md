@@ -110,7 +110,7 @@ Request:
 
 `flowType` is required and must be one of:
 
-- `script`: project workspace starts with Script Flow.
+- `script`: project workspace starts with Scenario.
 - `product`: project workspace starts with Product Flow.
 
 ### `GET /api/v1/projects/{projectId}`
@@ -129,7 +129,7 @@ Archives a project by marking it non-active. Archived projects no longer appear 
 
 ### `POST /api/v1/projects/{projectId}/template-selection/analyze`
 
-Uses the active prompt provider/model to analyze the current Script Flow story against a selected Kịch bản/scenario template. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override after replacing any placeholders present in that prompt. The provider returns strict JSON with selected option IDs. The API normalizes the response, saves the resulting `templateSelection` on the project, creates AI request/response logs and returns a completed job.
+Uses the active prompt provider/model to analyze the current Scenario story against a selected Kịch bản/scenario template. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override after replacing any placeholders present in that prompt. The provider returns strict JSON with selected option IDs. The API normalizes the response, saves the resulting `templateSelection` on the project, creates AI request/response logs and returns a completed job.
 
 Request:
 
@@ -144,7 +144,7 @@ Request:
 }
 ```
 
-`masterPrompt` is optional. When omitted, the API uses the active admin-managed scenario analysis prompt, then falls back to the built-in default. `saveAsTemplate`, `templateName` and `templateDescription` are optional; One Click uses them so a successful Step 2 analysis saves a Scenario record named/described from setup.
+`masterPrompt` is optional. When omitted, the API uses the active admin-managed scenario analysis prompt. If no active default exists, the job fails with `AI_CONFIG_MISSING`. `saveAsTemplate`, `templateName` and `templateDescription` are optional; One Click uses them so a successful Step 2 analysis saves a Scenario record named/described from setup.
 
 Completed job result:
 
@@ -178,10 +178,10 @@ Completed job result:
 
 Failure behavior:
 
-- Missing key for the active prompt provider returns a failed job with `AI_CONFIG_MISSING` and safe details such as `provider`, `model` and the fallback env name.
+- Missing saved key for the active prompt provider returns a failed job with `AI_CONFIG_MISSING` and safe details such as `provider` and `model`.
 - Provider quota or rate-limit responses such as HTTP `429` return a failed job with `AI_RATE_LIMITED`.
 - Provider HTTP failures, empty provider text or invalid/contract-mismatched JSON return a failed job with `AI_PROVIDER_FAILED`.
-- The user workspace must render failed scenario-analysis jobs as an inline, understandable error near `Analyze scenario`, including code, provider/model, env/status hints and job ID. Raw provider payloads must not be shown inside the error text; successful job raw request/response can be opened from the adjacent workspace `Request`/`Response` buttons and from admin AI logs, with secrets redacted.
+- The user workspace must render failed scenario-analysis jobs as an inline, understandable error near `Analyze scenario`, including code, provider/model, status hints and job ID. Raw provider payloads must not be shown inside the error text; successful job raw request/response can be opened from the adjacent workspace `Request`/`Response` buttons and from admin AI logs, with secrets redacted.
 
 ### `PATCH /api/v1/projects/{projectId}/template-selection`
 
@@ -259,7 +259,7 @@ Lists active kịch bản/scenario templates owned by current user. The current 
 
 ### `POST /api/v1/templates/generate`
 
-Creates a kịch bản/scenario from a free-text video idea by calling the active prompt provider/model. The API uses the optional request `masterPrompt` as a temporary `Scenario` master prompt override; when omitted, it uses the active admin-managed `Scenario` prompt, then legacy fallback, then the built-in default. Placeholder replacement for `{story}` and `{attributes}` is best-effort and optional; the backend does not append hidden runtime context or output instructions to the selected master prompt.
+Creates a kịch bản/scenario from a free-text video idea by calling the active prompt provider/model. The API uses the optional request `masterPrompt` as a temporary `Scenario` master prompt override; when omitted, it uses the active admin-managed `Scenario` prompt. If that prompt is missing, the request fails with `AI_CONFIG_MISSING`. Placeholder replacement for `{story}` and `{attributes}` is best-effort and optional; the backend does not append hidden runtime context or output instructions to the selected master prompt.
 
 The system must not create fake/sample scenario data when provider execution fails. Success persists the generated attribute/option JSON and AI request/response log in PostgreSQL, and the response also returns the redacted raw provider request/response so the Scenario create/edit UI can open `Request` and `Response` review popups next to the generate action.
 
@@ -317,7 +317,7 @@ Response:
 
 Failure behavior:
 
-- Missing key for the active prompt provider returns `AI_CONFIG_MISSING` with safe details such as `provider`, `model`, `env` and `requestId`.
+- Missing saved key for the active prompt provider returns `AI_CONFIG_MISSING` with safe details such as `provider`, `model` and `requestId`.
 - Provider quota or rate-limit responses such as HTTP `429` return `AI_RATE_LIMITED`.
 - Provider HTTP failures, empty provider text, invalid JSON, or schema-mismatched scenario JSON return `AI_PROVIDER_FAILED` with safe details such as provider/model/status/schema issue count. Raw provider payloads remain in Admin > AI Logs.
 - The Scenario create/edit UI must render these errors inline below `Generate scenario with AI` as readable multi-line text. It must not hide the error by falling back to sample attribute data.
@@ -342,19 +342,18 @@ Lists all active shot plans owned by the current user. Shot plans are reusable b
 
 ### `POST /api/v1/shots/generate`
 
-Generates a user-owned shot plan from story content. The API reads the active admin prompt provider/model and uses the optional request `masterPrompt` as a temporary `Shots` prompt override; when omitted, it falls back to the active admin default `Shots` master prompt. It optionally replaces legacy placeholders, does not append hidden story/attribute/duration text, calls the provider with a saved encrypted provider key or environment API key fallback, stores the redacted raw provider request plus raw response in AI logs/job result, normalizes the returned JSON, and persists the generated shot JSON in PostgreSQL. In the project workspace, `attributes` should include the selected Step 2 Kịch bản/scenario options formatted as compact plan attributes such as `genre=Folk Tale,Drama;` only when the prompt includes `{attributes}`.
+Generates a user-owned shot plan from story content. The API reads the active admin prompt provider/model and uses the optional request `masterPrompt` as a temporary `Shots` prompt override; when omitted, it uses the active admin default `Shots` master prompt. It optionally replaces placeholders, does not append hidden story/attribute/duration text, calls the provider with the saved encrypted provider key, stores the redacted raw provider request plus raw response in AI logs/job result, validates the returned JSON, and persists the generated shot JSON in PostgreSQL. In the project workspace, `attributes` should include the selected Step 2 Kịch bản/scenario options formatted as compact plan attributes such as `genre=Folk Tale,Drama;` only when the prompt includes `{attributes}`.
 
-For ChatGPT, the provider request uses the OpenAI Responses API with `text.format.type = "json_schema"`, `strict = true`, and `additionalProperties: false` on every schema object. Backend normalization still clamps shot durations to `1-8`.
+For ChatGPT, the provider request uses the OpenAI Responses API with `text.format.type = "json_schema"`, `strict = true`, and `additionalProperties: false` on every schema object. Backend validation rejects provider output with missing required fields or durations outside `1-8`.
 
 Request:
 
 ```json
 {
   "sourceText": "Create a short product introduction video.",
-  "durationSeconds": 8,
   "name": "One Click video project",
   "description": "Short setup description used for the saved shot plan.",
-  "masterPrompt": "You are an expert video shot planner.\n\nStory:\n{story}\n\nScenario attributes:\n{attributes}\n\nTarget seconds per shot: {durationSeconds}",
+  "masterPrompt": "You are an expert video shot planner.\n\nStory:\n{story}\n\nScenario attributes:\n{scenarioAttributes}\n\nShots attributes:\n{shotsAttributes}",
   "attributes": [
     {
       "id": "tone",
@@ -418,7 +417,7 @@ Completed job result:
 
 Failure behavior:
 
-- Missing key for the active prompt provider returns a failed job with `AI_CONFIG_MISSING`. Key lookup order is saved encrypted provider key first, then provider-specific env fallback.
+- Missing saved key for the active prompt provider returns a failed job with `AI_CONFIG_MISSING`. Environment API keys are not runtime fallback sources.
 - Provider quota or rate-limit responses such as HTTP `429` return a failed job with `AI_RATE_LIMITED`.
 - Provider HTTP failures or invalid JSON return a failed job with `AI_PROVIDER_FAILED`.
 - The system must not create fake shot data when provider execution fails.
@@ -442,13 +441,13 @@ Compatibility endpoints retained during migration:
 - `PATCH /api/v1/projects/{projectId}/shots/{shotPlanId}`
 - `DELETE /api/v1/projects/{projectId}/shots/{shotPlanId}`
 
-New reusable Scripts UI code should use the user-level `/api/v1/shots` endpoints. One Click uses the project-scoped endpoints so Step 3 creates and edits a shot plan linked to the current project without showing an existing shot-plan selector.
+Standalone user-facing shot-plan UI is removed. Project and One Click shot workflows use the project-scoped endpoints so generated shot plans are linked to the current project without requiring the old `/shots` pages.
 
 ## 9. Prompt and Script APIs
 
 ### `POST /api/v1/projects/{projectId}/prompts/generate`
 
-Starts Step 1 Story Content generation from Script Flow. The optional `masterPrompt` is a temporary `Story Content` master prompt override for this request only; when omitted, runtime uses the active admin default. The persisted master-prompt type key remains `scripts` for compatibility. Runtime data is included only through placeholders present in the selected prompt. This endpoint calls the active prompt provider/model; it must not return locally generated fallback content when provider execution fails.
+Starts Step 1 Story Content generation from Scenario. The optional `masterPrompt` is a temporary `Story Content` master prompt override for this request only; when omitted, runtime uses the active admin default. The persisted master-prompt type key remains `scripts` for compatibility. Runtime data is included only through placeholders present in the selected prompt. This endpoint calls the active prompt provider/model; it must not return locally generated fallback content when provider execution fails.
 
 Request:
 
@@ -512,14 +511,14 @@ Completed job result includes the provider text in `generatedPrompt`, plus redac
 
 Failure behavior:
 
-- Missing key for the active prompt provider returns a failed job with `AI_CONFIG_MISSING`. Key lookup order is saved encrypted provider key first, then provider-specific env fallback.
+- Missing saved key for the active prompt provider returns a failed job with `AI_CONFIG_MISSING`. Environment API keys are not runtime fallback sources.
 - Provider quota/rate-limit status such as HTTP `429` returns `AI_RATE_LIMITED`.
 - Provider HTTP failures, unsupported providers, or empty provider text return `AI_PROVIDER_FAILED`.
 - The user workspace should show the safe error details inline under `Generate Story Content`; successful job raw request/response can be opened from the adjacent workspace `Request`/`Response` buttons and from Admin > AI Logs, with secrets redacted.
 
 ### `GET /api/v1/projects/{projectId}/story-content`
 
-Returns the latest saved Story Content for a Script Flow/One Click project. The response is loaded from the newest succeeded `content.prompts` row for the project with source type `script_flow` or `story_content`, and the workspace uses it to hydrate the Story Content textarea when the project is opened.
+Returns the latest saved Story Content for a Scenario/One Click project. The response is loaded from the newest succeeded `content.prompts` row for the project with source type `script_flow` or `story_content`, and the workspace uses it to hydrate the Story Content textarea when the project is opened.
 
 Response:
 
@@ -692,8 +691,7 @@ Returns current site-wide AI config.
 Secrets must be masked. The response returns key status only:
 
 - `configured`: an encrypted saved key exists and can be decrypted.
-- `env`: no saved key is available, but the provider env fallback exists.
-- `missing`: neither saved key nor env fallback is available.
+- `missing`: no saved key is available for that provider.
 
 ### `PUT /api/v1/admin/ai-config`
 
@@ -738,7 +736,7 @@ Response:
 
 ### `POST /api/v1/admin/ai-config/test-connection`
 
-Tests the active key source for a provider/model pair. If `apiKey` is supplied, the API tests that unsaved key. If omitted, it uses the saved encrypted key and then env fallback. Live connectivity checks are implemented for `gemini`/`google` and `chatgpt`/`openai`; other provider names return success only when a key source is available because no generic provider URL exists.
+Tests the active key source for a provider/model pair. If `apiKey` is supplied, the API tests that unsaved key. If omitted, it uses the saved encrypted key only. Live connectivity checks are implemented for `gemini`/`google` and `chatgpt`/`openai`; other provider names return success only when a saved/input key source is available because no generic provider URL exists.
 
 Request:
 
@@ -766,7 +764,7 @@ Response:
 
 ### `GET /api/v1/admin/master-prompts`
 
-Returns active master prompts grouped by type. Each group has one current default prompt. If no DB prompt exists for a type, the response includes a read-only built-in default prompt for that type.
+Returns active master prompts grouped by type. Each group has one current default prompt. Built-in templates may appear in admin management only as read-only setup guidance; runtime AI calls require an active DB default prompt and do not use built-in prompt fallback.
 
 Response:
 
@@ -880,7 +878,7 @@ Validation:
 - `type` must be `scenario`, `shots` or `scripts`. The `scripts` key is displayed in admin/user UI as `Story Content`.
 - `name` and `content` are required.
 - Content may keep the recommended placeholder format, but placeholders are optional and saves do not validate their presence.
-- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{durationSeconds}`.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`.
 
 ### `PATCH /api/v1/admin/master-prompts/{id}`
 
@@ -928,7 +926,7 @@ Makes the prompt the only active default for its type.
 
 Kept for read/write compatibility during migration. New admin UI should use `/admin/master-prompts`.
 
-- `GET` resolves the default `shots` and `scenario` master prompts, with legacy `config.ai_site_configs` prompt columns as fallback.
+- Runtime AI resolves the default `shots`, `scenario` and `scripts` master prompts from `config.master_prompts`; missing active defaults fail with `AI_CONFIG_MISSING`.
 - `PATCH` still writes legacy `ai_site_configs` prompt columns and requires non-empty strings only; placeholder validation is no longer enforced.
 
 ## 13. Admin Log APIs
@@ -972,3 +970,50 @@ Recommended first set:
 - `VIDEO_PROVIDER_FAILED`
 - `JOB_NOT_FOUND`
 - `INTERNAL_ERROR`
+## 15. Admin Attribute Catalog APIs
+
+Scenario attribute management is admin-only. The user `/templates` UI is no longer the primary management surface.
+
+Admin endpoints:
+
+- `GET /api/v1/admin/attribute-catalogs?type=story|scenario|shots`
+- `POST /api/v1/admin/attribute-catalogs`
+- `GET /api/v1/admin/attribute-catalogs/{type}/{id}`
+- `PATCH /api/v1/admin/attribute-catalogs/{type}/{id}`
+- `DELETE /api/v1/admin/attribute-catalogs/{type}/{id}`
+- `POST /api/v1/admin/attribute-catalogs/{type}/{id}/default`
+- `GET /api/v1/admin/attribute-generation-prompts/{type}`
+- `PATCH /api/v1/admin/attribute-generation-prompts/{type}`
+- `POST /api/v1/admin/attribute-catalogs/{type}/generate`
+
+User/project read endpoint:
+
+- `GET /api/v1/attribute-catalogs/{type}/default`
+
+Project selection endpoint:
+
+- `PATCH /api/v1/projects/{projectId}/attribute-selections`
+
+Catalog JSON:
+
+```json
+{
+  "attributes": [
+    {
+      "id": "mood",
+      "name": "Mood",
+      "description": "Primary feeling.",
+      "required": true,
+      "options": [
+        {
+          "id": "mood-friendly",
+          "name": "Friendly",
+          "description": "Warm and approachable."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Runtime data enters provider prompts only through explicit placeholders present in the selected prompt. New prompts should prefer `{storyAttributes}`, `{scenarioAttributes}`, and `{shotsAttributes}` instead of the legacy `{attributes}` token.

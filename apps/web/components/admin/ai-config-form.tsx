@@ -9,7 +9,7 @@ import { Button } from "../ui/button";
 import { Card } from "../ui/card";
 
 const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:4000";
+  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
 
 type ApiSuccess<T> = {
   data: T;
@@ -54,9 +54,6 @@ function keyStatusVariant(status: ProviderKeyStatus) {
 function keyStatusLabel(status: ProviderKeyStatus, t: ReturnType<typeof useI18n>["t"]) {
   if (status === "configured") {
     return t("adminConfig.keyStatusConfigured");
-  }
-  if (status === "env") {
-    return t("adminConfig.keyStatusEnv");
   }
   return t("adminConfig.keyStatusMissing");
 }
@@ -228,13 +225,6 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
           setPromptKeyStatus("configured");
         } else {
           setVideoKeyStatus("configured");
-        }
-      }
-      if (payload.data.keySource === "env") {
-        if (target === "prompt") {
-          setPromptKeyStatus("env");
-        } else {
-          setVideoKeyStatus("env");
         }
       }
       if (payload.data.keySource === "missing") {

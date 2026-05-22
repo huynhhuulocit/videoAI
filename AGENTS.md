@@ -206,6 +206,18 @@ Prefer thin vertical slices:
 
 Avoid broad refactors unless the task requires them.
 
+## 10.1 No Fallbacks Without Explicit Approval
+
+Do not add fallback behavior by default.
+
+- If required runtime data, config, provider keys, prompts, database records, request fields, uploaded media, or API responses are missing, fail clearly with a structured, user-readable error instead of silently substituting another value.
+- Do not use mock, fake, sample, synthetic, legacy, built-in, environment, hardcoded, or guessed data as a fallback unless the user explicitly requested it or you proposed the fallback and the user accepted it.
+- Do not hide provider/API failures by returning local/generated substitute results.
+- Do not add default provider/model/key/prompt/env URL behavior as a convenience unless it is explicitly part of the accepted requirement.
+- Compatibility fallback for migrations must be treated as temporary product behavior: document it, keep it narrowly scoped, expose clear status, and remove it when the migration is complete.
+- For existing fallback behavior, do not expand it. Prefer replacing it with validation, explicit configuration, or a clear missing-configuration error.
+- When you believe a fallback is necessary for safety, backward compatibility, or developer setup, explain the exact fallback, why it is needed, and wait for user approval before implementing it.
+
 ## 11. Verification Expectations
 
 Run the strongest available checks for the touched area.

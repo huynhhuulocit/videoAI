@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   type ApiError,
   type GenerateTemplateResult,
+  MASTER_PROMPT_PLACEHOLDERS,
   type ShotPromptConfig,
   TemplateAttributeSchema,
   type TemplateAttribute,
@@ -20,7 +21,7 @@ import { Card } from "../ui/card";
 import { MasterPromptField } from "../ui/master-prompt-field";
 import { TextareaWithCounter } from "../ui/textarea-with-counter";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:4000";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
 
 type ApiSuccess<T> = {
   data: T;
@@ -413,7 +414,7 @@ function formatApiFailure(payload: ApiFailure, status: number) {
     lines.push(`Model: ${model}`);
   }
   if (env) {
-    lines.push(`Env fallback: ${env}`);
+    lines.push(`Key source hint: ${env}`);
   }
   if (responseStatus) {
     lines.push(`HTTP status: ${responseStatus}`);
@@ -1076,6 +1077,7 @@ export function TemplateManager({ mode = "manage", templateId }: TemplateManager
               setRawTemplateResponse(null);
             }}
             placeholder={t("template.scenarioMasterPromptPlaceholder")}
+            placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
             disabled={isPromptLoading}
             className="resize-y disabled:cursor-not-allowed"
           />

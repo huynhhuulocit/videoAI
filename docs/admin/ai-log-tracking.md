@@ -19,7 +19,7 @@ Hệ thống cần ghi log cho các tác vụ:
 - Generate Scenario templates (`template_generation`) from a free-text video idea and the active `Scenario` master prompt.
 - Phân tích URL sản phẩm.
 - Phân tích hình ảnh/video mẫu.
-- Tạo shot plan (`shot_generation`) từ nội dung Script Flow hoặc menu `Shots`.
+- Tạo shot plan (`shot_generation`) từ nội dung Scenario hoặc menu `Shots`.
 - Tạo script.
 - Tạo video.
 
@@ -114,4 +114,4 @@ Ví dụ một record:
 - Admin có thể xem chi tiết request/response của từng log.
 - Admin có thể copy requestId để debug.
 - Admin có thể xem lỗi provider khi request thất bại.
-- `prompt_generation` / Story Content generation là request provider thật. Job thành công lưu provider request đã redact và raw provider response trong AI logs; job thất bại lưu safe details như code, provider, model, env fallback, HTTP status và job/request identifier. Workspace user không hiển thị API key hoặc raw provider payload.
+- `prompt_generation` / Story Content generation là request provider thật. Job thành công lưu provider request đã redact và raw provider response trong AI logs; job thất bại lưu safe details như code, provider, model, HTTP status và job/request identifier. Workspace user không hiển thị API key hoặc raw provider payload.

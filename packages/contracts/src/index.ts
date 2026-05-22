@@ -34,6 +34,7 @@ export const FlowTypeSchema = z.enum([
   "script_generation",
   "video_generation",
   "template_generation",
+  "attribute_generation",
   "template_selection",
   "shot_generation"
 ]);
@@ -41,6 +42,71 @@ export type FlowType = z.infer<typeof FlowTypeSchema>;
 
 export const MasterPromptTypeSchema = z.enum(["scenario", "shots", "scripts"]);
 export type MasterPromptType = z.infer<typeof MasterPromptTypeSchema>;
+
+export const AttributeCatalogTypeSchema = z.enum(["story", "scenario", "shots"]);
+export type AttributeCatalogType = z.infer<typeof AttributeCatalogTypeSchema>;
+
+export type PromptPlaceholderDefinition = {
+  token: string;
+  description: string;
+};
+
+export const MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPlaceholderDefinition[]> = {
+  scripts: [
+    {
+      token: "{inputText}",
+      description: "The user's source idea, notes, or draft script."
+    },
+    {
+      token: "{mediaSummary}",
+      description: "Reference media metadata selected for this generation."
+    },
+    {
+      token: "{shotSelection}",
+      description: "The selected shot plan summary when one is available."
+    },
+    {
+      token: "{scenarioSelection}",
+      description: "The selected Scenario attributes/options when available."
+    },
+    {
+      token: "{storyAttributes}",
+      description: "The selected Story attributes/options in compact form."
+    }
+  ],
+  scenario: [
+    {
+      token: "{story}",
+      description: "Story Content or script text that should be analyzed."
+    },
+    {
+      token: "{attributes}",
+      description: "The Scenario attribute and option catalog for AI selection."
+    },
+    {
+      token: "{scenarioAttributes}",
+      description: "The active Scenario attribute catalog and selected options."
+    }
+  ],
+  shots: [
+    {
+      token: "{story}",
+      description: "Story Content used as the source for shot generation."
+    },
+    {
+      token: "{attributes}",
+      description: "Selected Scenario or shot-plan attributes in compact form."
+    },
+    {
+      token: "{scenarioAttributes}",
+      description: "Selected Scenario attributes/options in compact form."
+    },
+    {
+      token: "{shotsAttributes}",
+      description: "Selected Shots attributes/options in compact form."
+    }
+  ]
+};
 
 export const MasterPromptStatusSchema = z.enum(["active", "archived"]);
 export type MasterPromptStatus = z.infer<typeof MasterPromptStatusSchema>;
@@ -93,6 +159,7 @@ export const ProjectSchema = z.object({
   description: z.string().optional(),
   flowType: ProjectFlowSchema,
   templateSelection: z.lazy(() => TemplateSelectionSchema).nullable().optional(),
+  attributeSelections: z.lazy(() => ProjectAttributeSelectionsSchema).optional(),
   status: z.enum(["active", "archived"]),
   createdAt: z.string(),
   updatedAt: z.string()
@@ -133,9 +200,110 @@ export const TemplateAttributeSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   description: z.string().optional(),
+  required: z.boolean().optional(),
   options: z.array(TemplateOptionSchema).default([])
 });
 export type TemplateAttribute = z.infer<typeof TemplateAttributeSchema>;
+
+export const AttributeCatalogOptionSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  description: z.string().trim().optional()
+});
+export type AttributeCatalogOption = z.infer<typeof AttributeCatalogOptionSchema>;
+
+export const AttributeCatalogAttributeSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  description: z.string().trim().optional(),
+  required: z.boolean().default(false),
+  options: z.array(AttributeCatalogOptionSchema).default([])
+});
+export type AttributeCatalogAttribute = z.infer<typeof AttributeCatalogAttributeSchema>;
+
+export const AttributeCatalogSchema = z.object({
+  id: z.string(),
+  type: AttributeCatalogTypeSchema,
+  name: z.string(),
+  description: z.string().optional(),
+  attributes: z.array(AttributeCatalogAttributeSchema),
+  isDefault: z.boolean().default(false),
+  status: z.enum(["active", "archived"]),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type AttributeCatalog = z.infer<typeof AttributeCatalogSchema>;
+
+export const AttributeCatalogConfigSchema = z.object({
+  type: AttributeCatalogTypeSchema,
+  catalogs: z.array(AttributeCatalogSchema),
+  defaultCatalog: AttributeCatalogSchema.nullable(),
+  updatedAt: z.string()
+});
+export type AttributeCatalogConfig = z.infer<typeof AttributeCatalogConfigSchema>;
+
+export const CreateAttributeCatalogRequestSchema = z.object({
+  type: AttributeCatalogTypeSchema,
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional(),
+  attributes: z.array(AttributeCatalogAttributeSchema).min(1)
+});
+export type CreateAttributeCatalogRequest = z.infer<typeof CreateAttributeCatalogRequestSchema>;
+
+export const UpdateAttributeCatalogRequestSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  description: z.string().trim().max(500).optional(),
+  attributes: z.array(AttributeCatalogAttributeSchema).min(1).optional()
+});
+export type UpdateAttributeCatalogRequest = z.infer<typeof UpdateAttributeCatalogRequestSchema>;
+
+export const AttributeGenerationPromptSchema = z.object({
+  type: AttributeCatalogTypeSchema,
+  content: z.string(),
+  updatedAt: z.string().nullable()
+});
+export type AttributeGenerationPrompt = z.infer<typeof AttributeGenerationPromptSchema>;
+
+export const UpdateAttributeGenerationPromptRequestSchema = z.object({
+  content: z.string().trim().min(1).max(20000)
+});
+export type UpdateAttributeGenerationPromptRequest = z.infer<typeof UpdateAttributeGenerationPromptRequestSchema>;
+
+export const GenerateAttributeCatalogRequestSchema = z.object({
+  inputText: z.string().trim().min(1).max(12000),
+  prompt: z.string().trim().min(1).max(20000).optional()
+});
+export type GenerateAttributeCatalogRequest = z.infer<typeof GenerateAttributeCatalogRequestSchema>;
+
+export const AttributeSelectionOptionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional()
+});
+export type AttributeSelectionOption = z.infer<typeof AttributeSelectionOptionSchema>;
+
+export const AttributeSelectionAttributeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  required: z.boolean().default(false),
+  options: z.array(AttributeSelectionOptionSchema)
+});
+export type AttributeSelectionAttribute = z.infer<typeof AttributeSelectionAttributeSchema>;
+
+export const AttributeSelectionSchema = z.object({
+  catalogId: z.string(),
+  catalogName: z.string(),
+  type: AttributeCatalogTypeSchema,
+  attributes: z.array(AttributeSelectionAttributeSchema)
+});
+export type AttributeSelection = z.infer<typeof AttributeSelectionSchema>;
+
+export const ProjectAttributeSelectionsSchema = z.object({
+  story: AttributeSelectionSchema.nullable().optional(),
+  scenario: AttributeSelectionSchema.nullable().optional(),
+  shots: AttributeSelectionSchema.nullable().optional()
+});
+export type ProjectAttributeSelections = z.infer<typeof ProjectAttributeSelectionsSchema>;
 
 export const VideoTemplateSchema = z.object({
   id: z.string(),
@@ -167,7 +335,8 @@ export type TemplateSelection = z.infer<typeof TemplateSelectionSchema>;
 
 export const AnalyzeTemplateSelectionRequestSchema = z.object({
   inputText: z.string().min(1).max(12000),
-  templateId: z.string().min(1),
+  templateId: z.string().min(1).optional(),
+  catalogId: z.string().min(1).optional(),
   masterPrompt: z.string().trim().min(1).max(12000).optional(),
   saveAsTemplate: z.boolean().optional().default(false),
   templateName: z.string().trim().min(1).max(120).optional(),
@@ -190,6 +359,11 @@ export const SaveProjectTemplateSelectionRequestSchema = z.object({
   templateSelection: TemplateSelectionSchema.nullable()
 });
 export type SaveProjectTemplateSelectionRequest = z.infer<typeof SaveProjectTemplateSelectionRequestSchema>;
+
+export const SaveProjectAttributeSelectionsRequestSchema = z.object({
+  attributeSelections: ProjectAttributeSelectionsSchema
+});
+export type SaveProjectAttributeSelectionsRequest = z.infer<typeof SaveProjectAttributeSelectionsRequestSchema>;
 
 export const SaveProjectStoryContentRequestSchema = z.object({
   storyContent: z.string().trim().min(1).max(12000)
@@ -267,8 +441,9 @@ export type GenerateTemplateResult = z.infer<typeof GenerateTemplateResultSchema
 
 export const GenerateShotsRequestSchema = z.object({
   sourceText: z.string().min(1).max(12000),
-  durationSeconds: z.number().int().min(1).max(8).optional().default(8),
   attributes: z.array(VideoShotAttributeSchema).default([]),
+  scenarioAttributes: z.array(VideoShotAttributeSchema).default([]),
+  shotsAttributes: z.array(VideoShotAttributeSchema).default([]),
   masterPrompt: z.string().trim().min(1).max(20000).optional(),
   name: z.string().trim().min(1).max(120).optional(),
   description: z.string().trim().max(500).optional()
@@ -298,6 +473,7 @@ export const GeneratePromptRequestSchema = z.object({
   mediaIds: z.array(z.string()).default([]),
   masterPrompt: z.string().trim().min(1).max(20000).optional(),
   templateSelection: TemplateSelectionSchema.optional(),
+  attributeSelections: ProjectAttributeSelectionsSchema.optional(),
   shotSelection: ShotSelectionSchema.optional()
 });
 export type GeneratePromptRequest = z.infer<typeof GeneratePromptRequestSchema>;
@@ -331,6 +507,7 @@ export const JobSchema = z.object({
     "media_analysis",
     "script_generation",
     "video_generation",
+    "attribute_generation",
     "template_selection",
     "shot_generation"
   ]),
@@ -388,8 +565,7 @@ export type TestProviderConnectionResult = z.infer<typeof TestProviderConnection
 
 export const SHOT_PROMPT_REQUIRED_PLACEHOLDERS = [
   "{story}",
-  "{attributes}",
-  "{durationSeconds}"
+  "{attributes}"
 ] as const;
 
 export const SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS = [
@@ -412,9 +588,10 @@ export const DEFAULT_SHOT_GENERATION_PROMPT = [
   "{story}",
   "",
   "Scenario attributes in compact format attribute=option1,option2;:",
-  "{attributes}",
+  "{scenarioAttributes}",
   "",
-  "Target seconds per shot: {durationSeconds}",
+  "Shots attributes in compact format attribute=option1,option2;:",
+  "{shotsAttributes}",
   "",
   "Use last-state / end-state continuity. Every shot must include Start state, End state and Dialogue attributes. The next shot's Start state must continue from the previous shot's End state. Dialogue should be natural, short and useful for generating voice or captions."
 ].join("\n");
@@ -452,7 +629,7 @@ export const DEFAULT_TEMPLATE_SELECTION_PROMPT = [
   "{story}",
   "",
   "Scenario attributes/catalog:",
-  "{attributes}",
+  "{scenarioAttributes}",
   "",
   "Rules:",
   "- Use only optionId values from the provided scenario catalog.",
@@ -499,6 +676,9 @@ export const DEFAULT_SCRIPT_GENERATION_PROMPT = [
   "",
   "Selected scenario/options:",
   "{scenarioSelection}",
+  "",
+  "Story attributes/options:",
+  "{storyAttributes}",
   "",
   "Return a polished Story Content draft with:",
   "1. Title",

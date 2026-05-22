@@ -2,7 +2,6 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { prisma, type Prisma } from "@videoai/database";
 import { z } from "zod";
 import {
-  DEFAULT_SHOT_GENERATION_PROMPT,
   VideoShotAttributeSchema,
   type ApiError,
   type ApiErrorCode,
@@ -21,21 +20,21 @@ import {
 } from "./db-store.js";
 
 const aiShotAttributeSchema = z.object({
-  name: z.string().optional(),
-  value: z.string().optional()
+  name: z.string().trim().min(1),
+  value: z.string().trim().min(1)
 });
 
 const aiShotSchema = z.object({
-  title: z.string().optional(),
-  description: z.string().optional(),
-  durationSeconds: z.number().optional(),
-  attributes: z.array(aiShotAttributeSchema).optional()
+  title: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  durationSeconds: z.number().int().min(1).max(8),
+  attributes: z.array(aiShotAttributeSchema).min(1)
 });
 
 const aiShotPlanSchema = z.object({
-  name: z.string().optional(),
-  durationSeconds: z.number().optional(),
-  shots: z.array(aiShotSchema)
+  name: z.string().trim().min(1),
+  durationSeconds: z.number().int().min(1).max(8),
+  shots: z.array(aiShotSchema).min(1)
 });
 
 const shotPlanJsonSchema = {
@@ -150,16 +149,18 @@ export class ShotPlansService {
     const config = await getActiveAiConfig();
     const provider = config.promptProvider;
     const model = config.promptModel;
-    const sourceText = String(input.sourceText ?? "");
+    const sourceText = input.sourceText;
     const requestedName = input.name?.trim();
     const requestedDescription = input.description?.trim();
-    const durationSeconds = this.clampDuration(input.durationSeconds ?? 8);
     const attributes = this.extractShotPlanAttributes(input);
+    const scenarioAttributes = this.extractAttributeArray(input.scenarioAttributes);
+    const shotsAttributes = this.extractAttributeArray(input.shotsAttributes);
     const prompt = this.buildShotGenerationPrompt(
       input.masterPrompt ?? config.shotGenerationPrompt,
       sourceText,
-      durationSeconds,
-      attributes
+      attributes,
+      scenarioAttributes,
+      shotsAttributes
     );
     const rawRequest = this.buildProviderRequest(provider, model, prompt);
     const jobId = `job_shot_generation_${Date.now()}`;
@@ -185,8 +186,9 @@ export class ShotPlansService {
           model,
           requestPayload: this.toJson({
             sourceText,
-            durationSeconds,
             attributes,
+            scenarioAttributes,
+            shotsAttributes,
             masterPrompt: input.masterPrompt ?? null,
             rawRequest
           }),
@@ -206,8 +208,9 @@ export class ShotPlansService {
         projectId,
         {
           sourceText,
-          durationSeconds,
           attributes,
+          scenarioAttributes,
+          shotsAttributes,
           provider,
           model,
           ...(requestedName ? { requestedName } : {}),
@@ -239,10 +242,10 @@ export class ShotPlansService {
     requestLogId: string,
     startedAt: number,
     error: unknown,
-    fallbackRawRequest: unknown
+    defaultRawRequest: unknown
   ) {
     const apiError = this.toApiError(error);
-    const rawRequest = error instanceof AiJobError ? error.rawRequest ?? fallbackRawRequest : fallbackRawRequest;
+    const rawRequest = error instanceof AiJobError ? error.rawRequest ?? defaultRawRequest : defaultRawRequest;
     const rawResponse = error instanceof AiJobError ? error.rawResponse : undefined;
 
     await prisma.$transaction(async (tx) => {
@@ -282,8 +285,9 @@ export class ShotPlansService {
     projectId: string | null,
     context: {
       sourceText: string;
-      durationSeconds: number;
       attributes: VideoShotAttribute[];
+      scenarioAttributes: VideoShotAttribute[];
+      shotsAttributes: VideoShotAttribute[];
       provider: Provider;
       model: string;
       requestedName?: string;
@@ -300,7 +304,6 @@ export class ShotPlansService {
     const shotPlan = this.normalizeAiShotPlan(rawResponse, {
       projectId,
       sourceText: context.sourceText,
-      durationSeconds: context.durationSeconds,
       attributes: context.attributes
     });
     const finalShotPlan = {
@@ -360,16 +363,19 @@ export class ShotPlansService {
   private buildShotGenerationPrompt(
     configuredPrompt: string | null | undefined,
     sourceText: string,
-    durationSeconds: number,
-    attributes: VideoShotAttribute[]
+    attributes: VideoShotAttribute[],
+    scenarioAttributes: VideoShotAttribute[],
+    shotsAttributes: VideoShotAttribute[]
   ) {
-    const trimmedConfiguredPrompt = configuredPrompt?.trim();
-    const template = trimmedConfiguredPrompt || DEFAULT_SHOT_GENERATION_PROMPT;
+    const template = this.requirePrompt(configuredPrompt, "Shots master prompt");
     const attributeText = this.formatPlanAttributes(attributes);
+    const scenarioAttributeText = this.formatPlanAttributes(scenarioAttributes);
+    const shotsAttributeText = this.formatPlanAttributes(shotsAttributes);
     const renderedPrompt = this.renderOptionalPromptPlaceholders(template, {
       story: sourceText,
       attributes: attributeText,
-      durationSeconds: String(durationSeconds)
+      scenarioAttributes: scenarioAttributeText,
+      shotsAttributes: shotsAttributeText
     });
 
     return renderedPrompt;
@@ -386,7 +392,7 @@ export class ShotPlansService {
     const lines = attributes
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
       .map((attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`);
-    return lines.length > 0 ? lines.join("\n") : "none=No extra plan-level attributes provided;";
+    return lines.join("\n");
   }
 
   private buildProviderRequest(provider: Provider, model: string, prompt: string): ProviderRequest {
@@ -469,8 +475,8 @@ export class ShotPlansService {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} shot generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} shot generation. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -513,8 +519,8 @@ export class ShotPlansService {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} shot generation. Save a provider key or set ${resolvedKey.envName}.`,
-        { provider: rawRequest.provider, model, env: resolvedKey.envName },
+        `Missing API key for ${rawRequest.provider} shot generation. Save a provider key in Admin > AI Config.`,
+        { provider: rawRequest.provider, model },
         rawRequest
       );
     }
@@ -708,7 +714,6 @@ export class ShotPlansService {
     context: {
       projectId: string | null;
       sourceText: string;
-      durationSeconds: number;
       attributes: VideoShotAttribute[];
     }
   ): VideoShotPlan {
@@ -726,37 +731,19 @@ export class ShotPlansService {
 
     const now = new Date();
     const timestamp = Date.now();
-    let previousEndState = "";
-    const durationSeconds = this.clampDuration(
-      parsed.data.durationSeconds ?? context.durationSeconds
-    );
+    const durationSeconds = parsed.data.durationSeconds;
     const shots = parsed.data.shots.map((shot, index) => {
-      const normalizedDuration = this.clampDuration(
-        shot.durationSeconds ?? durationSeconds
+      const attributes = this.validateRequiredStateAttributes(
+        this.normalizeAiShotAttributes(shot.attributes, index),
+        index,
+        rawResponse
       );
-      const description = this.cleanText(
-        shot.description,
-        `Describe shot ${index + 1} as a concrete video moment.`
-      );
-      const title = this.cleanText(shot.title, `Shot ${index + 1}`);
-      const attributes = this.ensureStateAttributes(
-        this.normalizeAiShotAttributes(shot.attributes ?? [], index),
-        {
-          shotIndex: index,
-          description,
-          previousEndState
-        }
-      );
-      const endState =
-        attributes.find((attribute) => this.isNamedAttribute(attribute, "End state"))?.value ??
-        description;
-      previousEndState = endState;
 
       return {
         id: `shot_${timestamp}_${index + 1}`,
-        title,
-        description,
-        durationSeconds: normalizedDuration,
+        title: this.cleanText(shot.title),
+        description: this.cleanText(shot.description),
+        durationSeconds: shot.durationSeconds,
         attributes,
         mediaIds: []
       };
@@ -766,7 +753,7 @@ export class ShotPlansService {
       id: `shot_plan_${timestamp}`,
       ownerUserId: defaultUserId,
       projectId: context.projectId,
-      name: this.cleanText(parsed.data.name, `Shot plan ${now.toLocaleDateString("en-CA")}`),
+      name: this.cleanText(parsed.data.name),
       sourceText: context.sourceText,
       durationSeconds,
       attributes: context.attributes,
@@ -796,26 +783,23 @@ export class ShotPlansService {
     attributes: ParsedProviderShotPlan["shots"][number]["attributes"],
     shotIndex: number
   ): VideoShotAttribute[] {
-    return (attributes ?? [])
+    return attributes
       .map((attribute, index) => {
-        const name = this.cleanText(attribute.name, "");
-        const value = this.cleanText(attribute.value, "");
-        if (!name || !value) {
-          return null;
-        }
+        const name = this.cleanText(attribute.name);
+        const value = this.cleanText(attribute.value);
 
         return {
           id: `shot_${shotIndex + 1}_${this.slug(name)}_${index + 1}`,
           name,
           value
         };
-      })
-      .filter((attribute): attribute is VideoShotAttribute => Boolean(attribute));
+      });
   }
 
-  private ensureStateAttributes(
+  private validateRequiredStateAttributes(
     attributes: VideoShotAttribute[],
-    context: { shotIndex: number; description: string; previousEndState: string }
+    shotIndex: number,
+    rawResponse: unknown
   ) {
     const hasStartState = attributes.some((attribute) =>
       this.isNamedAttribute(attribute, "Start state")
@@ -826,63 +810,53 @@ export class ShotPlansService {
     const hasDialogue = attributes.some((attribute) =>
       this.isNamedAttribute(attribute, "Dialogue")
     );
-    const nextAttributes = [...attributes];
-
-    if (!hasStartState) {
-      nextAttributes.unshift({
-        id: `shot_${context.shotIndex + 1}_start_state`,
-        name: "Start state",
-        value:
-          context.shotIndex === 0
-            ? `Open with: ${context.description}`
-            : `Continue from previous shot: ${context.previousEndState || context.description}`
-      });
+    if (!hasStartState || !hasEndState || !hasDialogue) {
+      throw new AiJobError(
+        "AI_PROVIDER_FAILED",
+        `AI shot ${shotIndex + 1} is missing required Start state, End state, or Dialogue attributes.`,
+        {
+          shotIndex: shotIndex + 1,
+          requiredAttributes: ["Start state", "End state", "Dialogue"]
+        },
+        undefined,
+        rawResponse
+      );
     }
 
-    if (!hasEndState) {
-      nextAttributes.push({
-        id: `shot_${context.shotIndex + 1}_end_state`,
-        name: "End state",
-        value: `End with: ${context.description}`
-      });
-    }
-
-    if (!hasDialogue) {
-      nextAttributes.push({
-        id: `shot_${context.shotIndex + 1}_dialogue`,
-        name: "Dialogue",
-        value: "Use a short natural line, narration, or voiceover for this shot."
-      });
-    }
-
-    return nextAttributes;
+    return attributes;
   }
 
   private isNamedAttribute(attribute: VideoShotAttribute, expectedName: string) {
     return attribute.name.trim().toLowerCase() === expectedName.toLowerCase();
   }
 
-  private cleanText(value: unknown, fallback: string) {
-    if (typeof value !== "string") {
-      return fallback;
-    }
+  private cleanText(value: string) {
     const trimmed = value.replace(/\s+/g, " ").trim();
-    return trimmed || fallback;
+    if (!trimmed) {
+      throw new AiJobError("AI_PROVIDER_FAILED", "AI returned an empty required text field.");
+    }
+    return trimmed;
   }
 
   private slug(value: string) {
-    return (
-      value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "")
-        .slice(0, 48) || "attribute"
-    );
+    const slug = value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48);
+    if (!slug) {
+      throw new AiJobError("AI_PROVIDER_FAILED", "AI returned an attribute name that cannot be used as an id.");
+    }
+    return slug;
   }
 
   private extractShotPlanAttributes(value: unknown): VideoShotAttribute[] {
     const payload = this.toRecord(value);
-    const parsed = VideoShotAttributeSchema.array().safeParse(payload.attributes);
+    return this.extractAttributeArray(payload.attributes);
+  }
+
+  private extractAttributeArray(value: unknown): VideoShotAttribute[] {
+    const parsed = VideoShotAttributeSchema.array().safeParse(value);
     return parsed.success ? parsed.data : [];
   }
 
@@ -912,11 +886,12 @@ export class ShotPlansService {
     };
   }
 
-  private clampDuration(value: number) {
-    if (!Number.isFinite(value)) {
-      return 8;
+  private requirePrompt(value: string | null | undefined, label: string) {
+    const prompt = value?.trim();
+    if (!prompt) {
+      throw new AiJobError("AI_CONFIG_MISSING", `${label} is required. Configure it in Admin > Master Prompt.`);
     }
-    return Math.min(8, Math.max(1, Math.round(value)));
+    return prompt;
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

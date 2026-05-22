@@ -10,7 +10,7 @@ import { Button } from "../ui/button";
 import { Card } from "../ui/card";
 import { TextareaWithCounter } from "../ui/textarea-with-counter";
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:4000";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
 
 type ApiSuccess<T> = {
   data: T;

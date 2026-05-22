@@ -9,3 +9,13 @@ script = ""
 name = "START"
 icon = "tool"
 command = "powershell -ExecutionPolicy Bypass -File .\\start-project.ps1 -Restart"
+
+[[actions]]
+name = "start public"
+icon = "tool"
+command = "powershell -NoProfile -ExecutionPolicy Bypass -File deploy\\cloudflare-tunnel\\start-trycloudflare.ps1"
+
+[[actions]]
+name = "stop public"
+icon = "tool"
+command = "powershell -NoProfile -ExecutionPolicy Bypass -File deploy\\cloudflare-tunnel\\stop-trycloudflare.ps1"

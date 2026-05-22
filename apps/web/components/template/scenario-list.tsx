@@ -9,7 +9,7 @@ import { Button, LinkButton } from "../ui/button";
 import { Card } from "../ui/card";
 
 const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:4000";
+  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
 
 async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${apiBaseUrl}/api/v1${path}`, {

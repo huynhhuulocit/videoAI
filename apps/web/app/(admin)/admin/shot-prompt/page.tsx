@@ -6,9 +6,9 @@ type ShotPromptPageProps = {
 };
 
 const routesByType = {
-  scripts: "/admin/shot-prompt/story-content",
-  scenario: "/admin/shot-prompt/scenario",
-  shots: "/admin/shot-prompt/shots",
+  scripts: "/admin/story/master-prompt",
+  scenario: "/admin/scenario/master-prompt",
+  shots: "/admin/shots/master-prompt",
 } as const;
 
 function getSearchValue(
