@@ -222,6 +222,7 @@ Admin navigation:
 Initial admin scope:
 
 - AI Config.
+- Master Prompt Config.
 - Master Prompt.
 - AI Logs.
 
@@ -257,10 +258,10 @@ UX rules:
 
 Recommended layout:
 
-- Sidebar label and page title are `Master Prompt`; `/admin/shot-prompt` remains a compatibility redirect.
-- Render `Story Content`, `Scenario` and `Shots` as child menu items under `Master Prompt`. The underlying API type key for Story Content remains `scripts`.
-- Child menu routes are `/admin/shot-prompt/story-content`, `/admin/shot-prompt/scenario` and `/admin/shot-prompt/shots`; the active parent and active child must be visually highlighted.
-- Clicking a child menu item shows only that prompt type's list in CRUD format. The editor opens after `New prompt` or `Edit`, keeping the list as the default view.
+- Sidebar groups are `Story`, `Scenario` and `Shots`; each group exposes a `Master Prompt` child route. `/admin/shot-prompt` remains a compatibility redirect.
+- The underlying API type key for Story Content remains `scripts`.
+- Child list routes are `/admin/story/master-prompt`, `/admin/scenario/master-prompt` and `/admin/shots/master-prompt`; the active parent and active child must be visually highlighted.
+- Clicking a child menu item shows only that prompt type's list in CRUD format. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in rows open `/new?source=built-in` as editable copies.
 - Each child list shows prompt rows with default/built-in badges plus `Edit`, `Set default` and `Delete`; the editor contains `Save`, `Delete` and `Set default` for the open prompt.
 - Built-in defaults are read-only when no DB prompt exists.
 - Deleting the current default is blocked until another active prompt in the same type is selected as default.
@@ -268,9 +269,28 @@ Recommended layout:
 UX rules:
 
 - Master prompts keep recommended placeholder formats, but helper text must state placeholders are optional and runtime data is included only through placeholders in the prompt.
-- Master prompt textareas expose supported placeholder definitions below the editor and provide autocomplete when the user types `{...`; click, Enter or Tab inserts the selected token.
+- Master prompt textareas expose supported placeholder tokens directly below the editor and provide autocomplete when the user types `{...`; click, Enter or Tab inserts the selected token. Placeholder descriptions stay behind helper icons so the list remains compact.
+- Master prompt editors include a `Prompt` button that previews the exact draft. It only replaces admin-owned `{masterPromptAttributes}` from the saved/draft selection and leaves user runtime placeholders unchanged.
 - `Story Content` is used for Step 1 content expansion in Project and One Click, `Scenario` is used for scenario analysis, and `Shots` is used for shot-plan generation inside Project and One Click.
 - Every visible textarea in admin and user workflows shows a small muted character count at the bottom-left. Hidden clipboard helper textareas are excluded.
+
+## 8.1. Admin Master Prompt Config
+
+Recommended layout:
+
+- `Master Prompt Config` appears under the AI admin area.
+- The page shows one synchronized JSON textarea and visual editor for admin-only prompt-authoring attributes.
+- Each attribute has a name, description, and options. Each option has a name and description.
+- Story Content, Scenario, and Shots master prompt editors show a read/select `Master Prompt Attribute` section below the prompt content.
+- The selection section is read/select only; editing the global config happens only on `/admin/master-prompt-config`.
+- Helper icons show attribute and option descriptions so admin users understand each option. The visible selection rows and `{masterPromptAttributes}` render only attribute/option names, not descriptions.
+
+UX rules:
+
+- `{masterPromptAttributes}` is available only in admin master prompt placeholder suggestions.
+- User Project and One Click screens must not show the Master Prompt Attribute selector.
+- User placeholder suggestions must not include `{masterPromptAttributes}`.
+- Runtime sends Master Prompt Config data only when the active admin master prompt contains `{masterPromptAttributes}`.
 
 ## 9. Admin AI Logs
 

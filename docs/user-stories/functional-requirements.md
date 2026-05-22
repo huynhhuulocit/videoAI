@@ -128,11 +128,16 @@
 - Menu bên trái phải có nhóm cấu hình dành cho site.
 - Admin có thể cấu hình chế độ tạo nội dung của user.
 - Admin có thể cấu hình provider/model mặc định cho tạo prompt.
-- Menu admin hiển thị `Master Prompt` tại route tương thích `/admin/shot-prompt`.
-- Admin có thể quản lý 3 nhóm master prompt: `Story Content`, `Scenario`, `Shots`. Nhóm `Story Content` vẫn dùng type key `scripts` trong API để tương thích dữ liệu hiện tại.
+- Menu admin hiển thị các nhóm `Story`, `Scenario`, `Shots`; mỗi nhóm có child `Master Prompt`. Route tương thích `/admin/shot-prompt` vẫn redirect về nhóm phù hợp.
+- Admin có thể quản lý 3 nhóm master prompt tại các list-only route `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`. `New prompt` mở `/new`, `Edit` mở `/{promptId}`, và built-in row mở `/new?source=built-in`. Nhóm `Story Content` vẫn dùng type key `scripts` trong API để tương thích dữ liệu hiện tại.
 - Mỗi nhóm master prompt phải hỗ trợ tạo, sửa, xóa/archive và `Set default`; mỗi nhóm có đúng một default active.
 - Admin không thể xóa prompt đang là default nếu chưa chọn prompt khác làm default trước.
 - Master prompt giữ format placeholder khuyến nghị theo từng nhóm, nhưng không bắt buộc placeholder khi lưu; backend replace nếu có và không tự nối runtime field mà prompt được chọn chưa chứa placeholder.
+- Admin có thể mở `Master Prompt Config` trong nhóm `AI` để tạo một bộ attribute/option dùng riêng cho quá trình author master prompt. Bộ này là global, admin-only, và không xuất hiện trong màn hình user.
+- Trong từng editor `Story Content`, `Scenario`, `Shots` master prompt, admin có thể chọn option từ `Master Prompt Config`; selection này được lưu cùng master prompt và chỉ được đưa vào runtime nếu prompt admin chứa `{masterPromptAttributes}`.
+- UI chỉ hiển thị tên attribute/option trong phần chọn `Master Prompt Attribute`; mô tả nằm sau helper icon và không được render vào `{masterPromptAttributes}`.
+- Trong từng editor `Story Content`, `Scenario`, `Shots` master prompt, admin có thể bấm `Prompt` để xem preview chính xác của draft prompt. Preview chỉ render `{masterPromptAttributes}` theo selection admin; các placeholder runtime của user được giữ nguyên.
+- Placeholder `{masterPromptAttributes}` chỉ xuất hiện trong gợi ý placeholder của admin master prompt. User Project, One Click và prompt override tạm thời không được thấy, chọn, hoặc gửi placeholder này.
 - `Story Content` is used for Step 1 content expansion in Project and One Click; `Scenario` is used for scenario analysis; `Shots` is used for Project and One Click shot-plan generation.
 - Admin có thể cấu hình API key và model cho tạo video.
 - Admin có thể xem log request/response AI.
@@ -212,3 +217,4 @@
 - Required attributes default to the first option when no saved selection exists, remain multi-select, and cannot be cleared to zero selected options.
 - Project selections are persisted as JSON keyed by `story`, `scenario`, and `shots`.
 - Runtime data enters AI prompts only through explicit placeholders present in the selected prompt.
+- `Master Prompt Config` is separate from Story/Scenario/Shots user workflow attributes. It is admin-only, uses the admin-saved selection on each master prompt, and never exposes `{masterPromptAttributes}` to user screens or user-facing placeholder autocomplete.

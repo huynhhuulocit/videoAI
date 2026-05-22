@@ -21,11 +21,13 @@ const messages = {
   "common.userDashboard": "User Dashboard",
   "shell.aiConfig": "AI Config",
   "shell.aiLogs": "AI Logs",
+  "shell.ai": "AI",
   "shell.dashboard": "Dashboard",
   "shell.docsNote":
     "Code changes should update related docs when behavior changes.",
   "shell.docsSynced": "Docs synced",
   "shell.masterPromptScenario": "Scenario",
+  "shell.masterPromptConfig": "Master Prompt Config",
   "shell.masterPromptShots": "Shots",
   "shell.masterPromptStory": "Story Content",
   "shell.oneClick": "One Click",

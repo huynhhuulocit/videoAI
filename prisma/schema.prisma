@@ -267,6 +267,7 @@ model MasterPrompt {
   type             String
   name             String
   content          String   @db.Text
+  attributeSelection Json?  @map("attribute_selection")
   isDefault        Boolean  @default(false) @map("is_default")
   status           String   @default("active")
   createdByAdminId String?  @map("created_by_admin_id")
@@ -276,6 +277,17 @@ model MasterPrompt {
   @@index([type, status])
   @@index([type, isDefault])
   @@map("master_prompts")
+  @@schema("config")
+}
+
+model MasterPromptAttributeConfig {
+  id               String   @id @default(cuid())
+  attributes       Json
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("master_prompt_attribute_configs")
   @@schema("config")
 }
 

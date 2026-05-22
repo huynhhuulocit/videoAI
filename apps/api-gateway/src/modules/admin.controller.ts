@@ -4,6 +4,7 @@ import {
   CreateMasterPromptRequestSchema,
   DEFAULT_SHOT_GENERATION_PROMPT,
   DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
+  DEFAULT_SCRIPT_GENERATION_PROMPT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
   RotateProviderKeyRequestSchema,
   SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS,
@@ -11,17 +12,21 @@ import {
   TestProviderConnectionRequestSchema,
   UpdateAiConfigRequestSchema,
   UpdateMasterPromptRequestSchema,
+  UpdateMasterPromptAttributeConfigRequestSchema,
   UpdateShotPromptRequestSchema
 } from "@videoai/contracts";
 import {
   archiveMasterPrompt,
   createMasterPrompt,
   getDefaultMasterPrompt,
+  getDefaultMasterPromptContent,
   getActiveAiConfig,
   getMasterPromptConfig,
+  getMasterPromptAttributeConfig,
   mapAiLog,
   mapAiLogDetail,
   markProviderKeyConfigured,
+  replaceMasterPromptAttributeConfig,
   replaceActiveAiConfig,
   resolveProviderApiKey,
   setDefaultMasterPrompt,
@@ -85,22 +90,39 @@ export class AdminController {
     return ok(await getMasterPromptConfig());
   }
 
+  @Get("master-prompt-config")
+  async getMasterPromptConfigAttributes() {
+    return ok(await getMasterPromptAttributeConfig());
+  }
+
+  @Patch("master-prompt-config")
+  async patchMasterPromptConfigAttributes(@Body() rawBody: unknown) {
+    const body = UpdateMasterPromptAttributeConfigRequestSchema.parse(rawBody);
+    return ok(await this.runAdminMutation(() => replaceMasterPromptAttributeConfig(body)));
+  }
+
   @Post("master-prompts")
   async postMasterPrompt(@Body() rawBody: unknown) {
     const body = CreateMasterPromptRequestSchema.parse(rawBody);
-    return ok(await createMasterPrompt(body));
+    return ok(await this.runAdminMutation(() => createMasterPrompt({
+      type: body.type,
+      name: body.name,
+      content: body.content,
+      ...(body.attributeSelection !== undefined ? { attributeSelection: body.attributeSelection } : {})
+    })));
   }
 
   @Patch("master-prompts/:promptId")
   async patchMasterPrompt(@Param("promptId") promptId: string, @Body() rawBody: unknown) {
     const body = UpdateMasterPromptRequestSchema.parse(rawBody);
-    if (body.name === undefined && body.content === undefined) {
+    if (body.name === undefined && body.content === undefined && body.attributeSelection === undefined) {
       throw new BadRequestException("At least one master prompt field is required.");
     }
-    return ok(await updateMasterPrompt(promptId, {
+    return ok(await this.runAdminMutation(() => updateMasterPrompt(promptId, {
       ...(body.name !== undefined ? { name: body.name } : {}),
-      ...(body.content !== undefined ? { content: body.content } : {})
-    }));
+      ...(body.content !== undefined ? { content: body.content } : {}),
+      ...(body.attributeSelection !== undefined ? { attributeSelection: body.attributeSelection } : {})
+    })));
   }
 
   @Delete("master-prompts/:promptId")
@@ -126,9 +148,13 @@ export class AdminController {
 
     const shotsPrompt = await getDefaultMasterPrompt("shots", config.shotGenerationPrompt);
     const scenarioPrompt = await getDefaultMasterPrompt("scenario", config.templateSelectionPrompt);
+    const scriptsPrompt = await getDefaultMasterPrompt("scripts");
+    const renderedShotsPrompt = await getDefaultMasterPromptContent("shots", config.shotGenerationPrompt);
+    const renderedScenarioPrompt = await getDefaultMasterPromptContent("scenario", config.templateSelectionPrompt);
+    const renderedScriptsPrompt = await getDefaultMasterPromptContent("scripts");
 
     return ok({
-      prompt: shotsPrompt.content,
+      prompt: renderedShotsPrompt,
       defaultPrompt: DEFAULT_SHOT_GENERATION_PROMPT,
       requiredPlaceholders: [...SHOT_PROMPT_REQUIRED_PLACEHOLDERS],
       isDefault: shotsPrompt.isBuiltIn,
@@ -136,9 +162,12 @@ export class AdminController {
       defaultComposerPrompt: DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       composerRequiredPlaceholders: [...SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS],
       composerIsDefault: !config.shotComposerPrompt,
-      scenarioAnalysisPrompt: scenarioPrompt.content,
+      scenarioAnalysisPrompt: renderedScenarioPrompt,
       defaultScenarioAnalysisPrompt: DEFAULT_TEMPLATE_SELECTION_PROMPT,
       scenarioAnalysisIsDefault: scenarioPrompt.isBuiltIn,
+      scriptGenerationPrompt: renderedScriptsPrompt,
+      defaultScriptGenerationPrompt: DEFAULT_SCRIPT_GENERATION_PROMPT,
+      scriptGenerationIsDefault: scriptsPrompt.isBuiltIn,
       updatedAt: config.updatedAt.toISOString()
     });
   }
@@ -171,6 +200,9 @@ export class AdminController {
       scenarioAnalysisPrompt: config.templateSelectionPrompt ?? DEFAULT_TEMPLATE_SELECTION_PROMPT,
       defaultScenarioAnalysisPrompt: DEFAULT_TEMPLATE_SELECTION_PROMPT,
       scenarioAnalysisIsDefault: !config.templateSelectionPrompt?.trim(),
+      scriptGenerationPrompt: await getDefaultMasterPromptContent("scripts"),
+      defaultScriptGenerationPrompt: DEFAULT_SCRIPT_GENERATION_PROMPT,
+      scriptGenerationIsDefault: false,
       updatedAt: config.updatedAt.toISOString()
     });
   }
@@ -205,6 +237,17 @@ export class AdminController {
 
   private isOpenAiProvider(provider: string) {
     return provider === "chatgpt" || provider === "openai";
+  }
+
+  private async runAdminMutation<T>(mutation: () => Promise<T>) {
+    try {
+      return await mutation();
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new BadRequestException(error instanceof Error ? error.message : "Admin request is invalid.");
+    }
   }
 
   private isGeminiProvider(provider: string) {

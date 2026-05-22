@@ -65,7 +65,7 @@ Purpose:
 - Support scenario flow, product flow, AI output review and user confirmation.
 - Let users inspect the composed AI request/prompt payload before starting generation.
 - Render visible master prompt editors in the shared cyan prompt surface while ordinary story/script/schema textareas remain neutral.
-- Master prompt editors list supported placeholders with descriptions and provide `{...` autocomplete. Users can click a suggestion or press Enter/Tab to insert the selected placeholder.
+- Master prompt editors show supported placeholders directly below the textarea as clickable token cards and also provide `{...` autocomplete. The cards/dropdown show token values only; descriptions are available through compact helper icons.
 - Let users generate and edit reusable user-owned video shot plans.
 - Let users attach reference media to each shot and compose/copy a formatted prompt from shot media, shot attributes and selected template options.
 - Media-aware prompt popups show saved media previews and metadata, but prompt copy remains text-only and does not copy image binaries.
@@ -172,15 +172,21 @@ Components:
 - `SecretInput`
 - `ApiKeyStatus`
 - `AiConfigForm`
-- `MasterPromptForm` / legacy export `ShotPromptForm`
+- `MasterPromptList`
+- `MasterPromptEditor`
 - `ConfigAuditSummary`
 
 Purpose:
 
 - Allow admin to manage site-wide prompt/video behavior and provider credentials.
 - `AiConfigForm` renders prompt and video provider/model as free-text inputs with suggestion chips. The form manages prompt/video provider keys, shows `configured`/`missing` status, saves keys through `PUT /api/v1/admin/ai-config/provider-keys/{provider}` and tests provider/model connectivity through `POST /api/v1/admin/ai-config/test-connection`.
-- Allow admin to manage `Story Content`, `Scenario` and `Shots` master prompts from child menu routes under `Master Prompt`: `/admin/shot-prompt/story-content`, `/admin/shot-prompt/scenario` and `/admin/shot-prompt/shots`. Selecting a child item shows only that prompt type's CRUD list; `New prompt` and `Edit` open the editor. When the selected item is the built-in template, `Edit` opens an editable copy so `Save` creates the first persisted prompt for that group. The persisted type key for Story Content remains `scripts` for API compatibility. Prompt content keeps a recommended placeholder format, but placeholders are optional when saving.
+- Allow admin to manage `Story Content`, `Scenario` and `Shots` master prompts from list-only child routes: `/admin/story/master-prompt`, `/admin/scenario/master-prompt` and `/admin/shots/master-prompt`. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in rows open `/new?source=built-in` so `Save` creates a persisted prompt instead of editing built-in content. The persisted type key for Story Content remains `scripts` for API compatibility. Prompt content keeps a recommended placeholder format, but placeholders are optional when saving.
 - Admin `Master Prompt` content editing uses `MasterPromptField`.
+- `MasterPromptConfigManager` renders the admin-only global Master Prompt Config page. It provides a synchronized JSON textarea and visual attribute/option editor.
+- `MasterPromptEditor` renders a read/select `Master Prompt Attribute` section in each Story Content, Scenario, and Shots master prompt editor. The section selects options from the global Master Prompt Config for that prompt record and does not allow editing the global config.
+- `MasterPromptEditor` shows Master Prompt Attribute option names only in the selection rows. Attribute and option descriptions are hidden behind helper icons and are not injected into `{masterPromptAttributes}`.
+- `MasterPromptEditor` exposes a `Prompt` preview button. It opens a read-only exact preview that replaces only admin-owned `{masterPromptAttributes}` from the draft selection and leaves user runtime placeholders unchanged.
+- Admin master prompt editors include `{masterPromptAttributes}` in their placeholder suggestions. User-facing master prompt editors exclude it.
 
 ## 7. Admin Log Components
 

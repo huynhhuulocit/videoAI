@@ -1,12 +1,15 @@
 import type { MasterPromptType } from "@videoai/contracts";
 import { redirect } from "next/navigation";
-import { ShotPromptForm } from "../../../../components/admin/shot-prompt-form";
+import {
+  MasterPromptEditor,
+  MasterPromptList,
+} from "../../../../components/admin/shot-prompt-form";
 import { I18nText } from "../../../../components/i18n/i18n-text";
 import { DashboardShell } from "../../../../components/shell/dashboard-shell";
 import { getShotPromptConfig } from "../../../../lib/api/client";
 import { auth } from "../../../../lib/auth/auth";
 
-export async function renderMasterPromptPage(initialType: MasterPromptType) {
+async function requireAdmin() {
   const session = await auth();
   if (!session) {
     redirect("/login");
@@ -14,6 +17,10 @@ export async function renderMasterPromptPage(initialType: MasterPromptType) {
   if (session.user.role !== "admin") {
     redirect("/dashboard");
   }
+}
+
+export async function renderMasterPromptPage(type: MasterPromptType) {
+  await requireAdmin();
 
   const config = await getShotPromptConfig();
 
@@ -24,7 +31,28 @@ export async function renderMasterPromptPage(initialType: MasterPromptType) {
       description={<I18nText id="adminMasterPrompt.description" />}
       backHref="/admin/ai-config"
     >
-      <ShotPromptForm config={config} initialType={initialType} />
+      <MasterPromptList config={config} type={type} />
+    </DashboardShell>
+  );
+}
+
+export async function renderMasterPromptEditorPage(
+  type: MasterPromptType,
+  promptId?: string,
+  source?: string,
+) {
+  await requireAdmin();
+
+  const config = await getShotPromptConfig();
+
+  return (
+    <DashboardShell
+      role="admin"
+      title={<I18nText id="adminMasterPrompt.title" />}
+      description={<I18nText id="adminMasterPrompt.description" />}
+      backHref={`/admin/${type === "scripts" ? "story" : type}/master-prompt`}
+    >
+      <MasterPromptEditor config={config} type={type} promptId={promptId} source={source} />
     </DashboardShell>
   );
 }

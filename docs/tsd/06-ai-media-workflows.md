@@ -22,6 +22,7 @@ Current local implementation:
 - Shot plans are stored in `content.video_shot_plans` as user-owned reusable assets; `project_id` is nullable for user-level plans.
 - Shot selections used during prompt generation are stored in request payload and prompt provider metadata.
 - Admin master prompts are stored in `config.master_prompts` by type: `scenario`, `shots` and `scripts`. Runtime AI requests require an active default prompt for the relevant type; legacy prompt columns are retained only for admin/read compatibility and are not runtime fallbacks.
+- Admin-only Master Prompt Config is stored in `config.master_prompt_attribute_configs`. Each master prompt stores its own selected config options in `attribute_selection`; runtime uses that data only when the active admin prompt contains `{masterPromptAttributes}`.
 - Video generation records are stored in `video.video_generations`.
 - Provider SDK calls and BullMQ workers are still follow-up work; current provider-shaped results are produced by the API vertical slice and persisted immediately.
 
@@ -149,6 +150,19 @@ Steps:
 5. The generated provider text is written back into the workspace `Story Content` textarea. The workspace shows a `Prompt` button before `Request` beside `Generate Story Content` so users can inspect exactly the rendered prompt after placeholder replacement; adjacent `Request`/`Response` buttons open the latest raw provider payloads in read-only popups. That textarea becomes the source of truth for scenario analysis, shot generation, per-shot prompt composition and script creation.
 6. If no saved key exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails or returns empty text, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to local/sample Story Content.
 7. The workspace shows the failure inline under `Generate Story Content` with a readable explanation, stable error code, provider/model when available, env/status hints when relevant and the job ID for admin lookup. Raw provider payloads are only shown through successful run popups and Admin > AI Logs, with secrets redacted.
+
+## 2.5. Admin-Only Master Prompt Attributes
+
+Rules:
+
+1. Admins manage one global Master Prompt Config under `/admin/master-prompt-config`.
+2. Story Content, Scenario, and Shots master prompt editors let admins select options from that config for each prompt record.
+3. `{masterPromptAttributes}` is an admin-only placeholder. It appears only in admin master prompt placeholder suggestions.
+4. User Project and One Click screens must not show Master Prompt Attribute selectors or suggest `{masterPromptAttributes}`.
+5. Runtime replaces `{masterPromptAttributes}` only for active admin default prompts, using the prompt record's saved `attribute_selection`.
+6. If the prompt does not contain `{masterPromptAttributes}`, no Master Prompt Config data is sent to the provider.
+7. Temporary user prompt overrides containing `{masterPromptAttributes}` are rejected with a validation error. This prevents user-controlled injection of admin prompt-authoring context.
+8. No hidden context is appended. Master Prompt Config data enters provider prompts only through the explicit admin-only placeholder.
 
 ## 3. Product URL Flow
 

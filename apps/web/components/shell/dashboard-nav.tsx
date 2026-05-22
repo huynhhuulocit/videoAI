@@ -32,7 +32,14 @@ const userNav: NavItem[] = [
 ];
 
 const adminNav: NavItem[] = [
-  { href: "/admin/ai-config", label: "shell.aiConfig", icon: Settings },
+  {
+    label: "shell.ai",
+    icon: Settings,
+    children: [
+      { href: "/admin/ai-config", label: "shell.aiConfig" },
+      { href: "/admin/master-prompt-config", label: "shell.masterPromptConfig" },
+    ],
+  },
   {
     label: "shell.story",
     icon: FileText,

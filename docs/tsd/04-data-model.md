@@ -258,6 +258,66 @@ Rules:
 - User can edit plan-level attributes; those attributes are saved with the shot plan and included when the plan is selected for prompt composition.
 - User can edit shots, add/remove shots and add/remove arbitrary shot attributes.
 - Each shot can store `mediaIds` so Scenario prompts can use media references scoped to that shot.
+
+### 3.6. `config.master_prompts`
+
+Purpose: admin-managed Story Content, Scenario, and Shots master prompts.
+
+Fields:
+
+- `id`
+- `type`: `scripts`, `scenario`, or `shots`
+- `name`
+- `content`
+- `attribute_selection`: nullable JSONB storing the admin-selected Master Prompt Config options for that prompt
+- `is_default`
+- `status`
+- `created_by_admin_id`
+- `created_at`
+- `updated_at`
+
+Rules:
+
+- `attribute_selection` is admin-only. It is not editable from user Project or One Click screens.
+- Runtime uses `attribute_selection` only when the prompt content contains `{masterPromptAttributes}`.
+- Temporary user prompt overrides are not allowed to use `{masterPromptAttributes}`.
+
+### 3.7. `config.master_prompt_attribute_configs`
+
+Purpose: one global admin-only attribute/option set for master prompt authors.
+
+Fields:
+
+- `id`
+- `attributes`: JSONB list of prompt-authoring attributes and options
+- `created_by_admin_id`
+- `created_at`
+- `updated_at`
+
+JSON shape:
+
+```json
+[
+  {
+    "id": "tone",
+    "name": "Tone",
+    "description": "Prompt authoring tone.",
+    "options": [
+      {
+        "id": "tone-cinematic",
+        "name": "Cinematic",
+        "description": "Use cinematic, vivid wording."
+      }
+    ]
+  }
+]
+```
+
+Rules:
+
+- This config is shared by Story Content, Scenario, and Shots master prompts.
+- The config is admin-only and must not appear as a selectable user workflow attribute.
+- The config is separate from Story, Scenario, and Shots user workflow Attribute catalogs.
 - Shot selections used for prompt generation should be persisted in AI request payload and prompt provider metadata.
 
 ### 3.6. `config.ai_site_configs`

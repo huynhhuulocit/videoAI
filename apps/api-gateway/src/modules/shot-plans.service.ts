@@ -12,6 +12,7 @@ import {
   type VideoShotPlan
 } from "@videoai/contracts";
 import {
+  assertNoMasterPromptAttributePlaceholder,
   defaultUserId,
   getActiveAiConfig,
   mapJob,
@@ -131,6 +132,8 @@ class AiJobError extends Error {
 @Injectable()
 export class ShotPlansService {
   async createShotGenerationJob(projectId: string | null, input: GenerateShotsRequest) {
+    this.assertUserPromptOverrideAllowed(input.masterPrompt);
+
     if (projectId) {
       const project = await prisma.projectRecord.findFirst({
         where: {
@@ -563,6 +566,14 @@ export class ShotPlansService {
 
   private isOpenAiProvider(provider: Provider) {
     return provider === "chatgpt" || provider === "openai";
+  }
+
+  private assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined) {
+    try {
+      assertNoMasterPromptAttributePlaceholder(masterPrompt);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "Invalid master prompt override.");
+    }
   }
 
   private async readProviderPayload(response: Response) {

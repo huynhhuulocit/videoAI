@@ -51,6 +51,8 @@ export type PromptPlaceholderDefinition = {
   description: string;
 };
 
+export const MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER = "{masterPromptAttributes}";
+
 export const MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPlaceholderDefinition[]> = {
   scripts: [
     {
@@ -104,6 +106,30 @@ export const MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPlacehol
     {
       token: "{shotsAttributes}",
       description: "Selected Shots attributes/options in compact form."
+    }
+  ]
+};
+
+export const ADMIN_MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPlaceholderDefinition[]> = {
+  scripts: [
+    ...MASTER_PROMPT_PLACEHOLDERS.scripts,
+    {
+      token: MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+      description: "Admin-only Master Prompt Attribute options selected for this master prompt."
+    }
+  ],
+  scenario: [
+    ...MASTER_PROMPT_PLACEHOLDERS.scenario,
+    {
+      token: MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+      description: "Admin-only Master Prompt Attribute options selected for this master prompt."
+    }
+  ],
+  shots: [
+    ...MASTER_PROMPT_PLACEHOLDERS.shots,
+    {
+      token: MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+      description: "Admin-only Master Prompt Attribute options selected for this master prompt."
     }
   ]
 };
@@ -220,6 +246,44 @@ export const AttributeCatalogAttributeSchema = z.object({
   options: z.array(AttributeCatalogOptionSchema).default([])
 });
 export type AttributeCatalogAttribute = z.infer<typeof AttributeCatalogAttributeSchema>;
+
+export const MasterPromptAttributeOptionSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  description: z.string().trim().optional()
+});
+export type MasterPromptAttributeOption = z.infer<typeof MasterPromptAttributeOptionSchema>;
+
+export const MasterPromptAttributeSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  description: z.string().trim().optional(),
+  options: z.array(MasterPromptAttributeOptionSchema).min(1)
+});
+export type MasterPromptAttribute = z.infer<typeof MasterPromptAttributeSchema>;
+
+export const MasterPromptAttributeSelectionItemSchema = z.object({
+  attributeId: z.string().trim().min(1),
+  optionIds: z.array(z.string().trim().min(1)).default([])
+});
+export type MasterPromptAttributeSelectionItem = z.infer<typeof MasterPromptAttributeSelectionItemSchema>;
+
+export const MasterPromptAttributeSelectionSchema = z.object({
+  attributes: z.array(MasterPromptAttributeSelectionItemSchema).default([])
+});
+export type MasterPromptAttributeSelection = z.infer<typeof MasterPromptAttributeSelectionSchema>;
+
+export const MasterPromptAttributeConfigSchema = z.object({
+  id: z.string().nullable(),
+  attributes: z.array(MasterPromptAttributeSchema),
+  updatedAt: z.string().nullable()
+});
+export type MasterPromptAttributeConfig = z.infer<typeof MasterPromptAttributeConfigSchema>;
+
+export const UpdateMasterPromptAttributeConfigRequestSchema = z.object({
+  attributes: z.array(MasterPromptAttributeSchema).min(1)
+});
+export type UpdateMasterPromptAttributeConfigRequest = z.infer<typeof UpdateMasterPromptAttributeConfigRequestSchema>;
 
 export const AttributeCatalogSchema = z.object({
   id: z.string(),
@@ -711,6 +775,9 @@ export const ShotPromptConfigSchema = z.object({
   scenarioAnalysisPrompt: z.string(),
   defaultScenarioAnalysisPrompt: z.string(),
   scenarioAnalysisIsDefault: z.boolean(),
+  scriptGenerationPrompt: z.string(),
+  defaultScriptGenerationPrompt: z.string(),
+  scriptGenerationIsDefault: z.boolean(),
   updatedAt: z.string()
 });
 export type ShotPromptConfig = z.infer<typeof ShotPromptConfigSchema>;
@@ -727,6 +794,7 @@ export const MasterPromptSchema = z.object({
   type: MasterPromptTypeSchema,
   name: z.string(),
   content: z.string(),
+  attributeSelection: MasterPromptAttributeSelectionSchema.default({ attributes: [] }),
   isDefault: z.boolean(),
   status: MasterPromptStatusSchema,
   isBuiltIn: z.boolean().default(false),
@@ -751,13 +819,15 @@ export type MasterPromptConfig = z.infer<typeof MasterPromptConfigSchema>;
 export const CreateMasterPromptRequestSchema = z.object({
   type: MasterPromptTypeSchema,
   name: z.string().trim().min(1).max(120),
-  content: z.string().trim().min(1).max(20000)
+  content: z.string().trim().min(1).max(20000),
+  attributeSelection: MasterPromptAttributeSelectionSchema.optional()
 });
 export type CreateMasterPromptRequest = z.infer<typeof CreateMasterPromptRequestSchema>;
 
 export const UpdateMasterPromptRequestSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
-  content: z.string().trim().min(1).max(20000).optional()
+  content: z.string().trim().min(1).max(20000).optional(),
+  attributeSelection: MasterPromptAttributeSelectionSchema.optional()
 });
 export type UpdateMasterPromptRequest = z.infer<typeof UpdateMasterPromptRequestSchema>;
 

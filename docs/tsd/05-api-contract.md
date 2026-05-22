@@ -780,6 +780,9 @@ Response:
             "type": "scenario",
             "name": "Default scenario analyst",
             "content": "Choose matching scenario options.",
+            "attributeSelection": {
+              "attributes": []
+            },
             "isDefault": true,
             "status": "active",
             "isBuiltIn": false,
@@ -869,7 +872,15 @@ Request:
 {
   "type": "shots",
   "name": "Narrative shots",
-  "content": "Split the script into continuous visual shots."
+  "content": "Split the script into continuous visual shots.",
+  "attributeSelection": {
+    "attributes": [
+      {
+        "attributeId": "tone",
+        "optionIds": ["tone-cinematic"]
+      }
+    ]
+  }
 }
 ```
 
@@ -879,6 +890,8 @@ Validation:
 - `name` and `content` are required.
 - Content may keep the recommended placeholder format, but placeholders are optional and saves do not validate their presence.
 - Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`.
+- `{masterPromptAttributes}` is admin-only. It is suggested only in admin master prompt editors and renders from the prompt record's saved `attributeSelection`.
+- User-facing temporary master prompt overrides containing `{masterPromptAttributes}` are rejected.
 
 ### `PATCH /api/v1/admin/master-prompts/{id}`
 
@@ -889,7 +902,10 @@ Request:
 ```json
 {
   "name": "Narrative shots v2",
-  "content": "Updated instructions."
+  "content": "Updated instructions.",
+  "attributeSelection": {
+    "attributes": []
+  }
 }
 ```
 
@@ -921,6 +937,66 @@ Response:
 ### `POST /api/v1/admin/master-prompts/{id}/default`
 
 Makes the prompt the only active default for its type.
+
+### `GET /api/v1/admin/master-prompt-config`
+
+Returns the global admin-only Master Prompt Config attribute set.
+
+Response:
+
+```json
+{
+  "data": {
+    "id": "master_prompt_config_001",
+    "attributes": [
+      {
+        "id": "tone",
+        "name": "Tone",
+        "description": "Prompt authoring tone.",
+        "options": [
+          {
+            "id": "tone-cinematic",
+            "name": "Cinematic",
+            "description": "Use cinematic, vivid wording."
+          }
+        ]
+      }
+    ],
+    "updatedAt": "2026-05-22T10:00:00.000Z"
+  }
+}
+```
+
+### `PATCH /api/v1/admin/master-prompt-config`
+
+Replaces the global admin-only Master Prompt Config.
+
+Request:
+
+```json
+{
+  "attributes": [
+    {
+      "id": "tone",
+      "name": "Tone",
+      "description": "Prompt authoring tone.",
+      "options": [
+        {
+          "id": "tone-cinematic",
+          "name": "Cinematic",
+          "description": "Use cinematic, vivid wording."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Rules:
+
+- This endpoint is admin-only.
+- There is no user API to select or mutate Master Prompt Attributes.
+- Runtime includes these attributes only through `{masterPromptAttributes}` in the active admin master prompt and only using the saved prompt-level `attributeSelection`.
 
 ### Legacy `GET/PATCH /api/v1/admin/shot-prompt`
 

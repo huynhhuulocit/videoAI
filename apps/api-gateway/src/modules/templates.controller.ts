@@ -13,6 +13,7 @@ import {
   type TemplateOption
 } from "@videoai/contracts";
 import {
+  assertNoMasterPromptAttributePlaceholder,
   defaultUserId,
   getActiveAiConfig,
   mapVideoTemplate,
@@ -150,6 +151,7 @@ export class TemplatesController {
   @Post("generate")
   async generateTemplate(@Body() rawBody: unknown) {
     const body = GenerateTemplateRequestSchema.parse(rawBody);
+    this.assertUserPromptOverrideAllowed(body.masterPrompt);
     const startedAt = Date.now();
     const config = await getActiveAiConfig();
     const provider = config.promptProvider;
@@ -375,6 +377,14 @@ export class TemplatesController {
       (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
       template
     );
+  }
+
+  private assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined) {
+    try {
+      assertNoMasterPromptAttributePlaceholder(masterPrompt);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "Invalid master prompt override.");
+    }
   }
 
   private buildProviderRequest(provider: Provider, model: string, prompt: string): ProviderRequest {

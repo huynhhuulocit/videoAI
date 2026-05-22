@@ -48,7 +48,7 @@ Admin có thể mở menu `Master Prompt` trong dashboard admin để quản lý
 - `Shots`: workflow `shot_generation` for Project and One Click shot plan creation.
 - `Story Content` (`scripts` type key): transforms the user's rough source text into richer Story Content for Scenario and Shots steps.
 
-Admin UI renders these groups as child menu items under `Master Prompt`. Clicking a child item navigates to a dedicated route and switches the page to a list-only CRUD view for that prompt type; the editor opens only after `New prompt` or `Edit` is selected. If a group only has the built-in template, `Edit` opens an editable copy and `Save` creates the first database prompt for that group. Canonical child routes are `/admin/shot-prompt/story-content`, `/admin/shot-prompt/scenario` and `/admin/shot-prompt/shots`; `/admin/shot-prompt` remains a compatibility redirect.
+Admin UI renders these groups as child items under the non-clickable `Story`, `Scenario`, and `Shots` admin groups. Clicking a `Master Prompt` child route opens a list-only CRUD view for that prompt type; the editor opens only after `New prompt` or `Edit` is selected. If a row is the built-in template, `Edit` opens `/new?source=built-in` as an editable copy and `Save` creates the first database prompt for that group. Canonical list routes are `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, and `/admin/shots/master-prompt`. Canonical editor routes are `/admin/{story|scenario|shots}/master-prompt/new` and `/admin/{story|scenario|shots}/master-prompt/{promptId}`. `/admin/shot-prompt` and old `/admin/shot-prompt/...` routes remain compatibility redirects.
 
 Yêu cầu:
 
@@ -57,7 +57,8 @@ Yêu cầu:
 - Không được xóa prompt đang là default; admin phải chọn prompt khác làm default trước.
 - Master prompt vẫn giữ format placeholder để admin dễ đọc và tái sử dụng, nhưng placeholder không bắt buộc khi lưu.
 - Placeholder khuyến nghị theo nhóm: `Story Content` dùng `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `Scenario` dùng `{story}`, `{attributes}`; `Shots` dùng `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`.
-- Admin UI hiển thị danh sách placeholder kèm mô tả trong vùng `Prompt content`. Khi admin nhập `{...`, textarea gợi ý placeholder hợp lệ cho nhóm đang chỉnh; admin có thể click hoặc nhấn Enter/Tab để chèn token chính xác.
+- Admin UI hiển thị danh sách placeholder ngay dưới `Prompt content` để admin click chèn token. Danh sách chỉ hiển thị token; mô tả nằm sau helper icon để hover/click xem khi cần. Khi admin nhập `{...`, textarea cũng gợi ý placeholder hợp lệ cho nhóm đang chỉnh; admin có thể click hoặc nhấn Enter/Tab để chèn token chính xác.
+- Admin editor có nút `Prompt` để xem preview chính xác của draft master prompt. Preview chỉ render `{masterPromptAttributes}` từ selection admin đang chọn; các placeholder runtime của user như `{inputText}`, `{story}`, `{scenarioAttributes}` và `{shotsAttributes}` được giữ nguyên vì editor admin không có dữ liệu runtime user.
 - Backend replace placeholder nếu có và không tự nối runtime context ẩn sau master prompt. Runtime data chỉ xuất hiện trong prompt khi prompt có placeholder tương ứng.
 - Runtime AI chỉ dùng active default prompt trong bảng `config.master_prompts` hoặc prompt override tạm thời từ request. Nếu thiếu active default prompt, request failed với lỗi cấu hình thiếu. Built-in prompt chỉ là template tham khảo trong admin UI, không phải fallback runtime.
 - User-facing `/shots*` pages redirect to `/projects`; shot generation is handled inside Project and One Click workspaces.
@@ -113,3 +114,15 @@ Yêu cầu:
 - Scenario management is admin-only; user dashboards no longer own Scenario catalogs.
 - Required attributes are configured in the admin Attribute editor. User workflows auto-select the first option for required attributes but still allow users to change or multi-select options.
 - Runtime data enters AI prompts only through explicit placeholders in the selected Master Prompt.
+
+## 7. Admin-Only Master Prompt Config
+
+- `Master Prompt Config` is an admin-only page under the AI admin area.
+- It stores one global attribute/option config used only by prompt authors when editing Story Content, Scenario, and Shots master prompts.
+- Admins build the config as JSON with `id`, `name`, optional `description`, and `options[]` where each option also has `id`, `name`, and optional `description`.
+- Story Content, Scenario, and Shots master prompt editors show a read/select `Master Prompt Attribute` section. Admins can select configured options for each master prompt but cannot edit the global config from that section.
+- The `Master Prompt Attribute` section shows attribute and option names only by default. Attribute/option descriptions are exposed through helper icons and are not rendered into `{masterPromptAttributes}`.
+- The admin-only placeholder is `{masterPromptAttributes}`. It appears only in admin master prompt placeholder suggestions.
+- User Project and One Click screens must not show Master Prompt Attribute selectors or suggest `{masterPromptAttributes}`.
+- Runtime replaces `{masterPromptAttributes}` only with the selection saved on the active admin master prompt. If the token is absent, no Master Prompt Config data is included.
+- Temporary user prompt overrides containing `{masterPromptAttributes}` are invalid and must be rejected with a readable validation error.

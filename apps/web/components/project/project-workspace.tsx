@@ -8,7 +8,6 @@ import type {
   AttributeSelection,
   GenerateShotsJobResult,
   Job,
-  MasterPromptConfig,
   MediaAsset,
   ProjectFlow,
   ShotSelection,
@@ -1928,16 +1927,8 @@ export function ProjectWorkspace({
 
     async function loadShotPromptConfig() {
       try {
-        const [config, masterPromptConfig] = await Promise.all([
-          apiGet<ShotPromptConfig>("/admin/shot-prompt"),
-          apiGet<MasterPromptConfig>("/admin/master-prompts").catch(
-            () => null,
-          ),
-        ]);
+        const config = await apiGet<ShotPromptConfig>("/admin/shot-prompt");
         if (!cancelled) {
-          const scriptsPrompt =
-            masterPromptConfig?.groups.find((group) => group.type === "scripts")
-              ?.defaultPrompt.content || DEFAULT_SCRIPT_GENERATION_PROMPT;
           setShotComposerPromptTemplate(
             config.composerPrompt || DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
           );
@@ -1949,7 +1940,11 @@ export function ProjectWorkspace({
               config.defaultScenarioAnalysisPrompt ||
               DEFAULT_TEMPLATE_SELECTION_PROMPT,
           );
-          setScriptGenerationPrompt(scriptsPrompt);
+          setScriptGenerationPrompt(
+            config.scriptGenerationPrompt ||
+              config.defaultScriptGenerationPrompt ||
+              DEFAULT_SCRIPT_GENERATION_PROMPT,
+          );
         }
       } catch {
         if (!cancelled) {

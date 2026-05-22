@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { prisma } from "@videoai/database";
+import { prisma, type Prisma } from "@videoai/database";
 import {
   ContentModeSchema,
   DEFAULT_SCRIPT_GENERATION_PROMPT,
@@ -9,6 +9,10 @@ import {
   AttributeCatalogTypeSchema,
   FlowTypeSchema,
   JobStatusSchema,
+  MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+  MasterPromptAttributeConfigSchema,
+  MasterPromptAttributeSelectionSchema,
+  MasterPromptAttributeSchema,
   MasterPromptStatusSchema,
   MasterPromptTypeSchema,
   ProviderSchema,
@@ -28,6 +32,9 @@ import {
   type FlowType,
   type Job,
   type MasterPrompt,
+  type MasterPromptAttribute,
+  type MasterPromptAttributeConfig,
+  type MasterPromptAttributeSelection,
   type MasterPromptConfig,
   type MasterPromptType,
   type MediaAsset,
@@ -51,6 +58,7 @@ type DbScenarioAttributeCatalog = Awaited<ReturnType<typeof prisma.scenarioAttri
 type DbShotAttributeCatalog = Awaited<ReturnType<typeof prisma.shotAttributeCatalog.findFirstOrThrow>>;
 type DbVideoShotPlan = Awaited<ReturnType<typeof prisma.videoShotPlanRecord.findFirstOrThrow>>;
 type DbMasterPrompt = Awaited<ReturnType<typeof prisma.masterPrompt.findFirstOrThrow>>;
+type DbMasterPromptAttributeConfig = Awaited<ReturnType<typeof prisma.masterPromptAttributeConfig.findFirstOrThrow>>;
 type DbAiLog = Awaited<ReturnType<typeof prisma.aiRequestLog.findFirstOrThrow>> & {
   responses?: Array<{
     responsePayload: unknown;
@@ -155,6 +163,7 @@ function builtInMasterPrompt(type: MasterPromptType): MasterPrompt {
     type,
     name: defaultMasterPromptName(type),
     content: defaultMasterPromptContent(type),
+    attributeSelection: { attributes: [] },
     isDefault: true,
     status: "active",
     isBuiltIn: true,
@@ -305,12 +314,28 @@ export function mapMasterPrompt(row: DbMasterPrompt): MasterPrompt {
     type: MasterPromptTypeSchema.parse(row.type),
     name: row.name,
     content: row.content,
+    attributeSelection: MasterPromptAttributeSelectionSchema.parse(row.attributeSelection ?? { attributes: [] }),
     isDefault: row.isDefault,
     status: MasterPromptStatusSchema.parse(row.status),
     isBuiltIn: false,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString()
   };
+}
+
+function mapMasterPromptAttributeConfig(row: DbMasterPromptAttributeConfig | null): MasterPromptAttributeConfig {
+  if (!row) {
+    return MasterPromptAttributeConfigSchema.parse({
+      id: null,
+      attributes: [],
+      updatedAt: null
+    });
+  }
+  return MasterPromptAttributeConfigSchema.parse({
+    id: row.id,
+    attributes: MasterPromptAttributeSchema.array().parse(row.attributes),
+    updatedAt: row.updatedAt.toISOString()
+  });
 }
 
 export async function getCurrentUser(demoRole?: string) {
@@ -383,7 +408,106 @@ export async function getDefaultMasterPrompt(type: MasterPromptType, legacyPromp
 }
 
 export async function getDefaultMasterPromptContent(type: MasterPromptType, legacyPrompt?: string | null) {
-  return (await getDefaultMasterPrompt(type, legacyPrompt)).content;
+  const prompt = await getDefaultMasterPrompt(type, legacyPrompt);
+  return renderMasterPromptAttributes(prompt.content, prompt.attributeSelection);
+}
+
+export async function getMasterPromptAttributeConfig(): Promise<MasterPromptAttributeConfig> {
+  const row = await prisma.masterPromptAttributeConfig.findFirst({
+    orderBy: { updatedAt: "desc" }
+  });
+  return mapMasterPromptAttributeConfig(row);
+}
+
+export async function replaceMasterPromptAttributeConfig(input: { attributes: MasterPromptAttribute[] }) {
+  const attributes = MasterPromptAttributeSchema.array().min(1).parse(input.attributes);
+  const existing = await prisma.masterPromptAttributeConfig.findFirst({
+    orderBy: { updatedAt: "desc" }
+  });
+  const row = existing
+    ? await prisma.masterPromptAttributeConfig.update({
+        where: { id: existing.id },
+        data: {
+          attributes: attributes as unknown as Prisma.InputJsonValue,
+          createdByAdminId: defaultAdminId
+        }
+      })
+    : await prisma.masterPromptAttributeConfig.create({
+        data: {
+          attributes: attributes as unknown as Prisma.InputJsonValue,
+          createdByAdminId: defaultAdminId
+        }
+      });
+  return mapMasterPromptAttributeConfig(row);
+}
+
+function selectedMasterPromptAttributeText(
+  configAttributes: MasterPromptAttribute[],
+  selection: MasterPromptAttributeSelection
+) {
+  const selectedLines = selection.attributes.flatMap((selectedAttribute) => {
+    const attribute = configAttributes.find((candidate) => candidate.id === selectedAttribute.attributeId);
+    if (!attribute) {
+      throw new Error(`Master Prompt Attribute "${selectedAttribute.attributeId}" is not configured.`);
+    }
+    const selectedOptions = selectedAttribute.optionIds.map((optionId) => {
+      const option = attribute.options.find((candidate) => candidate.id === optionId);
+      if (!option) {
+        throw new Error(`Master Prompt Attribute option "${optionId}" is not configured.`);
+      }
+      return option.description ? `${option.name} (${option.description})` : option.name;
+    });
+    return selectedOptions.length > 0
+      ? [`${attribute.name}: ${selectedOptions.join(", ")}`]
+      : [];
+  });
+
+  if (selectedLines.length === 0) {
+    throw new Error("Master Prompt Attribute selection is required for {masterPromptAttributes}.");
+  }
+
+  return selectedLines.join("\n");
+}
+
+export async function renderMasterPromptAttributes(
+  content: string,
+  rawSelection?: MasterPromptAttributeSelection | null
+) {
+  if (!content.includes(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER)) {
+    return content;
+  }
+
+  const config = await getMasterPromptAttributeConfig();
+  if (config.attributes.length === 0) {
+    throw new Error("Master Prompt Config is required before using {masterPromptAttributes}.");
+  }
+  const selection = MasterPromptAttributeSelectionSchema.parse(rawSelection ?? { attributes: [] });
+  const renderedAttributes = selectedMasterPromptAttributeText(config.attributes, selection);
+  return content.replaceAll(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER, renderedAttributes);
+}
+
+export async function validateMasterPromptAttributeSelection(
+  content: string,
+  rawSelection?: MasterPromptAttributeSelection | null
+) {
+  const selection = MasterPromptAttributeSelectionSchema.parse(rawSelection ?? { attributes: [] });
+  const hasSelectedOptions = selection.attributes.some((attribute) => attribute.optionIds.length > 0);
+  if (!content.includes(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER)) {
+    if (!hasSelectedOptions) {
+      return selection;
+    }
+    const config = await getMasterPromptAttributeConfig();
+    selectedMasterPromptAttributeText(config.attributes, selection);
+    return selection;
+  }
+  await renderMasterPromptAttributes(content, selection);
+  return selection;
+}
+
+export function assertNoMasterPromptAttributePlaceholder(value: string | null | undefined) {
+  if (value?.includes(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER)) {
+    throw new Error("{masterPromptAttributes} is admin-only and cannot be used in temporary user prompt overrides.");
+  }
 }
 
 export async function getMasterPromptConfig(): Promise<MasterPromptConfig> {
@@ -421,8 +545,13 @@ export async function createMasterPrompt(input: {
   type: MasterPromptType;
   name: string;
   content: string;
+  attributeSelection?: MasterPromptAttributeSelection;
 }) {
   const type = MasterPromptTypeSchema.parse(input.type);
+  const attributeSelection = await validateMasterPromptAttributeSelection(
+    input.content.trim(),
+    input.attributeSelection
+  );
   return prisma.$transaction(async (tx) => {
     const activeCount = await tx.masterPrompt.count({
       where: { type, status: "active" }
@@ -433,6 +562,7 @@ export async function createMasterPrompt(input: {
         type,
         name: input.name.trim(),
         content: input.content.trim(),
+        attributeSelection: attributeSelection as unknown as Prisma.InputJsonValue,
         status: "active",
         isDefault: shouldBeDefault,
         createdByAdminId: defaultAdminId
@@ -442,15 +572,26 @@ export async function createMasterPrompt(input: {
   });
 }
 
-export async function updateMasterPrompt(id: string, input: { name?: string; content?: string }) {
+export async function updateMasterPrompt(
+  id: string,
+  input: { name?: string; content?: string; attributeSelection?: MasterPromptAttributeSelection }
+) {
   const existing = await prisma.masterPrompt.findFirstOrThrow({
     where: { id, status: "active" }
   });
+  const nextContent = input.content?.trim() ?? existing.content;
+  const nextSelection = input.attributeSelection
+    ? await validateMasterPromptAttributeSelection(nextContent, input.attributeSelection)
+    : await validateMasterPromptAttributeSelection(
+        nextContent,
+        MasterPromptAttributeSelectionSchema.parse(existing.attributeSelection ?? { attributes: [] })
+      );
   const prompt = await prisma.masterPrompt.update({
     where: { id: existing.id },
     data: {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
-      ...(input.content !== undefined ? { content: input.content.trim() } : {})
+      ...(input.content !== undefined ? { content: input.content.trim() } : {}),
+      attributeSelection: nextSelection as unknown as Prisma.InputJsonValue
     }
   });
   return mapMasterPrompt(prompt);

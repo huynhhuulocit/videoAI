@@ -36,6 +36,7 @@ import {
 } from "@videoai/contracts";
 import {
   defaultUserId,
+  assertNoMasterPromptAttributePlaceholder,
   getActiveAiConfig,
   getDefaultAttributeCatalog,
   mapJob,
@@ -309,6 +310,7 @@ export class ProjectsController {
   @Post(":projectId/shots/generate")
   async generateShots(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
     const body = GenerateShotsRequestSchema.parse(rawBody);
+    this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.shotPlansService.createShotGenerationJob(projectId, body));
   }
 
@@ -362,6 +364,7 @@ export class ProjectsController {
   @Post(":projectId/prompts/generate")
   async generatePrompt(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
     const body = GeneratePromptRequestSchema.parse(rawBody);
+    this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.createJob("prompt_generation", projectId, body));
   }
 
@@ -437,6 +440,7 @@ export class ProjectsController {
   @Post(":projectId/template-selection/analyze")
   async analyzeTemplateSelection(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
     const body = AnalyzeTemplateSelectionRequestSchema.parse(rawBody);
+    this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.createJob("template_selection", projectId, body));
   }
 
@@ -2333,6 +2337,14 @@ export class ProjectsController {
 
     if (!shotPlan) {
       throw new BadRequestException("Shot plan is missing or archived.");
+    }
+  }
+
+  private assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined) {
+    try {
+      assertNoMasterPromptAttributePlaceholder(masterPrompt);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : "Invalid master prompt override.");
     }
   }
 

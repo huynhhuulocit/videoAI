@@ -58,7 +58,17 @@ app/
   (admin)/
     admin/
       ai-config/
-      shot-prompt/   # visible label: Master Prompt
+      master-prompt-config/
+      story/master-prompt/
+      story/master-prompt/new/
+      story/master-prompt/[promptId]/
+      scenario/master-prompt/
+      scenario/master-prompt/new/
+      scenario/master-prompt/[promptId]/
+      shots/master-prompt/
+      shots/master-prompt/new/
+      shots/master-prompt/[promptId]/
+      shot-prompt/   # compatibility redirects
       ai-logs/
 ```
 
@@ -74,7 +84,8 @@ Recommended feature modules:
 - `template-builder`
 - `video-generation`
 - `admin-ai-config`
-- `admin-master-prompt` (route compatibility redirect: `/admin/shot-prompt`; canonical child routes: `/admin/shot-prompt/story-content`, `/admin/shot-prompt/scenario`, `/admin/shot-prompt/shots`)
+- `admin-master-prompt` (route compatibility redirect: `/admin/shot-prompt`; canonical list routes: `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`; editor routes: `/admin/{story|scenario|shots}/master-prompt/new` and `/admin/{story|scenario|shots}/master-prompt/{promptId}`)
+- `admin-master-prompt-config` (global admin-only attribute/option set for master prompt authors)
 - `admin-ai-logs`
 
 Each feature module should own:
@@ -141,6 +152,8 @@ Buttons use shared semantic variants: `primary` for blue filled main actions, `s
 
 Visible master prompt editors use a shared cyan prompt surface. This applies to project workspace Story Content, Scenario and Shots master prompts, scenario create/edit master prompts and the admin Master Prompt editor. Ordinary content/schema/output textareas stay neutral.
 
+Admin master prompt navigation uses list/editor route separation. `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, and `/admin/shots/master-prompt` are list-only pages. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in prompt rows open `/new?source=built-in` so admin users create persisted copies instead of editing built-in content. Editor pages expose a `Prompt` preview button that renders the exact draft prompt, replacing only admin-owned `{masterPromptAttributes}` and leaving user runtime placeholders unchanged.
+
 ## 7. Integration With API Gateway
 
 Frontend API clients should map to Gateway endpoints from [API Contract](./05-api-contract.md).
@@ -177,3 +190,13 @@ For UI-heavy changes, screenshots are part of implementation verification, not o
 - Attribute editor pages share the same prompt/source/JSON/visual editor pattern. `Prompt`, `Request`, and `Response` actions sit next to the AI generation button so raw debug controls stay tied to generation.
 - Old `/admin/shot-prompt/...` routes should redirect to the matching new Master Prompt routes.
 - User navigation no longer exposes Scenario management. Project and One Click screens read admin default catalogs instead.
+
+## 10. Admin-Only Master Prompt Config
+
+- Admin navigation exposes `Master Prompt Config` under the AI admin area.
+- `/admin/master-prompt-config` renders a visual attribute/option editor plus a synchronized JSON textarea.
+- The config is shared by Story Content, Scenario, and Shots master prompt editors.
+- Story Content, Scenario, and Shots master prompt editor pages show a read/select `Master Prompt Attribute` section. Admins can select options for that prompt but cannot edit the global config from that section.
+- Master Prompt Attribute selection rows show names only. Descriptions are helper-icon content and are not inserted into `{masterPromptAttributes}`.
+- Admin master prompt placeholder suggestions include `{masterPromptAttributes}`.
+- User Project and One Click master prompt editors continue to use the user-safe placeholder list and must not show `{masterPromptAttributes}` or Master Prompt Attribute selectors.
