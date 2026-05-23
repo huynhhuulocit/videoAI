@@ -1,4 +1,15 @@
-﻿import { BadRequestException, Body, Controller, Delete, Get, Inject, Param, Patch, Post } from "@nestjs/common";
+﻿import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Inject,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { Prisma, prisma } from "@videoai/database";
 import { z } from "zod";
@@ -6,6 +17,7 @@ import {
   AnalyzeProductRequestSchema,
   AnalyzeTemplateSelectionRequestSchema,
   AttributeCatalogAttributeSchema,
+  CreateAiHandoffRequestSchema,
   CreateProjectRequestSchema,
   CreateShotPlanRequestSchema,
   CreateScriptRequestSchema,
@@ -19,6 +31,7 @@ import {
   ShotSelectionSchema,
   TemplateAttributeSchema,
   TemplateSelectionSchema,
+  UpdateAiHandoffRequestSchema,
   UpdateShotPlanRequestSchema,
   VideoShotAttributeSchema,
   type AiConfig,
@@ -35,38 +48,39 @@ import {
   type TemplateSelectionAnalysisResult,
   type VideoShot,
   type VideoShotAttribute,
-  type VideoShotPlan
+  type VideoShotPlan,
 } from "@videoai/contracts";
 import {
   defaultUserId,
   assertNoMasterPromptAttributePlaceholder,
   getActiveAiConfig,
   getDefaultAttributeCatalog,
+  mapAiHandoff,
   mapJob,
   mapProject,
   mapVideoShotPlan,
   resolveProviderApiKey,
-  toFlowType
+  toFlowType,
 } from "./db-store.js";
 import { ok } from "./response.js";
 import { ShotPlansService } from "./shot-plans.service.js";
 
 const aiShotAttributeSchema = z.object({
   name: z.string().trim().min(1),
-  value: z.string().trim().min(1)
+  value: z.string().trim().min(1),
 });
 
 const aiShotSchema = z.object({
   title: z.string().trim().min(1),
   description: z.string().trim().min(1),
   durationSeconds: z.number().int().min(1).max(8),
-  attributes: z.array(aiShotAttributeSchema).min(1)
+  attributes: z.array(aiShotAttributeSchema).min(1),
 });
 
 const aiShotPlanSchema = z.object({
   name: z.string().trim().min(1),
   durationSeconds: z.number().int().min(1).max(8),
-  shots: z.array(aiShotSchema).min(1)
+  shots: z.array(aiShotSchema).min(1),
 });
 
 const aiTemplateSelectionAttributeSchema = z.object({
@@ -74,13 +88,13 @@ const aiTemplateSelectionAttributeSchema = z.object({
   attributeName: z.string().optional(),
   selectedOptionIds: z.array(z.string()).optional(),
   selectedOptionLabels: z.array(z.string()).optional(),
-  reason: z.string().optional()
+  reason: z.string().optional(),
 });
 
 const aiTemplateSelectionSchema = z.object({
   attributes: z.array(aiTemplateSelectionAttributeSchema).default([]),
   compactSelection: z.string().optional(),
-  notes: z.string().optional()
+  notes: z.string().optional(),
 });
 
 const shotPlanJsonSchema = {
@@ -103,17 +117,17 @@ const shotPlanJsonSchema = {
               type: "object",
               properties: {
                 name: { type: "string" },
-                value: { type: "string" }
+                value: { type: "string" },
               },
-              required: ["name", "value"]
-            }
-          }
+              required: ["name", "value"],
+            },
+          },
         },
-        required: ["title", "description", "durationSeconds", "attributes"]
-      }
-    }
+        required: ["title", "description", "durationSeconds", "attributes"],
+      },
+    },
   },
-  required: ["name", "durationSeconds", "shots"]
+  required: ["name", "durationSeconds", "shots"],
 } as const;
 
 const templateSelectionJsonSchema = {
@@ -128,21 +142,21 @@ const templateSelectionJsonSchema = {
           attributeName: { type: "string" },
           selectedOptionIds: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string" },
           },
           selectedOptionLabels: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string" },
           },
-          reason: { type: "string" }
+          reason: { type: "string" },
         },
-        required: ["attributeId", "selectedOptionIds"]
-      }
+        required: ["attributeId", "selectedOptionIds"],
+      },
     },
     compactSelection: { type: "string" },
-    notes: { type: "string" }
+    notes: { type: "string" },
   },
-  required: ["attributes", "compactSelection"]
+  required: ["attributes", "compactSelection"],
 } as const;
 
 const openAiTemplateSelectionJsonSchema = {
@@ -159,21 +173,27 @@ const openAiTemplateSelectionJsonSchema = {
           attributeName: { type: "string" },
           selectedOptionIds: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string" },
           },
           selectedOptionLabels: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string" },
           },
-          reason: { type: "string" }
+          reason: { type: "string" },
         },
-        required: ["attributeId", "attributeName", "selectedOptionIds", "selectedOptionLabels", "reason"]
-      }
+        required: [
+          "attributeId",
+          "attributeName",
+          "selectedOptionIds",
+          "selectedOptionLabels",
+          "reason",
+        ],
+      },
     },
     compactSelection: { type: "string" },
-    notes: { type: "string" }
+    notes: { type: "string" },
   },
-  required: ["attributes", "compactSelection", "notes"]
+  required: ["attributes", "compactSelection", "notes"],
 } as const;
 
 type ParsedProviderShotPlan = z.infer<typeof aiShotPlanSchema>;
@@ -198,7 +218,7 @@ class AiJobError extends Error {
     public readonly code: ApiErrorCode,
     message: string,
     public readonly details?: Record<string, unknown>,
-    public readonly rawResponse?: unknown
+    public readonly rawResponse?: unknown,
   ) {
     super(message);
   }
@@ -206,13 +226,16 @@ class AiJobError extends Error {
 
 @Controller("projects")
 export class ProjectsController {
-  constructor(@Inject(ShotPlansService) private readonly shotPlansService: ShotPlansService) {}
+  constructor(
+    @Inject(ShotPlansService)
+    private readonly shotPlansService: ShotPlansService,
+  ) {}
 
   @Get()
   async listProjects() {
     const projects = await prisma.projectRecord.findMany({
       where: { ownerUserId: defaultUserId, status: "active" },
-      orderBy: { updatedAt: "desc" }
+      orderBy: { updatedAt: "desc" },
     });
     return ok(projects.map(mapProject));
   }
@@ -227,8 +250,8 @@ export class ProjectsController {
         name: body.name,
         description: body.description ?? null,
         flowType: body.flowType,
-        status: "active"
-      }
+        status: "active",
+      },
     });
     return ok(mapProject(project));
   }
@@ -239,27 +262,125 @@ export class ProjectsController {
       where: {
         id: projectId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
     return ok(project ? mapProject(project) : null);
   }
 
+  @Get(":projectId/ai-handoffs")
+  async listAiHandoffs(
+    @Param("projectId") projectId: string,
+    @Query("shotId") shotId?: string,
+  ) {
+    await this.requireActiveProject(projectId);
+    const handoffs = await prisma.aiHandoffRecord.findMany({
+      where: {
+        projectId,
+        ownerUserId: defaultUserId,
+        ...(shotId?.trim() ? { shotId: shotId.trim() } : {}),
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+    return ok(handoffs.map(mapAiHandoff));
+  }
+
+  @Post(":projectId/ai-handoffs")
+  async createAiHandoff(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
+    const body = CreateAiHandoffRequestSchema.parse(rawBody);
+    await this.requireActiveProject(projectId);
+    const config = await getActiveAiConfig();
+    if (!config.aiHandoffTargetUrl) {
+      throw new BadRequestException(
+        "AI Handoff target URL is not configured in Admin > AI Config.",
+      );
+    }
+    if (!config.aiHandoffPromptSelector) {
+      throw new BadRequestException(
+        "AI Handoff prompt selector is not configured. Open Flow, run Check DOM, then try again.",
+      );
+    }
+    const configuredTargetUrl = new URL(config.aiHandoffTargetUrl).toString();
+    const requestedTargetUrl = new URL(body.targetUrl).toString();
+    if (
+      body.provider !== config.aiHandoffProvider ||
+      requestedTargetUrl !== configuredTargetUrl
+    ) {
+      throw new BadRequestException(
+        "AI Handoff provider and target URL must match Admin > AI Config.",
+      );
+    }
+    const handoff = await prisma.aiHandoffRecord.create({
+      data: {
+        id: `ai_handoff_${Date.now()}_${randomUUID().slice(0, 8)}`,
+        projectId,
+        ownerUserId: defaultUserId,
+        shotId: body.shotId,
+        provider: config.aiHandoffProvider,
+        targetUrl: configuredTargetUrl,
+        promptText: body.promptText,
+        status: "created",
+        errorMessage: null,
+      },
+    });
+    return ok(mapAiHandoff(handoff));
+  }
+
+  @Patch(":projectId/ai-handoffs/:handoffId")
+  async updateAiHandoff(
+    @Param("projectId") projectId: string,
+    @Param("handoffId") handoffId: string,
+    @Body() rawBody: unknown,
+  ) {
+    const body = UpdateAiHandoffRequestSchema.parse(rawBody);
+    await this.requireActiveProject(projectId);
+    const existing = await prisma.aiHandoffRecord.findFirst({
+      where: {
+        id: handoffId,
+        projectId,
+        ownerUserId: defaultUserId,
+      },
+    });
+
+    if (!existing) {
+      throw new BadRequestException("AI handoff is missing for this project.");
+    }
+
+    const handoff = await prisma.aiHandoffRecord.update({
+      where: { id: existing.id },
+      data: {
+        status: body.status,
+        errorMessage: body.errorMessage ?? null,
+      },
+    });
+    return ok(mapAiHandoff(handoff));
+  }
+
   @Patch(":projectId")
-  async updateProject(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async updateProject(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = CreateProjectRequestSchema.partial().parse(rawBody);
     const existing = await prisma.projectRecord.findFirst({
       where: {
         id: projectId,
-        ownerUserId: defaultUserId
-      }
+        ownerUserId: defaultUserId,
+      },
     });
 
     if (!existing) {
       return ok(null);
     }
 
-    const updateData: { name?: string; description?: string | null; flowType?: "script" | "product" } = {};
+    const updateData: {
+      name?: string;
+      description?: string | null;
+      flowType?: "script" | "product";
+    } = {};
     if (body.name !== undefined) {
       updateData.name = body.name;
     }
@@ -272,7 +393,7 @@ export class ProjectsController {
 
     const project = await prisma.projectRecord.update({
       where: { id: projectId },
-      data: updateData
+      data: updateData,
     });
     return ok(mapProject(project));
   }
@@ -282,8 +403,8 @@ export class ProjectsController {
     const existing = await prisma.projectRecord.findFirst({
       where: {
         id: projectId,
-        ownerUserId: defaultUserId
-      }
+        ownerUserId: defaultUserId,
+      },
     });
 
     if (!existing) {
@@ -292,7 +413,7 @@ export class ProjectsController {
 
     await prisma.projectRecord.update({
       where: { id: projectId },
-      data: { status: "archived" }
+      data: { status: "archived" },
     });
     return ok({ deleted: true });
   }
@@ -303,22 +424,25 @@ export class ProjectsController {
       where: {
         projectId,
         ownerUserId: defaultUserId,
-        status: "active"
+        status: "active",
       },
-      orderBy: { updatedAt: "desc" }
+      orderBy: { updatedAt: "desc" },
     });
     return ok(shotPlans.map(mapVideoShotPlan));
   }
 
   @Post(":projectId/shots")
-  async createShotPlan(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async createShotPlan(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = CreateShotPlanRequestSchema.parse(rawBody);
     const project = await prisma.projectRecord.findFirst({
       where: {
         id: projectId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
 
     if (!project) {
@@ -337,25 +461,30 @@ export class ProjectsController {
         attributes: this.toJson(body.attributes),
         shots: this.toJson(body.shots),
         isDefault: false,
-        status: "active"
-      }
+        status: "active",
+      },
     });
 
     return ok(mapVideoShotPlan(shotPlan));
   }
 
   @Post(":projectId/shots/generate")
-  async generateShots(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async generateShots(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = GenerateShotsRequestSchema.parse(rawBody);
     await this.assertUserPromptOverrideAllowed(body.masterPrompt);
-    return ok(await this.shotPlansService.createShotGenerationJob(projectId, body));
+    return ok(
+      await this.shotPlansService.createShotGenerationJob(projectId, body),
+    );
   }
 
   @Patch(":projectId/shots/:shotPlanId")
   async updateShotPlan(
     @Param("projectId") projectId: string,
     @Param("shotPlanId") shotPlanId: string,
-    @Body() rawBody: unknown
+    @Body() rawBody: unknown,
   ) {
     const body = UpdateShotPlanRequestSchema.parse(rawBody);
     const existing = await prisma.videoShotPlanRecord.findFirst({
@@ -363,8 +492,8 @@ export class ProjectsController {
         id: shotPlanId,
         projectId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
 
     if (!existing) {
@@ -375,31 +504,43 @@ export class ProjectsController {
       where: { id: shotPlanId },
       data: {
         ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.description !== undefined ? { description: body.description } : {}),
-        ...(body.durationSeconds !== undefined ? { durationSeconds: body.durationSeconds } : {}),
-        ...(body.attributes !== undefined ? { attributes: this.toJson(body.attributes) } : {}),
-        ...(body.shots !== undefined ? { shots: this.toJson(body.shots) } : {})
-      }
+        ...(body.description !== undefined
+          ? { description: body.description }
+          : {}),
+        ...(body.durationSeconds !== undefined
+          ? { durationSeconds: body.durationSeconds }
+          : {}),
+        ...(body.attributes !== undefined
+          ? { attributes: this.toJson(body.attributes) }
+          : {}),
+        ...(body.shots !== undefined ? { shots: this.toJson(body.shots) } : {}),
+      },
     });
     return ok(mapVideoShotPlan(shotPlan));
   }
 
   @Delete(":projectId/shots/:shotPlanId")
-  async deleteShotPlan(@Param("projectId") projectId: string, @Param("shotPlanId") shotPlanId: string) {
+  async deleteShotPlan(
+    @Param("projectId") projectId: string,
+    @Param("shotPlanId") shotPlanId: string,
+  ) {
     const result = await prisma.videoShotPlanRecord.updateMany({
       where: {
         id: shotPlanId,
         projectId,
         ownerUserId: defaultUserId,
-        status: "active"
+        status: "active",
       },
-      data: { status: "archived" }
+      data: { status: "archived" },
     });
     return ok({ deleted: result.count > 0 });
   }
 
   @Post(":projectId/prompts/generate")
-  async generatePrompt(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async generatePrompt(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = GeneratePromptRequestSchema.parse(rawBody);
     await this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.createJob("prompt_generation", projectId, body));
@@ -411,8 +552,8 @@ export class ProjectsController {
       where: {
         id: projectId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
     if (!project) {
       return ok({ storyContent: "" });
@@ -423,23 +564,26 @@ export class ProjectsController {
         projectId,
         ownerUserId: defaultUserId,
         sourceType: { in: ["script_flow", "story_content"] },
-        status: "succeeded"
+        status: "succeeded",
       },
-      orderBy: { updatedAt: "desc" }
+      orderBy: { updatedAt: "desc" },
     });
 
     return ok({ storyContent: prompt?.generatedPrompt ?? "" });
   }
 
   @Patch(":projectId/story-content")
-  async saveStoryContent(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async saveStoryContent(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = SaveProjectStoryContentRequestSchema.parse(rawBody);
     const project = await prisma.projectRecord.findFirst({
       where: {
         id: projectId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
     if (!project) {
       return ok({ saved: false, storyContent: body.storyContent });
@@ -461,28 +605,37 @@ export class ProjectsController {
         model: config.promptModel,
         status: "succeeded",
         mediaAnalysisSummary: this.toJson([]),
-        providerMetadata: this.toJson({ savedFrom: "one_click_step_1" })
-      }
+        providerMetadata: this.toJson({ savedFrom: "one_click_step_1" }),
+      },
     });
 
     return ok({ saved: true, storyContent: body.storyContent });
   }
 
   @Post(":projectId/products/analyze")
-  async analyzeProduct(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async analyzeProduct(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = AnalyzeProductRequestSchema.parse(rawBody);
     return ok(await this.createJob("product_analysis", projectId, body));
   }
 
   @Post(":projectId/template-selection/analyze")
-  async analyzeTemplateSelection(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async analyzeTemplateSelection(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = AnalyzeTemplateSelectionRequestSchema.parse(rawBody);
     await this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.createJob("template_selection", projectId, body));
   }
 
   @Patch(":projectId/template-selection")
-  async saveTemplateSelection(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async saveTemplateSelection(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = SaveProjectTemplateSelectionRequestSchema.parse(rawBody);
     if (body.templateSelection) {
       await this.validateTemplateSelection(body.templateSelection);
@@ -492,42 +645,55 @@ export class ProjectsController {
       where: {
         id: projectId,
         ownerUserId: defaultUserId,
-        status: "active"
+        status: "active",
       },
       data: {
-        templateSelection: body.templateSelection ? this.toJson(body.templateSelection) : Prisma.JsonNull,
+        templateSelection: body.templateSelection
+          ? this.toJson(body.templateSelection)
+          : Prisma.JsonNull,
         attributeSelections: this.toJson({
           ...(await this.getExistingProjectAttributeSelections(projectId)),
-          scenario: body.templateSelection ? this.templateSelectionToAttributeSelection(body.templateSelection) : null
-        })
-      }
+          scenario: body.templateSelection
+            ? this.templateSelectionToAttributeSelection(body.templateSelection)
+            : null,
+        }),
+      },
     });
 
-    return ok({ saved: result.count > 0, templateSelection: body.templateSelection });
+    return ok({
+      saved: result.count > 0,
+      templateSelection: body.templateSelection,
+    });
   }
 
   @Patch(":projectId/attribute-selections")
-  async saveAttributeSelections(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async saveAttributeSelections(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = SaveProjectAttributeSelectionsRequestSchema.parse(rawBody);
     const result = await prisma.projectRecord.updateMany({
       where: {
         id: projectId,
         ownerUserId: defaultUserId,
-        status: "active"
+        status: "active",
       },
       data: {
-        attributeSelections: this.toJson(body.attributeSelections)
-      }
+        attributeSelections: this.toJson(body.attributeSelections),
+      },
     });
 
     return ok({
       saved: result.count > 0,
-      attributeSelections: body.attributeSelections
+      attributeSelections: body.attributeSelections,
     });
   }
 
   @Post(":projectId/scripts")
-  async createScript(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async createScript(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = CreateScriptRequestSchema.parse(rawBody);
     const config = await getActiveAiConfig();
     const script = await prisma.scriptRecord.create({
@@ -539,29 +705,40 @@ export class ProjectsController {
         scriptText: body.finalPrompt,
         provider: config.promptProvider,
         model: config.promptModel,
-        status: "succeeded"
-      }
+        status: "succeeded",
+      },
     });
 
     return ok({
       scriptId: script.id,
       projectId,
       status: script.status,
-      finalPrompt: script.scriptText
+      finalPrompt: script.scriptText,
     });
   }
 
   @Post(":projectId/videos")
-  async createVideo(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+  async createVideo(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
     const body = CreateVideoRequestSchema.parse(rawBody);
     return ok(await this.createJob("video_generation", projectId, body));
   }
 
-  private async createJob(type: Job["type"], projectId: string, input: unknown) {
+  private async createJob(
+    type: Job["type"],
+    projectId: string,
+    input: unknown,
+  ) {
     const startedAt = Date.now();
     const config = await getActiveAiConfig();
-    const provider = type === "video_generation" ? config.videoProvider : config.promptProvider;
-    const model = type === "video_generation" ? config.videoModel : config.promptModel;
+    const provider =
+      type === "video_generation"
+        ? config.videoProvider
+        : config.promptProvider;
+    const model =
+      type === "video_generation" ? config.videoModel : config.promptModel;
     const jobId = `job_${type}_${Date.now()}`;
     const requestId = `ai_req_${Date.now()}`;
     const mediaIds = this.extractMediaIds(input);
@@ -570,7 +747,8 @@ export class ProjectsController {
     await this.validateTemplateSelection(templateSelection);
     const shotSelection = this.extractShotSelection(input);
     await this.validateShotSelection(shotSelection);
-    const videoGenerationId = type === "video_generation" ? `video_gen_${Date.now()}` : null;
+    const videoGenerationId =
+      type === "video_generation" ? `video_gen_${Date.now()}` : null;
 
     const { requestLog } = await prisma.$transaction(async (tx) => {
       const createdJob = await tx.jobStatusRecord.create({
@@ -578,8 +756,8 @@ export class ProjectsController {
           jobId,
           type,
           status: "queued",
-          progress: 0
-        }
+          progress: 0,
+        },
       });
       const createdRequestLog = await tx.aiRequestLog.create({
         data: {
@@ -592,8 +770,8 @@ export class ProjectsController {
           model,
           requestPayload: this.toJson(this.toRecord(input)),
           mediaReferences: this.toJson(mediaIds),
-          status: "pending"
-        }
+          status: "pending",
+        },
       });
 
       if (videoGenerationId) {
@@ -608,8 +786,8 @@ export class ProjectsController {
             provider,
             model,
             status: "queued",
-            jobId
-          }
+            jobId,
+          },
         });
       }
 
@@ -618,30 +796,50 @@ export class ProjectsController {
 
     try {
       await this.markJobProcessing(jobId, videoGenerationId);
-      await this.completeJob(jobId, requestLog.id, type, projectId, input, config, startedAt, videoGenerationId);
+      await this.completeJob(
+        jobId,
+        requestLog.id,
+        type,
+        projectId,
+        input,
+        config,
+        startedAt,
+        videoGenerationId,
+      );
     } catch (error) {
-      await this.failJob(jobId, requestLog.id, startedAt, error, videoGenerationId);
+      await this.failJob(
+        jobId,
+        requestLog.id,
+        startedAt,
+        error,
+        videoGenerationId,
+      );
     }
-    const completedJob = await prisma.jobStatusRecord.findUniqueOrThrow({ where: { jobId } });
+    const completedJob = await prisma.jobStatusRecord.findUniqueOrThrow({
+      where: { jobId },
+    });
     return mapJob(completedJob);
   }
 
-  private async markJobProcessing(jobId: string, videoGenerationId: string | null) {
+  private async markJobProcessing(
+    jobId: string,
+    videoGenerationId: string | null,
+  ) {
     await prisma.$transaction(async (tx) => {
       await tx.jobStatusRecord.update({
         where: { jobId },
         data: {
           status: "processing",
-          progress: 45
-        }
+          progress: 45,
+        },
       });
 
       if (videoGenerationId) {
         await tx.videoGenerationRecord.update({
           where: { id: videoGenerationId },
           data: {
-            status: "processing"
-          }
+            status: "processing",
+          },
         });
       }
     });
@@ -652,10 +850,11 @@ export class ProjectsController {
     requestLogId: string,
     startedAt: number,
     error: unknown,
-    videoGenerationId: string | null
+    videoGenerationId: string | null,
   ) {
     const apiError = this.toApiError(error);
-    const rawResponse = error instanceof AiJobError ? error.rawResponse : undefined;
+    const rawResponse =
+      error instanceof AiJobError ? error.rawResponse : undefined;
 
     await prisma.$transaction(async (tx) => {
       await tx.jobStatusRecord.update({
@@ -663,24 +862,26 @@ export class ProjectsController {
         data: {
           status: "failed",
           progress: 100,
-          error: this.toJson(apiError)
-        }
+          error: this.toJson(apiError),
+        },
       });
       await tx.aiRequestLog.update({
         where: { id: requestLogId },
         data: {
           status: "failed",
-          completedAt: new Date()
-        }
+          completedAt: new Date(),
+        },
       });
       await tx.aiResponseLog.create({
         data: {
           requestLogId,
-          responsePayload: this.toJson(rawResponse === undefined ? {} : { rawResponse }),
+          responsePayload: this.toJson(
+            rawResponse === undefined ? {} : { rawResponse },
+          ),
           errorCode: apiError.code,
           errorMessage: apiError.message,
-          latencyMs: Date.now() - startedAt
-        }
+          latencyMs: Date.now() - startedAt,
+        },
       });
 
       if (videoGenerationId) {
@@ -688,8 +889,8 @@ export class ProjectsController {
           where: { id: videoGenerationId },
           data: {
             status: "failed",
-            completedAt: new Date()
-          }
+            completedAt: new Date(),
+          },
         });
       }
     });
@@ -703,31 +904,37 @@ export class ProjectsController {
     input: unknown,
     config: AiConfig,
     startedAt: number,
-    videoGenerationId: string | null
+    videoGenerationId: string | null,
   ) {
-    const result = await this.createProviderResult(type, projectId, input, config, videoGenerationId);
+    const result = await this.createProviderResult(
+      type,
+      projectId,
+      input,
+      config,
+      videoGenerationId,
+    );
     await prisma.$transaction(async (tx) => {
       await tx.jobStatusRecord.update({
         where: { jobId },
         data: {
           status: "succeeded",
           progress: 100,
-          result: this.toJson(result)
-        }
+          result: this.toJson(result),
+        },
       });
       await tx.aiRequestLog.update({
         where: { id: requestLogId },
         data: {
           status: "success",
-          completedAt: new Date()
-        }
+          completedAt: new Date(),
+        },
       });
       await tx.aiResponseLog.create({
         data: {
           requestLogId,
           responsePayload: this.toJson(result),
-          latencyMs: Date.now() - startedAt
-        }
+          latencyMs: Date.now() - startedAt,
+        },
       });
 
       if (type === "shot_generation") {
@@ -739,31 +946,41 @@ export class ProjectsController {
             projectId,
             ownerUserId: defaultUserId,
             name: String(shotPlan.name),
-            description: shotPlan.description ? String(shotPlan.description) : null,
+            description: shotPlan.description
+              ? String(shotPlan.description)
+              : null,
             sourceText: String(shotPlan.sourceText),
             durationSeconds: Number(shotPlan.durationSeconds),
             attributes: this.toJson(shotPlan.attributes ?? []),
             shots: this.toJson(shotPlan.shots ?? []),
             isDefault: false,
-            status: "active"
-          }
+            status: "active",
+          },
         });
       }
 
       if (type === "template_selection") {
         const resultRecord = this.toRecord(result);
-        const existingProject = await tx.projectRecord.findUnique({ where: { id: projectId } });
-        const existingSelections = this.toRecord(existingProject?.attributeSelections);
-        const scenarioSelection = this.templateSelectionToAttributeSelection(resultRecord.templateSelection);
+        const existingProject = await tx.projectRecord.findUnique({
+          where: { id: projectId },
+        });
+        const existingSelections = this.toRecord(
+          existingProject?.attributeSelections,
+        );
+        const scenarioSelection = this.templateSelectionToAttributeSelection(
+          resultRecord.templateSelection,
+        );
         await tx.projectRecord.update({
           where: { id: projectId },
           data: {
-            templateSelection: this.toJson(resultRecord.templateSelection ?? null),
+            templateSelection: this.toJson(
+              resultRecord.templateSelection ?? null,
+            ),
             attributeSelections: this.toJson({
               ...existingSelections,
-              ...(scenarioSelection ? { scenario: scenarioSelection } : {})
-            })
-          }
+              ...(scenarioSelection ? { scenario: scenarioSelection } : {}),
+            }),
+          },
         });
       }
 
@@ -772,8 +989,8 @@ export class ProjectsController {
           where: { id: videoGenerationId },
           data: {
             status: "succeeded",
-            completedAt: new Date()
-          }
+            completedAt: new Date(),
+          },
         });
       }
     });
@@ -786,10 +1003,15 @@ export class ProjectsController {
       const payload = this.toRecord(input);
       await prisma.promptRecord.create({
         data: {
-          id: String(this.toRecord(result).promptId ?? this.toRecord(result).analysisId ?? `prompt_${Date.now()}`),
+          id: String(
+            this.toRecord(result).promptId ??
+              this.toRecord(result).analysisId ??
+              `prompt_${Date.now()}`,
+          ),
           projectId,
           ownerUserId: defaultUserId,
-          sourceType: type === "prompt_generation" ? "script_flow" : "product_flow",
+          sourceType:
+            type === "prompt_generation" ? "script_flow" : "product_flow",
           inputText: payload.inputText ? String(payload.inputText) : null,
           productUrl: payload.productUrl ? String(payload.productUrl) : null,
           mediaAssetIds: this.toJson(this.extractMediaIds(input)),
@@ -798,13 +1020,15 @@ export class ProjectsController {
           provider: config.promptProvider,
           model: config.promptModel,
           status: "succeeded",
-          mediaAnalysisSummary: this.toJson(this.toRecord(result).mediaInsights ?? []),
+          mediaAnalysisSummary: this.toJson(
+            this.toRecord(result).mediaInsights ?? [],
+          ),
           providerMetadata: this.toJson({
             masterPrompt: payload.masterPrompt ?? null,
             templateSelection: payload.templateSelection ?? null,
-            shotSelection: payload.shotSelection ?? null
-          })
-        }
+            shotSelection: payload.shotSelection ?? null,
+          }),
+        },
       });
     }
   }
@@ -814,18 +1038,26 @@ export class ProjectsController {
     projectId: string,
     input: unknown,
     config: AiConfig,
-    videoGenerationId: string | null
+    videoGenerationId: string | null,
   ) {
     const payload = this.toRecord(input);
     const mediaIds = this.extractMediaIds(input).map(String);
-    const templateGuidance = this.createTemplateGuidance(payload.templateSelection);
+    const templateGuidance = this.createTemplateGuidance(
+      payload.templateSelection,
+    );
 
     if (type === "shot_generation") {
       const sourceText = String(payload.sourceText ?? "");
       const attributes = this.extractShotPlanAttributes(input);
-      const scenarioAttributes = this.extractVideoShotAttributes(payload.scenarioAttributes);
-      const shotsAttributes = this.extractVideoShotAttributes(payload.shotsAttributes);
-      const masterPrompt = payload.masterPrompt ? String(payload.masterPrompt) : undefined;
+      const scenarioAttributes = this.extractVideoShotAttributes(
+        payload.scenarioAttributes,
+      );
+      const shotsAttributes = this.extractVideoShotAttributes(
+        payload.shotsAttributes,
+      );
+      const masterPrompt = payload.masterPrompt
+        ? String(payload.masterPrompt)
+        : undefined;
       return this.createShotPlanWithAi(
         projectId,
         sourceText,
@@ -833,15 +1065,21 @@ export class ProjectsController {
         scenarioAttributes,
         shotsAttributes,
         config,
-        masterPrompt
+        masterPrompt,
       );
     }
 
     if (type === "template_selection") {
       const inputText = String(payload.inputText ?? "");
-      const templateId = payload.templateId ? String(payload.templateId) : undefined;
-      const catalogId = payload.catalogId ? String(payload.catalogId) : undefined;
-      const masterPrompt = payload.masterPrompt ? String(payload.masterPrompt) : undefined;
+      const templateId = payload.templateId
+        ? String(payload.templateId)
+        : undefined;
+      const catalogId = payload.catalogId
+        ? String(payload.catalogId)
+        : undefined;
+      const masterPrompt = payload.masterPrompt
+        ? String(payload.masterPrompt)
+        : undefined;
       return this.createTemplateSelectionWithAi(
         projectId,
         inputText,
@@ -851,18 +1089,25 @@ export class ProjectsController {
         masterPrompt,
         Boolean(payload.saveAsTemplate),
         payload.templateName ? String(payload.templateName) : undefined,
-        payload.templateDescription ? String(payload.templateDescription) : undefined
+        payload.templateDescription
+          ? String(payload.templateDescription)
+          : undefined,
       );
     }
 
     if (type === "prompt_generation") {
       const inputText = String(payload.inputText ?? "").trim();
       if (!inputText) {
-        throw new AiJobError("VALIDATION_ERROR", "inputText is required for Story Content generation.");
+        throw new AiJobError(
+          "VALIDATION_ERROR",
+          "inputText is required for Story Content generation.",
+        );
       }
-      const masterPrompt = payload.masterPrompt ? String(payload.masterPrompt) : config.scriptGenerationPrompt;
+      const masterPrompt = payload.masterPrompt
+        ? String(payload.masterPrompt)
+        : config.scriptGenerationPrompt;
       const storyAttributes = this.formatAttributeSelectionCompact(
-        this.extractAttributeSelection(payload.attributeSelections, "story")
+        this.extractAttributeSelection(payload.attributeSelections, "story"),
       );
       return this.createStoryContentWithAi(
         projectId,
@@ -870,14 +1115,17 @@ export class ProjectsController {
         mediaIds,
         storyAttributes,
         config,
-        masterPrompt
+        masterPrompt,
       );
     }
 
     if (type === "product_analysis") {
       const productUrl = String(payload.productUrl ?? "").trim();
       if (!productUrl) {
-        throw new AiJobError("VALIDATION_ERROR", "productUrl is required for product analysis.");
+        throw new AiJobError(
+          "VALIDATION_ERROR",
+          "productUrl is required for product analysis.",
+        );
       }
       const productName = this.deriveProductName(productUrl);
       return {
@@ -886,7 +1134,7 @@ export class ProjectsController {
         productFacts: [
           `Product source: ${this.deriveHostname(productUrl)}`,
           `Main product: ${productName}`,
-          "The introduction should focus on shape, material, daily use benefits, and trust-building details."
+          "The introduction should focus on shape, material, daily use benefits, and trust-building details.",
         ],
         mediaInsights: this.createMediaInsights(mediaIds),
         generatedPrompt: [
@@ -899,10 +1147,12 @@ export class ProjectsController {
           mediaIds.length > 0
             ? `- Keep the visual style aligned with ${mediaIds.length} uploaded reference media file(s).`
             : "",
-          templateGuidance
-        ].filter(Boolean).join("\n\n"),
+          templateGuidance,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
         provider: config.promptProvider,
-        model: config.promptModel
+        model: config.promptModel,
       };
     }
 
@@ -912,18 +1162,18 @@ export class ProjectsController {
         throw new AiJobError(
           "VALIDATION_ERROR",
           "Final prompt is required before creating video.",
-          { provider: config.videoProvider, model: config.videoModel }
+          { provider: config.videoProvider, model: config.videoModel },
         );
       }
       const rawRequest = this.buildVideoProviderRequest(
         config.videoProvider,
         config.videoModel,
-        finalPrompt
+        finalPrompt,
       );
       const rawResponse = await this.callVideoProvider(
         config.videoProvider,
         config.videoModel,
-        rawRequest
+        rawRequest,
       );
       return {
         videoGenerationId: videoGenerationId ?? `video_gen_${Date.now()}`,
@@ -932,14 +1182,18 @@ export class ProjectsController {
         provider: config.videoProvider,
         model: config.videoModel,
         rawRequest,
-        rawResponse
+        rawResponse,
       };
     }
 
     return { projectId, input: this.toRecord(input) };
   }
 
-  private buildVideoProviderRequest(provider: Provider, model: string, finalPrompt: string): ProviderRequest {
+  private buildVideoProviderRequest(
+    provider: Provider,
+    model: string,
+    finalPrompt: string,
+  ): ProviderRequest {
     if (this.isGeminiVideoProvider(provider)) {
       return {
         provider,
@@ -948,15 +1202,15 @@ export class ProjectsController {
         url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         headers: {
           "content-type": "application/json",
-          "x-goog-api-key": "[REDACTED]"
+          "x-goog-api-key": "[REDACTED]",
         },
         body: {
           contents: [
             {
-              parts: [{ text: finalPrompt }]
-            }
-          ]
-        }
+              parts: [{ text: finalPrompt }],
+            },
+          ],
+        },
       };
     }
 
@@ -968,23 +1222,27 @@ export class ProjectsController {
         url: "https://api.openai.com/v1/responses",
         headers: {
           authorization: "Bearer [REDACTED]",
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
         body: {
           model,
-          input: finalPrompt
-        }
+          input: finalPrompt,
+        },
       };
     }
 
     throw new AiJobError(
       "AI_PROVIDER_FAILED",
       `Provider ${provider} cannot create video because no VideoAI adapter is configured for it.`,
-      { provider, model }
+      { provider, model },
     );
   }
 
-  private async callVideoProvider(provider: Provider, model: string, rawRequest: ProviderRequest) {
+  private async callVideoProvider(
+    provider: Provider,
+    model: string,
+    rawRequest: ProviderRequest,
+  ) {
     if (this.isGeminiVideoProvider(provider)) {
       return this.callGeminiForVideo(provider, model, rawRequest);
     }
@@ -997,11 +1255,15 @@ export class ProjectsController {
       "AI_PROVIDER_FAILED",
       `Provider ${provider} cannot create video because no VideoAI adapter is configured for it.`,
       { provider, model },
-      rawRequest
+      rawRequest,
     );
   }
 
-  private async callGeminiForVideo(provider: Provider, model: string, rawRequest: ProviderRequest) {
+  private async callGeminiForVideo(
+    provider: Provider,
+    model: string,
+    rawRequest: ProviderRequest,
+  ) {
     const resolvedKey = await resolveProviderApiKey(provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
@@ -1009,7 +1271,7 @@ export class ProjectsController {
         "AI_CONFIG_MISSING",
         `Missing API key for ${provider} video generation. Save a provider key in Admin > AI Config.`,
         { provider, model },
-        rawRequest
+        rawRequest,
       );
     }
 
@@ -1017,9 +1279,9 @@ export class ProjectsController {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-goog-api-key": apiKey
+        "x-goog-api-key": apiKey,
       },
-      body: JSON.stringify(rawRequest.body)
+      body: JSON.stringify(rawRequest.body),
     });
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1030,14 +1292,18 @@ export class ProjectsController {
           ? `${provider} video generation is rate limited or out of quota (status ${response.status}).`
           : `${provider} video generation failed with status ${response.status}.`,
         { provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
     return providerPayload;
   }
 
-  private async callOpenAiForVideo(provider: Provider, model: string, rawRequest: ProviderRequest) {
+  private async callOpenAiForVideo(
+    provider: Provider,
+    model: string,
+    rawRequest: ProviderRequest,
+  ) {
     const resolvedKey = await resolveProviderApiKey(provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
@@ -1045,7 +1311,7 @@ export class ProjectsController {
         "AI_CONFIG_MISSING",
         `Missing API key for ${provider} video generation. Save a provider key in Admin > AI Config.`,
         { provider, model },
-        rawRequest
+        rawRequest,
       );
     }
 
@@ -1053,9 +1319,9 @@ export class ProjectsController {
       method: "POST",
       headers: {
         authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
+        "content-type": "application/json",
       },
-      body: JSON.stringify(rawRequest.body)
+      body: JSON.stringify(rawRequest.body),
     });
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1066,7 +1332,7 @@ export class ProjectsController {
           ? `ChatGPT video generation is rate limited or out of quota (status ${response.status}).`
           : `ChatGPT video generation failed with status ${response.status}.`,
         { provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
@@ -1082,20 +1348,24 @@ export class ProjectsController {
     masterPrompt?: string,
     saveAsTemplate?: boolean,
     templateNameOverride?: string,
-    templateDescriptionOverride?: string
+    templateDescriptionOverride?: string,
   ): Promise<TemplateSelectionAnalysisResult> {
     const template = templateId
       ? await prisma.videoTemplateRecord.findFirst({
           where: {
             id: templateId,
             ownerUserId: defaultUserId,
-            status: "active"
-          }
+            status: "active",
+          },
         })
       : null;
-    const catalog = template ? null : await this.resolveScenarioCatalog(catalogId);
+    const catalog = template
+      ? null
+      : await this.resolveScenarioCatalog(catalogId);
     if (!template && !catalog) {
-      throw new BadRequestException("Scenario attribute catalog is missing. Configure a default catalog in Admin > Scenario > Attribute.");
+      throw new BadRequestException(
+        "Scenario attribute catalog is missing. Configure a default catalog in Admin > Scenario > Attribute.",
+      );
     }
 
     const attributes = template
@@ -1106,21 +1376,32 @@ export class ProjectsController {
     const provider = config.promptProvider;
     const model = config.promptModel;
     const prompt = this.buildTemplateSelectionPrompt(
-      this.requirePrompt(masterPrompt ?? config.templateSelectionPrompt, "Scenario master prompt"),
+      this.requirePrompt(
+        masterPrompt ?? config.templateSelectionPrompt,
+        "Scenario master prompt",
+      ),
       inputText,
       {
         id: sourceId,
         name: sourceName,
-        attributes
+        attributes,
       },
-      config.templateSelectionOutputFormat
+      config.templateSelectionOutputFormat,
     );
-    const rawRequest = this.buildTemplateSelectionProviderRequest(provider, model, prompt);
-    const rawResponse = await this.callTemplateSelectionProvider(provider, model, rawRequest);
+    const rawRequest = this.buildTemplateSelectionProviderRequest(
+      provider,
+      model,
+      prompt,
+    );
+    const rawResponse = await this.callTemplateSelectionProvider(
+      provider,
+      model,
+      rawRequest,
+    );
     let templateSelection = this.normalizeTemplateSelection(rawResponse, {
       templateId: sourceId,
       templateName: sourceName,
-      attributes
+      attributes,
     });
 
     if (saveAsTemplate) {
@@ -1128,18 +1409,24 @@ export class ProjectsController {
         where: {
           id: projectId,
           ownerUserId: defaultUserId,
-          status: "active"
-        }
+          status: "active",
+        },
       });
       if (!project) {
         throw new BadRequestException("Project is missing or archived.");
       }
       const nameSource = templateNameOverride?.trim() || project.name.trim();
       if (!nameSource) {
-        throw new BadRequestException("Scenario name is required before saving AI analysis.");
+        throw new BadRequestException(
+          "Scenario name is required before saving AI analysis.",
+        );
       }
       const name = nameSource.slice(0, 120);
-      const description = (templateDescriptionOverride?.trim() || project.description?.trim() || "").slice(0, 500);
+      const description = (
+        templateDescriptionOverride?.trim() ||
+        project.description?.trim() ||
+        ""
+      ).slice(0, 500);
       const savedTemplate = await prisma.videoTemplateRecord.create({
         data: {
           id: `template_${Date.now()}`,
@@ -1149,13 +1436,13 @@ export class ProjectsController {
           idea: inputText,
           attributes: this.toJson(templateSelection.attributes),
           isDefault: false,
-          status: "active"
-        }
+          status: "active",
+        },
       });
       templateSelection = {
         ...templateSelection,
         templateId: savedTemplate.id,
-        templateName: savedTemplate.name
+        templateName: savedTemplate.name,
       };
     }
 
@@ -1166,7 +1453,7 @@ export class ProjectsController {
       rawRequest,
       rawResponse,
       provider,
-      model
+      model,
     };
   }
 
@@ -1174,7 +1461,7 @@ export class ProjectsController {
     masterPrompt: string,
     inputText: string,
     template: { id: string; name: string; attributes: TemplateAttribute[] },
-    outputFormat: string | null | undefined
+    outputFormat: string | null | undefined,
   ) {
     const attributeCatalog = template.attributes.map((attribute) => ({
       attributeId: attribute.id,
@@ -1182,28 +1469,31 @@ export class ProjectsController {
       options: attribute.options.map((option) => ({
         optionId: option.id,
         label: option.label,
-        value: option.value
-      }))
+        value: option.value,
+      })),
     }));
 
     const attributeCatalogText = JSON.stringify(
       {
         templateId: template.id,
         templateName: template.name,
-        attributes: attributeCatalog
+        attributes: attributeCatalog,
       },
       null,
-      2
+      2,
     );
-    const promptTemplate = this.requirePrompt(masterPrompt, "Scenario master prompt");
+    const promptTemplate = this.requirePrompt(
+      masterPrompt,
+      "Scenario master prompt",
+    );
     const renderedPrompt = this.renderOptionalPromptPlaceholders(
       promptTemplate,
       {
         story: inputText,
         attributes: attributeCatalogText,
         scenarioAttributes: attributeCatalogText,
-        outputFormat: outputFormat ?? ""
-      }
+        outputFormat: outputFormat ?? "",
+      },
     );
 
     return renderedPrompt;
@@ -1213,13 +1503,16 @@ export class ProjectsController {
     configuredPrompt: string | null | undefined,
     inputText: string,
     storyAttributes: string,
-    outputFormat: string | null | undefined
+    outputFormat: string | null | undefined,
   ) {
-    const masterPrompt = this.requirePrompt(configuredPrompt, "Story Content master prompt");
+    const masterPrompt = this.requirePrompt(
+      configuredPrompt,
+      "Story Content master prompt",
+    );
     const renderedPrompt = this.renderOptionalPromptPlaceholders(masterPrompt, {
       storyContent: inputText,
       storyAttributes,
-      outputFormat: outputFormat ?? ""
+      outputFormat: outputFormat ?? "",
     });
     return renderedPrompt;
   }
@@ -1230,7 +1523,7 @@ export class ProjectsController {
     mediaIds: string[],
     storyAttributes: string,
     config: AiConfig,
-    configuredPrompt: string | null | undefined
+    configuredPrompt: string | null | undefined,
   ) {
     const provider = config.promptProvider;
     const model = config.promptModel;
@@ -1238,10 +1531,18 @@ export class ProjectsController {
       configuredPrompt,
       inputText,
       storyAttributes,
-      config.scriptGenerationOutputFormat
+      config.scriptGenerationOutputFormat,
     );
-    const rawRequest = this.buildStoryContentProviderRequest(provider, model, prompt);
-    const result = await this.callStoryContentProvider(provider, model, rawRequest);
+    const rawRequest = this.buildStoryContentProviderRequest(
+      provider,
+      model,
+      prompt,
+    );
+    const result = await this.callStoryContentProvider(
+      provider,
+      model,
+      rawRequest,
+    );
 
     return {
       promptId: `prompt_${Date.now()}`,
@@ -1251,11 +1552,15 @@ export class ProjectsController {
       provider,
       model,
       rawRequest,
-      rawResponse: result.rawResponse
+      rawResponse: result.rawResponse,
     };
   }
 
-  private buildStoryContentProviderRequest(provider: Provider, model: string, prompt: string): ProviderRequest {
+  private buildStoryContentProviderRequest(
+    provider: Provider,
+    model: string,
+    prompt: string,
+  ): ProviderRequest {
     if (this.isGeminiProvider(provider)) {
       return {
         provider,
@@ -1264,15 +1569,15 @@ export class ProjectsController {
         url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         headers: {
           "content-type": "application/json",
-          "x-goog-api-key": "[REDACTED]"
+          "x-goog-api-key": "[REDACTED]",
         },
         body: {
           contents: [
             {
-              parts: [{ text: prompt }]
-            }
-          ]
-        }
+              parts: [{ text: prompt }],
+            },
+          ],
+        },
       };
     }
 
@@ -1284,23 +1589,27 @@ export class ProjectsController {
         url: "https://api.openai.com/v1/responses",
         headers: {
           authorization: "Bearer [REDACTED]",
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
         body: {
           model,
-          input: prompt
-        }
+          input: prompt,
+        },
       };
     }
 
     throw new AiJobError(
       "AI_PROVIDER_FAILED",
       `Provider ${provider} cannot generate Story Content.`,
-      { provider, model }
+      { provider, model },
     );
   }
 
-  private async callStoryContentProvider(provider: Provider, model: string, rawRequest: ProviderRequest) {
+  private async callStoryContentProvider(
+    provider: Provider,
+    model: string,
+    rawRequest: ProviderRequest,
+  ) {
     if (this.isGeminiProvider(provider)) {
       return this.callGeminiForStoryContent(model, rawRequest);
     }
@@ -1313,11 +1622,14 @@ export class ProjectsController {
       "AI_PROVIDER_FAILED",
       `Provider ${provider} cannot generate Story Content.`,
       { provider, model },
-      rawRequest
+      rawRequest,
     );
   }
 
-  private async callGeminiForStoryContent(model: string, rawRequest: ProviderRequest): Promise<TextProviderResult> {
+  private async callGeminiForStoryContent(
+    model: string,
+    rawRequest: ProviderRequest,
+  ): Promise<TextProviderResult> {
     const resolvedKey = await resolveProviderApiKey(rawRequest.provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
@@ -1325,7 +1637,7 @@ export class ProjectsController {
         "AI_CONFIG_MISSING",
         `Missing API key for ${rawRequest.provider} Story Content generation. Save a provider key in Admin > AI Config.`,
         { provider: rawRequest.provider, model },
-        rawRequest
+        rawRequest,
       );
     }
 
@@ -1333,9 +1645,9 @@ export class ProjectsController {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-goog-api-key": apiKey
+        "x-goog-api-key": apiKey,
       },
-      body: JSON.stringify(rawRequest.body)
+      body: JSON.stringify(rawRequest.body),
     });
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1346,7 +1658,7 @@ export class ProjectsController {
           ? `Gemini Story Content generation is rate limited or out of quota (status ${response.status}).`
           : `Gemini Story Content generation failed with status ${response.status}.`,
         { provider: rawRequest.provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
@@ -1354,12 +1666,15 @@ export class ProjectsController {
       this.extractGeminiText(providerPayload, "Story Content generation"),
       rawRequest.provider,
       model,
-      providerPayload
+      providerPayload,
     );
     return { text, rawResponse: providerPayload };
   }
 
-  private async callOpenAiForStoryContent(model: string, rawRequest: ProviderRequest): Promise<TextProviderResult> {
+  private async callOpenAiForStoryContent(
+    model: string,
+    rawRequest: ProviderRequest,
+  ): Promise<TextProviderResult> {
     const resolvedKey = await resolveProviderApiKey(rawRequest.provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
@@ -1367,7 +1682,7 @@ export class ProjectsController {
         "AI_CONFIG_MISSING",
         `Missing API key for ${rawRequest.provider} Story Content generation. Save a provider key in Admin > AI Config.`,
         { provider: rawRequest.provider, model },
-        rawRequest
+        rawRequest,
       );
     }
 
@@ -1375,9 +1690,9 @@ export class ProjectsController {
       method: "POST",
       headers: {
         authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
+        "content-type": "application/json",
       },
-      body: JSON.stringify(rawRequest.body)
+      body: JSON.stringify(rawRequest.body),
     });
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1388,7 +1703,7 @@ export class ProjectsController {
           ? `ChatGPT Story Content generation is rate limited or out of quota (status ${response.status}).`
           : `ChatGPT Story Content generation failed with status ${response.status}.`,
         { provider: rawRequest.provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
@@ -1396,25 +1711,34 @@ export class ProjectsController {
       this.extractOpenAiText(providerPayload, "Story Content generation"),
       rawRequest.provider,
       model,
-      providerPayload
+      providerPayload,
     );
     return { text, rawResponse: providerPayload };
   }
 
-  private cleanGeneratedStoryText(text: string, provider: Provider, model: string, rawResponse: unknown) {
+  private cleanGeneratedStoryText(
+    text: string,
+    provider: Provider,
+    model: string,
+    rawResponse: unknown,
+  ) {
     const trimmed = text.trim();
     if (!trimmed) {
       throw new AiJobError(
         "AI_PROVIDER_FAILED",
         "AI returned empty Story Content.",
         { provider, model },
-        rawResponse
+        rawResponse,
       );
     }
     return trimmed;
   }
 
-  private buildTemplateSelectionProviderRequest(provider: Provider, model: string, prompt: string): ProviderRequest {
+  private buildTemplateSelectionProviderRequest(
+    provider: Provider,
+    model: string,
+    prompt: string,
+  ): ProviderRequest {
     if (this.isGeminiProvider(provider)) {
       return {
         provider,
@@ -1423,19 +1747,19 @@ export class ProjectsController {
         url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         headers: {
           "content-type": "application/json",
-          "x-goog-api-key": "[REDACTED]"
+          "x-goog-api-key": "[REDACTED]",
         },
         body: {
           contents: [
             {
-              parts: [{ text: prompt }]
-            }
+              parts: [{ text: prompt }],
+            },
           ],
           generationConfig: {
             responseMimeType: "application/json",
-            responseJsonSchema: templateSelectionJsonSchema
-          }
-        }
+            responseJsonSchema: templateSelectionJsonSchema,
+          },
+        },
       };
     }
 
@@ -1447,7 +1771,7 @@ export class ProjectsController {
         url: "https://api.openai.com/v1/responses",
         headers: {
           authorization: "Bearer [REDACTED]",
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
         body: {
           model,
@@ -1457,21 +1781,25 @@ export class ProjectsController {
               type: "json_schema",
               name: "template_option_selection",
               strict: true,
-              schema: openAiTemplateSelectionJsonSchema
-            }
-          }
-        }
+              schema: openAiTemplateSelectionJsonSchema,
+            },
+          },
+        },
       };
     }
 
     throw new AiJobError(
       "AI_PROVIDER_FAILED",
       `Provider ${provider} cannot analyze template options.`,
-      { provider, model }
+      { provider, model },
     );
   }
 
-  private async callTemplateSelectionProvider(provider: Provider, model: string, rawRequest: ProviderRequest) {
+  private async callTemplateSelectionProvider(
+    provider: Provider,
+    model: string,
+    rawRequest: ProviderRequest,
+  ) {
     if (this.isGeminiProvider(provider)) {
       return this.callGeminiForTemplateSelection(model, rawRequest);
     }
@@ -1484,11 +1812,14 @@ export class ProjectsController {
       "AI_PROVIDER_FAILED",
       `Provider ${provider} cannot analyze template options.`,
       { provider, model },
-      rawRequest
+      rawRequest,
     );
   }
 
-  private async callGeminiForTemplateSelection(model: string, rawRequest: ProviderRequest) {
+  private async callGeminiForTemplateSelection(
+    model: string,
+    rawRequest: ProviderRequest,
+  ) {
     const resolvedKey = await resolveProviderApiKey(rawRequest.provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
@@ -1496,7 +1827,7 @@ export class ProjectsController {
         "AI_CONFIG_MISSING",
         `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key in Admin > AI Config.`,
         { provider: rawRequest.provider, model },
-        rawRequest
+        rawRequest,
       );
     }
 
@@ -1504,9 +1835,9 @@ export class ProjectsController {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-goog-api-key": apiKey
+        "x-goog-api-key": apiKey,
       },
-      body: JSON.stringify(rawRequest.body)
+      body: JSON.stringify(rawRequest.body),
     });
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1517,7 +1848,7 @@ export class ProjectsController {
           ? `Gemini template option analysis is rate limited or out of quota (status ${response.status}).`
           : `Gemini template option analysis failed with status ${response.status}.`,
         { provider: rawRequest.provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
@@ -1525,7 +1856,10 @@ export class ProjectsController {
     return this.parseTemplateSelectionJson(text, rawRequest.provider, model);
   }
 
-  private async callOpenAiForTemplateSelection(model: string, rawRequest: ProviderRequest) {
+  private async callOpenAiForTemplateSelection(
+    model: string,
+    rawRequest: ProviderRequest,
+  ) {
     const resolvedKey = await resolveProviderApiKey(rawRequest.provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
@@ -1533,7 +1867,7 @@ export class ProjectsController {
         "AI_CONFIG_MISSING",
         `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key in Admin > AI Config.`,
         { provider: rawRequest.provider, model },
-        rawRequest
+        rawRequest,
       );
     }
 
@@ -1541,9 +1875,9 @@ export class ProjectsController {
       method: "POST",
       headers: {
         authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
+        "content-type": "application/json",
       },
-      body: JSON.stringify(rawRequest.body)
+      body: JSON.stringify(rawRequest.body),
     });
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1554,7 +1888,7 @@ export class ProjectsController {
           ? `ChatGPT template option analysis is rate limited or out of quota (status ${response.status}).`
           : `ChatGPT template option analysis failed with status ${response.status}.`,
         { provider: rawRequest.provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
@@ -1562,15 +1896,24 @@ export class ProjectsController {
     return this.parseTemplateSelectionJson(text, rawRequest.provider, model);
   }
 
-  private parseTemplateSelectionJson(text: string, provider: Provider, model: string) {
-    const rawResponse = this.parseProviderJson(text, provider, model, "scenario analysis");
+  private parseTemplateSelectionJson(
+    text: string,
+    provider: Provider,
+    model: string,
+  ) {
+    const rawResponse = this.parseProviderJson(
+      text,
+      provider,
+      model,
+      "scenario analysis",
+    );
     const parsed = aiTemplateSelectionSchema.safeParse(rawResponse);
     if (!parsed.success) {
       throw new AiJobError(
         "AI_PROVIDER_FAILED",
         "AI returned JSON that does not match the template selection contract.",
         { provider, model, issues: parsed.error.issues },
-        rawResponse
+        rawResponse,
       );
     }
     return parsed.data;
@@ -1578,7 +1921,11 @@ export class ProjectsController {
 
   private normalizeTemplateSelection(
     rawResponse: ParsedTemplateSelection,
-    template: { templateId: string; templateName: string; attributes: TemplateAttribute[] }
+    template: {
+      templateId: string;
+      templateName: string;
+      attributes: TemplateAttribute[];
+    },
   ): TemplateSelection {
     const selectedAttributes = template.attributes
       .map((attribute) => {
@@ -1592,22 +1939,26 @@ export class ProjectsController {
         });
 
         const selectedIds = new Set(
-          (aiAttribute?.selectedOptionIds ?? []).map((optionId) => optionId.trim())
+          (aiAttribute?.selectedOptionIds ?? []).map((optionId) =>
+            optionId.trim(),
+          ),
         );
         const selectedLabels = new Set(
-          (aiAttribute?.selectedOptionLabels ?? []).map((label) => label.trim().toLowerCase())
+          (aiAttribute?.selectedOptionLabels ?? []).map((label) =>
+            label.trim().toLowerCase(),
+          ),
         );
         const options = attribute.options.filter(
           (option) =>
             selectedIds.has(option.id) ||
             selectedLabels.has(option.label.toLowerCase()) ||
-            selectedLabels.has(option.value.toLowerCase())
+            selectedLabels.has(option.value.toLowerCase()),
         );
 
         return {
           id: attribute.id,
           name: attribute.name,
-          options
+          options,
         };
       })
       .filter((attribute) => attribute.options.length > 0);
@@ -1615,7 +1966,7 @@ export class ProjectsController {
     return {
       templateId: template.templateId,
       templateName: template.templateName,
-      attributes: selectedAttributes
+      attributes: selectedAttributes,
     };
   }
 
@@ -1627,7 +1978,7 @@ export class ProjectsController {
     return selection.attributes
       .map(
         (attribute) =>
-          `${attribute.id}=${attribute.options.map((option) => option.label).join(",")};`
+          `${attribute.id}=${attribute.options.map((option) => option.label).join(",")};`,
       )
       .join("\n");
   }
@@ -1639,7 +1990,7 @@ export class ProjectsController {
     scenarioAttributes: VideoShotAttribute[],
     shotsAttributes: VideoShotAttribute[],
     config: AiConfig,
-    masterPrompt?: string
+    masterPrompt?: string,
   ): Promise<GenerateShotsJobResult> {
     const provider = config.promptProvider;
     const model = config.promptModel;
@@ -1649,13 +2000,13 @@ export class ProjectsController {
       attributes,
       scenarioAttributes,
       shotsAttributes,
-      config.shotGenerationOutputFormat
+      config.shotGenerationOutputFormat,
     );
     const rawResponse = await this.callShotProvider(provider, model, prompt);
     const shotPlan = this.normalizeAiShotPlan(rawResponse, {
       projectId,
       sourceText,
-      attributes
+      attributes,
     });
 
     return {
@@ -1663,11 +2014,15 @@ export class ProjectsController {
       rawRequest: { prompt },
       rawResponse,
       provider,
-      model
+      model,
     };
   }
 
-  private async callShotProvider(provider: Provider, model: string, prompt: string) {
+  private async callShotProvider(
+    provider: Provider,
+    model: string,
+    prompt: string,
+  ) {
     if (this.isGeminiProvider(provider)) {
       return this.callGeminiForShots(provider, model, prompt);
     }
@@ -1679,18 +2034,22 @@ export class ProjectsController {
     throw new AiJobError(
       "AI_PROVIDER_FAILED",
       `Provider ${provider} cannot generate prompt shots.`,
-      { provider, model }
+      { provider, model },
     );
   }
 
-  private async callGeminiForShots(provider: Provider, model: string, prompt: string) {
+  private async callGeminiForShots(
+    provider: Provider,
+    model: string,
+    prompt: string,
+  ) {
     const resolvedKey = await resolveProviderApiKey(provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
         `Missing API key for ${provider} shot generation. Save a provider key in Admin > AI Config.`,
-        { provider, model }
+        { provider, model },
       );
     }
 
@@ -1700,20 +2059,20 @@ export class ProjectsController {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-goog-api-key": apiKey
+          "x-goog-api-key": apiKey,
         },
         body: JSON.stringify({
           contents: [
             {
-              parts: [{ text: prompt }]
-            }
+              parts: [{ text: prompt }],
+            },
           ],
           generationConfig: {
             responseMimeType: "application/json",
-            responseJsonSchema: shotPlanJsonSchema
-          }
-        })
-      }
+            responseJsonSchema: shotPlanJsonSchema,
+          },
+        }),
+      },
     );
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1722,7 +2081,7 @@ export class ProjectsController {
         "AI_PROVIDER_FAILED",
         `Gemini shot generation failed with status ${response.status}.`,
         { provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
@@ -1730,14 +2089,18 @@ export class ProjectsController {
     return this.parseProviderJson(text, provider, model, "shot generation");
   }
 
-  private async callOpenAiForShots(provider: Provider, model: string, prompt: string) {
+  private async callOpenAiForShots(
+    provider: Provider,
+    model: string,
+    prompt: string,
+  ) {
     const resolvedKey = await resolveProviderApiKey(provider);
     const apiKey = resolvedKey.apiKey;
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
         `Missing API key for ${provider} shot generation. Save a provider key in Admin > AI Config.`,
-        { provider, model }
+        { provider, model },
       );
     }
 
@@ -1745,7 +2108,7 @@ export class ProjectsController {
       method: "POST",
       headers: {
         authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
+        "content-type": "application/json",
       },
       body: JSON.stringify({
         model,
@@ -1754,10 +2117,10 @@ export class ProjectsController {
           format: {
             type: "json_schema",
             name: "video_shot_plan",
-            schema: shotPlanJsonSchema
-          }
-        }
-      })
+            schema: shotPlanJsonSchema,
+          },
+        },
+      }),
     });
 
     const providerPayload = await this.readProviderPayload(response);
@@ -1766,7 +2129,7 @@ export class ProjectsController {
         "AI_PROVIDER_FAILED",
         `ChatGPT shot generation failed with status ${response.status}.`,
         { provider, model, status: response.status },
-        providerPayload
+        providerPayload,
       );
     }
 
@@ -1792,7 +2155,7 @@ export class ProjectsController {
     attributes: VideoShotAttribute[],
     scenarioAttributes: VideoShotAttribute[],
     shotsAttributes: VideoShotAttribute[],
-    outputFormat: string | null | undefined
+    outputFormat: string | null | undefined,
   ) {
     const attributeText = attributes
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
@@ -1806,27 +2169,36 @@ export class ProjectsController {
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
       .map((attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`)
       .join("\n");
-    const masterPrompt = this.requirePrompt(configuredPrompt, "Shots master prompt");
-    const renderedPrompt = this.renderOptionalPromptPlaceholders(
-      masterPrompt,
-      {
-        story: sourceText,
-        attributes: attributeText,
-        scenarioAttributes: scenarioAttributeText,
-        shotsAttributes: shotsAttributeText,
-        outputFormat: outputFormat ?? ""
-      }
+    const masterPrompt = this.requirePrompt(
+      configuredPrompt,
+      "Shots master prompt",
     );
+    const renderedPrompt = this.renderOptionalPromptPlaceholders(masterPrompt, {
+      story: sourceText,
+      attributes: attributeText,
+      scenarioAttributes: scenarioAttributeText,
+      shotsAttributes: shotsAttributeText,
+      outputFormat: outputFormat ?? "",
+    });
     return renderedPrompt;
   }
 
-  private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {
-    if (template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) && !values.outputFormat?.trim()) {
-      throw new AiJobError("VALIDATION_ERROR", "Output Format is required before using {outputFormat}.");
+  private renderOptionalPromptPlaceholders(
+    template: string,
+    values: Record<string, string>,
+  ) {
+    if (
+      template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) &&
+      !values.outputFormat?.trim()
+    ) {
+      throw new AiJobError(
+        "VALIDATION_ERROR",
+        "Output Format is required before using {outputFormat}.",
+      );
     }
     return Object.entries(values).reduce(
       (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
-      template
+      template,
     );
   }
 
@@ -1860,7 +2232,7 @@ export class ProjectsController {
         "AI_PROVIDER_FAILED",
         `Gemini did not return JSON text for ${operation}.`,
         { provider: "gemini" },
-        payload
+        payload,
       );
     }
 
@@ -1869,7 +2241,10 @@ export class ProjectsController {
 
   private extractOpenAiText(payload: unknown, operation: string) {
     const payloadRecord = this.toRecord(payload);
-    if (typeof payloadRecord.output_text === "string" && payloadRecord.output_text.trim()) {
+    if (
+      typeof payloadRecord.output_text === "string" &&
+      payloadRecord.output_text.trim()
+    ) {
       return payloadRecord.output_text.trim();
     }
 
@@ -1886,14 +2261,19 @@ export class ProjectsController {
         "AI_PROVIDER_FAILED",
         `ChatGPT did not return JSON text for ${operation}.`,
         { provider: "chatgpt" },
-        payload
+        payload,
       );
     }
 
     return text;
   }
 
-  private parseProviderJson(text: string, provider: Provider, model: string, operation: string) {
+  private parseProviderJson(
+    text: string,
+    provider: Provider,
+    model: string,
+    operation: string,
+  ) {
     const trimmed = text.trim();
     try {
       return JSON.parse(trimmed) as unknown;
@@ -1912,7 +2292,7 @@ export class ProjectsController {
       "AI_PROVIDER_FAILED",
       `AI returned invalid JSON for ${operation}.`,
       { provider, model },
-      trimmed.slice(0, 4000)
+      trimmed.slice(0, 4000),
     );
   }
 
@@ -1936,7 +2316,7 @@ export class ProjectsController {
         escaped = true;
         continue;
       }
-      if (char === "\"") {
+      if (char === '"') {
         inString = !inString;
         continue;
       }
@@ -1963,7 +2343,7 @@ export class ProjectsController {
       projectId: string;
       sourceText: string;
       attributes: VideoShotAttribute[];
-    }
+    },
   ): VideoShotPlan {
     const candidate = this.unwrapShotPlanCandidate(rawResponse);
     const parsed = aiShotPlanSchema.safeParse(candidate);
@@ -1972,7 +2352,7 @@ export class ProjectsController {
         "AI_PROVIDER_FAILED",
         "AI returned JSON that does not match the shot plan contract.",
         { issues: parsed.success ? [] : parsed.error.issues },
-        rawResponse
+        rawResponse,
       );
     }
 
@@ -1983,7 +2363,7 @@ export class ProjectsController {
       const attributes = this.validateRequiredStateAttributes(
         this.normalizeAiShotAttributes(shot.attributes, index),
         index,
-        rawResponse
+        rawResponse,
       );
 
       return {
@@ -1992,7 +2372,7 @@ export class ProjectsController {
         description: this.cleanText(shot.description),
         durationSeconds: shot.durationSeconds,
         attributes,
-        mediaIds: []
+        mediaIds: [],
       };
     });
 
@@ -2008,7 +2388,7 @@ export class ProjectsController {
       isDefault: false,
       status: "active",
       createdAt: now.toISOString(),
-      updatedAt: now.toISOString()
+      updatedAt: now.toISOString(),
     };
   }
 
@@ -2028,34 +2408,33 @@ export class ProjectsController {
 
   private normalizeAiShotAttributes(
     attributes: ParsedProviderShotPlan["shots"][number]["attributes"],
-    shotIndex: number
+    shotIndex: number,
   ): VideoShotAttribute[] {
-    return attributes
-      .map((attribute, index) => {
-        const name = this.cleanText(attribute.name);
-        const value = this.cleanText(attribute.value);
+    return attributes.map((attribute, index) => {
+      const name = this.cleanText(attribute.name);
+      const value = this.cleanText(attribute.value);
 
-        return {
-          id: `shot_${shotIndex + 1}_${this.slug(name)}_${index + 1}`,
-          name,
-          value
-        };
-      });
+      return {
+        id: `shot_${shotIndex + 1}_${this.slug(name)}_${index + 1}`,
+        name,
+        value,
+      };
+    });
   }
 
   private validateRequiredStateAttributes(
     attributes: VideoShotAttribute[],
     shotIndex: number,
-    rawResponse: unknown
+    rawResponse: unknown,
   ) {
     const hasStartState = attributes.some((attribute) =>
-      this.isNamedAttribute(attribute, "Start state")
+      this.isNamedAttribute(attribute, "Start state"),
     );
     const hasEndState = attributes.some((attribute) =>
-      this.isNamedAttribute(attribute, "End state")
+      this.isNamedAttribute(attribute, "End state"),
     );
     const hasDialogue = attributes.some((attribute) =>
-      this.isNamedAttribute(attribute, "Dialogue")
+      this.isNamedAttribute(attribute, "Dialogue"),
     );
     if (!hasStartState || !hasEndState || !hasDialogue) {
       throw new AiJobError(
@@ -2063,23 +2442,29 @@ export class ProjectsController {
         `AI shot ${shotIndex + 1} is missing required Start state, End state, or Dialogue attributes.`,
         {
           shotIndex: shotIndex + 1,
-          requiredAttributes: ["Start state", "End state", "Dialogue"]
+          requiredAttributes: ["Start state", "End state", "Dialogue"],
         },
-        rawResponse
+        rawResponse,
       );
     }
 
     return attributes;
   }
 
-  private isNamedAttribute(attribute: VideoShotAttribute, expectedName: string) {
+  private isNamedAttribute(
+    attribute: VideoShotAttribute,
+    expectedName: string,
+  ) {
     return attribute.name.trim().toLowerCase() === expectedName.toLowerCase();
   }
 
   private cleanText(value: string) {
     const trimmed = value.replace(/\s+/g, " ").trim();
     if (!trimmed) {
-      throw new AiJobError("AI_PROVIDER_FAILED", "AI returned an empty required text field.");
+      throw new AiJobError(
+        "AI_PROVIDER_FAILED",
+        "AI returned an empty required text field.",
+      );
     }
     return trimmed;
   }
@@ -2087,7 +2472,10 @@ export class ProjectsController {
   private requirePrompt(value: string | null | undefined, label: string) {
     const prompt = value?.trim();
     if (!prompt) {
-      throw new AiJobError("AI_CONFIG_MISSING", `${label} is required. Configure it in Admin > Master Prompt.`);
+      throw new AiJobError(
+        "AI_CONFIG_MISSING",
+        `${label} is required. Configure it in Admin > Master Prompt.`,
+      );
     }
     return prompt;
   }
@@ -2099,7 +2487,10 @@ export class ProjectsController {
       .replace(/^_+|_+$/g, "")
       .slice(0, 48);
     if (!slug) {
-      throw new AiJobError("AI_PROVIDER_FAILED", "AI returned an attribute name that cannot be used as an id.");
+      throw new AiJobError(
+        "AI_PROVIDER_FAILED",
+        "AI returned an attribute name that cannot be used as an id.",
+      );
     }
     return slug;
   }
@@ -2112,7 +2503,7 @@ export class ProjectsController {
     return [
       `${mediaIds.length} valid media file(s) attached.`,
       "Use the uploaded media to reference product framing, palette, pacing, and visual style.",
-      "Do not copy reference media directly; use it only as visual direction."
+      "Do not copy reference media directly; use it only as visual direction.",
     ];
   }
 
@@ -2120,7 +2511,10 @@ export class ProjectsController {
     try {
       return new URL(productUrl).hostname;
     } catch {
-      throw new AiJobError("VALIDATION_ERROR", "productUrl must be a valid URL.");
+      throw new AiJobError(
+        "VALIDATION_ERROR",
+        "productUrl must be a valid URL.",
+      );
     }
   }
 
@@ -2129,13 +2523,21 @@ export class ProjectsController {
     try {
       url = new URL(productUrl);
     } catch {
-      throw new AiJobError("VALIDATION_ERROR", "productUrl must be a valid product URL.");
+      throw new AiJobError(
+        "VALIDATION_ERROR",
+        "productUrl must be a valid product URL.",
+      );
     }
-    const rawSegment = decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
+    const rawSegment = decodeURIComponent(
+      url.pathname.split("/").filter(Boolean)[0] ?? "",
+    );
     const titleSource = rawSegment.split("-i.")[0] ?? rawSegment;
     const title = titleSource.replace(/-/g, " ").replace(/\s+/g, " ").trim();
     if (!title) {
-      throw new AiJobError("VALIDATION_ERROR", "productUrl must include a product path segment.");
+      throw new AiJobError(
+        "VALIDATION_ERROR",
+        "productUrl must include a product path segment.",
+      );
     }
     return title;
   }
@@ -2156,13 +2558,13 @@ export class ProjectsController {
       return {
         code: error.code,
         message: error.message,
-        ...(error.details ? { details: error.details } : {})
+        ...(error.details ? { details: error.details } : {}),
       };
     }
 
     return {
       code: "INTERNAL_ERROR",
-      message: error instanceof Error ? error.message : "AI job failed."
+      message: error instanceof Error ? error.message : "AI job failed.",
     };
   }
 
@@ -2185,7 +2587,9 @@ export class ProjectsController {
 
   private extractShotPlanAttributes(value: unknown): VideoShotAttribute[] {
     const payload = this.toRecord(value);
-    const parsed = VideoShotAttributeSchema.array().safeParse(payload.attributes);
+    const parsed = VideoShotAttributeSchema.array().safeParse(
+      payload.attributes,
+    );
     return parsed.success ? parsed.data : [];
   }
 
@@ -2194,38 +2598,54 @@ export class ProjectsController {
     return parsed.success ? parsed.data : [];
   }
 
-  private extractAttributeSelection(value: unknown, type: "story" | "scenario" | "shots"): AttributeSelection | null {
+  private extractAttributeSelection(
+    value: unknown,
+    type: "story" | "scenario" | "shots",
+  ): AttributeSelection | null {
     const payload = this.toRecord(value);
     const selections = this.toRecord(payload.attributeSelections ?? payload);
-    const parsed = z.object({
-      catalogId: z.string(),
-      catalogName: z.string(),
-      type: z.literal(type),
-      attributes: z.array(z.object({
-        id: z.string(),
-        name: z.string(),
-        required: z.boolean().default(false),
-        options: z.array(z.object({
-          id: z.string(),
-          name: z.string(),
-          description: z.string().optional()
-        }))
-      }))
-    }).safeParse(selections[type]);
+    const parsed = z
+      .object({
+        catalogId: z.string(),
+        catalogName: z.string(),
+        type: z.literal(type),
+        attributes: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            required: z.boolean().default(false),
+            options: z.array(
+              z.object({
+                id: z.string(),
+                name: z.string(),
+                description: z.string().optional(),
+              }),
+            ),
+          }),
+        ),
+      })
+      .safeParse(selections[type]);
     return parsed.success ? parsed.data : null;
   }
 
-  private formatAttributeSelectionCompact(selection: AttributeSelection | null) {
+  private formatAttributeSelectionCompact(
+    selection: AttributeSelection | null,
+  ) {
     if (!selection) {
       return "";
     }
     return selection.attributes
       .filter((attribute) => attribute.options.length > 0)
-      .map((attribute) => `${attribute.id}=${attribute.options.map((option) => option.name).join(",")};`)
+      .map(
+        (attribute) =>
+          `${attribute.id}=${attribute.options.map((option) => option.name).join(",")};`,
+      )
       .join("\n");
   }
 
-  private templateSelectionToAttributeSelection(value: unknown): AttributeSelection | null {
+  private templateSelectionToAttributeSelection(
+    value: unknown,
+  ): AttributeSelection | null {
     const parsed = TemplateSelectionSchema.safeParse(value);
     if (!parsed.success) {
       return null;
@@ -2241,9 +2661,9 @@ export class ProjectsController {
         options: attribute.options.map((option) => ({
           id: option.id,
           name: option.label,
-          ...(option.description ? { description: option.description } : {})
-        }))
-      }))
+          ...(option.description ? { description: option.description } : {}),
+        })),
+      })),
     };
   }
 
@@ -2252,19 +2672,21 @@ export class ProjectsController {
       where: {
         id: projectId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
     return this.toRecord(project?.attributeSelections);
   }
 
-  private async resolveScenarioCatalog(catalogId?: string): Promise<AttributeCatalog> {
+  private async resolveScenarioCatalog(
+    catalogId?: string,
+  ): Promise<AttributeCatalog> {
     if (catalogId) {
       const catalog = await prisma.scenarioAttributeCatalog.findFirst({
         where: {
           id: catalogId,
-          status: "active"
-        }
+          status: "active",
+        },
       });
       if (catalog) {
         return {
@@ -2272,22 +2694,28 @@ export class ProjectsController {
           type: "scenario",
           name: catalog.name,
           ...(catalog.description ? { description: catalog.description } : {}),
-          attributes: AttributeCatalogAttributeSchema.array().parse(catalog.attributes),
+          attributes: AttributeCatalogAttributeSchema.array().parse(
+            catalog.attributes,
+          ),
           isDefault: catalog.isDefault,
           status: catalog.status === "archived" ? "archived" : "active",
           createdAt: catalog.createdAt.toISOString(),
-          updatedAt: catalog.updatedAt.toISOString()
+          updatedAt: catalog.updatedAt.toISOString(),
         };
       }
     }
     const defaultCatalog = await getDefaultAttributeCatalog("scenario");
     if (!defaultCatalog) {
-      throw new BadRequestException("Default Scenario attribute catalog is missing.");
+      throw new BadRequestException(
+        "Default Scenario attribute catalog is missing.",
+      );
     }
     return defaultCatalog;
   }
 
-  private catalogAttributesToTemplateAttributes(catalog: AttributeCatalog | null): TemplateAttribute[] {
+  private catalogAttributesToTemplateAttributes(
+    catalog: AttributeCatalog | null,
+  ): TemplateAttribute[] {
     if (!catalog) {
       return [];
     }
@@ -2300,8 +2728,8 @@ export class ProjectsController {
         id: option.id,
         label: option.name,
         value: option.name,
-        ...(option.description ? { description: option.description } : {})
-      }))
+        ...(option.description ? { description: option.description } : {}),
+      })),
     }));
   }
 
@@ -2316,16 +2744,20 @@ export class ProjectsController {
         id: { in: uniqueMediaIds },
         projectId,
         ownerUserId: defaultUserId,
-        status: "validated"
-      }
+        status: "validated",
+      },
     });
 
     if (count !== uniqueMediaIds.length) {
-      throw new BadRequestException("One or more media files are missing, rejected, or deleted.");
+      throw new BadRequestException(
+        "One or more media files are missing, rejected, or deleted.",
+      );
     }
   }
 
-  private async validateTemplateSelection(templateSelection: TemplateSelection | null) {
+  private async validateTemplateSelection(
+    templateSelection: TemplateSelection | null,
+  ) {
     if (!templateSelection) {
       return;
     }
@@ -2334,19 +2766,21 @@ export class ProjectsController {
       where: {
         id: templateSelection.templateId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
 
     if (!template) {
       const catalog = await prisma.scenarioAttributeCatalog.findFirst({
         where: {
           id: templateSelection.templateId,
-          status: "active"
-        }
+          status: "active",
+        },
       });
       if (!catalog) {
-        throw new BadRequestException("Scenario catalog is missing or archived.");
+        throw new BadRequestException(
+          "Scenario catalog is missing or archived.",
+        );
       }
     }
   }
@@ -2360,8 +2794,8 @@ export class ProjectsController {
       where: {
         id: shotSelection.shotPlanId,
         ownerUserId: defaultUserId,
-        status: "active"
-      }
+        status: "active",
+      },
     });
 
     if (!shotPlan) {
@@ -2369,17 +2803,23 @@ export class ProjectsController {
     }
   }
 
-  private async assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined) {
+  private async assertUserPromptOverrideAllowed(
+    masterPrompt: string | null | undefined,
+  ) {
     try {
       assertNoMasterPromptAttributePlaceholder(masterPrompt);
     } catch (error) {
-      throw new BadRequestException(error instanceof Error ? error.message : "Invalid master prompt override.");
+      throw new BadRequestException(
+        error instanceof Error
+          ? error.message
+          : "Invalid master prompt override.",
+      );
     }
     if (masterPrompt?.trim()) {
       const config = await getActiveAiConfig();
       if (!config.showUserMasterPrompts) {
         throw new BadRequestException(
-          "Temporary master prompt overrides are disabled by Admin Site Config."
+          "Temporary master prompt overrides are disabled by Admin Site Config.",
         );
       }
     }
@@ -2393,7 +2833,10 @@ export class ProjectsController {
 
     const selections = parsed.data.attributes
       .filter((attribute) => attribute.options.length > 0)
-      .map((attribute) => `${attribute.name}: ${attribute.options.map((option) => option.label).join(", ")}`);
+      .map(
+        (attribute) =>
+          `${attribute.name}: ${attribute.options.map((option) => option.label).join(", ")}`,
+      );
 
     if (selections.length === 0) {
       return "";
@@ -2401,8 +2844,24 @@ export class ProjectsController {
 
     return [
       `Template attributes: ${parsed.data.templateName}`,
-      ...selections.map((selection) => `- ${selection}`)
+      ...selections.map((selection) => `- ${selection}`),
     ].join("\n");
+  }
+
+  private async requireActiveProject(projectId: string) {
+    const project = await prisma.projectRecord.findFirst({
+      where: {
+        id: projectId,
+        ownerUserId: defaultUserId,
+        status: "active",
+      },
+    });
+
+    if (!project) {
+      throw new BadRequestException("Project is missing or archived.");
+    }
+
+    return project;
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

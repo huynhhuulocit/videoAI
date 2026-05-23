@@ -1,0 +1,5 @@
+dist/
+packages/
+*.crx
+*.zip
+*.tar.gz

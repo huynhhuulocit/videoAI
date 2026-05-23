@@ -16,6 +16,7 @@ import {
   SHOT_PROMPT_REQUIRED_PLACEHOLDERS,
   TestProviderConnectionRequestSchema,
   UpdateAiConfigRequestSchema,
+  UpdateAiHandoffDomConfigRequestSchema,
   UpdateMasterPromptRequestSchema,
   UpdateMasterPromptAttributeConfigRequestSchema,
   UpdateShotPromptRequestSchema
@@ -62,6 +63,29 @@ export class AdminController {
       config = await getActiveAiConfig();
     }
     return ok(config);
+  }
+
+  @Patch("ai-config/ai-handoff-dom")
+  async patchAiHandoffDomConfig(@Body() rawBody: unknown) {
+    const body = UpdateAiHandoffDomConfigRequestSchema.parse(rawBody);
+    const activeConfig = await prisma.aiSiteConfig.findFirstOrThrow({
+      where: { isActive: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (body.provider !== activeConfig.aiHandoffProvider) {
+      throw new BadRequestException(
+        "AI Handoff provider must match the active Admin AI Config provider.",
+      );
+    }
+    const config = await prisma.aiSiteConfig.update({
+      where: { id: activeConfig.id },
+      data: { aiHandoffPromptSelector: body.promptSelector.trim() },
+    });
+    return ok({
+      provider: config.aiHandoffProvider,
+      promptSelector: config.aiHandoffPromptSelector,
+      updatedAt: config.updatedAt.toISOString(),
+    });
   }
 
   @Put("ai-config/provider-keys/:provider")
@@ -216,6 +240,9 @@ export class AdminController {
       defaultScriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
       scriptGenerationIsDefault: scriptsPrompt.isBuiltIn,
       showUserMasterPrompts: config.showUserMasterPrompts,
+      aiHandoffProvider: config.aiHandoffProvider,
+      aiHandoffTargetUrl: config.aiHandoffTargetUrl,
+      aiHandoffPromptSelector: config.aiHandoffPromptSelector,
       updatedAt: config.updatedAt.toISOString()
     });
   }
@@ -268,6 +295,9 @@ export class AdminController {
       defaultScriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
       scriptGenerationIsDefault: false,
       showUserMasterPrompts: config.showUserMasterPrompts,
+      aiHandoffProvider: config.aiHandoffProvider,
+      aiHandoffTargetUrl: config.aiHandoffTargetUrl,
+      aiHandoffPromptSelector: config.aiHandoffPromptSelector,
       updatedAt: config.updatedAt.toISOString()
     });
   }

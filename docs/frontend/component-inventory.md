@@ -185,6 +185,7 @@ Purpose:
 - Allow admin to manage site-wide prompt/video behavior and provider credentials.
 - `AiConfigForm` renders `Content mode`, `Site Config`, `Prompt provider/model`, and `Video provider/model` as a single-column set of collapsed sections by default. The form manages prompt/video provider keys, shows `configured`/`missing` status, saves config plus any newly entered keys through the shared `Save configuration` button at the top-right and bottom-right of the form, and tests provider/model connectivity through `POST /api/v1/admin/ai-config/test-connection`.
 - `AiConfigForm` also renders a `Site Config` section with `Show master prompts in user workspace`. The default is `No`; when disabled, Project and One Click hide editable master prompt textareas while keeping `Prompt` preview buttons visible.
+- `AiConfigForm` renders a read-only `JS DOM detector script` under Site Config > AI Handoff with a `Copy script` action. This lets admins reuse the console helper that exports prompt input and Generate button selectors from an allowlisted AI target page, including `bestSelector`, `.class`-only `classPath`, and `tagClassPath`; the script is not executed by the app and does not change runtime handoff behavior by itself.
 - Allow admin to manage `Story Content`, `Scenario`, `Shots`, and `Shot` master prompts from list-only child routes: `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, and `/admin/shot/master-prompt`. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in rows open `/new?source=built-in` so `Save` creates a persisted prompt instead of editing built-in content. The persisted type key for Story Content remains `scripts` for API compatibility. Prompt content keeps a recommended placeholder format, but placeholders are optional when saving.
 - Admin `Master Prompt` content editing uses `MasterPromptField` for both `Prompt content` and the separate `Output Format placeholder` textarea. `{outputFormat}` is inserted only when the prompt content contains that token.
 - `MasterPromptConfigManager` renders the admin-only global Master Prompt Config page. It provides a synchronized JSON textarea and visual attribute/option editor.
@@ -294,6 +295,7 @@ Install or generate these first:
 - Keep API calls out of presentational components.
 - Keep form validation schemas colocated with form modules or in shared contracts.
 - Keep generated prompt/video job state in query hooks or feature-level hooks.
+
 ## 11. Attribute Catalog Components
 
 - Admin attribute pages use shared Story, Scenario, Shots, and Shot catalog components.
@@ -303,3 +305,15 @@ Install or generate these first:
 - Attribute Generation Prompt is not a Master Prompt. It only creates catalog JSON.
 - Project and One Click use the same attribute selection pattern for Story, Scenario, Shots, and per-shot Shot: required attributes keep one selected option; optional attributes may be empty.
 - Master Prompt placeholder autocomplete should list the explicit attribute placeholders for the active prompt type.
+
+## 12. AI Handoff Components
+
+- `AiHandoffInstallCard` appears on the public Home page and owns install/status copy for the Chrome extension.
+- The card exposes `Install extension` and `Check installed`; install navigates the current tab to the Chrome Web Store listing to avoid popup blockers, and check uses Chrome external messaging.
+- If the Chrome Web Store URL is not configured, the install action is disabled and the card shows local developer-mode guidance: load `apps/chrome-extension/dist` from `chrome://extensions`, reload the extension after each build, then click `Check installed`.
+- Admin AI Config stores the AI Handoff prompt selector. The extension popup owns the normal maintenance flow: `Check DOM` captures the live Flow prompt input, saves the selector to Admin config, `Test fill` inserts hardcoded text without clicking Generate, and `Copy selector report` copies debug metadata. The legacy copyable JS DOM detector script remains a manual debugging helper.
+- Project Step 4 shot cards include an `AI Handoff` button beside `Prompt` and `Create video`.
+- `AI Handoff` uses the same rendered shot prompt as the prompt popup, reads provider/target URL/prompt selector from Admin AI Config, creates a handoff record, sends one message to the extension, and shows inline success/error state.
+- If the saved target URL is missing or invalid, the shot card shows a clear configuration error and does not open a fallback URL.
+- Extension popup/settings live in `apps/chrome-extension` and show extension status, current target support, and last handoff result.
+- No component should expose provider cookies, passwords, API keys, or auto-upload reference media in AI Handoff v1.

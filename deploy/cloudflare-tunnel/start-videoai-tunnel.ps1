@@ -242,6 +242,8 @@ $SiteGateEnabled = $TunnelEnv["SITE_GATE_ENABLED"]
 $SiteGateUsername = $TunnelEnv["SITE_GATE_USERNAME"]
 $SiteGatePassword = $TunnelEnv["SITE_GATE_PASSWORD"]
 $SiteGateSecret = $TunnelEnv["SITE_GATE_SECRET"]
+$AiHandoffProvider = $TunnelEnv["AI_HANDOFF_PROVIDER"]
+$AiHandoffTargetUrl = $TunnelEnv["AI_HANDOFF_TARGET_URL"]
 
 if (-not $TunnelName) { throw "TUNNEL_NAME is required in $EnvFile." }
 if (-not $Hostname -or $Hostname -eq "videoai.example.com") {
@@ -252,6 +254,7 @@ if (-not $WebLocalUrl) { $WebLocalUrl = "http://localhost:3000" }
 if (-not $ApiLocalUrl) { $ApiLocalUrl = "http://localhost:4000" }
 if (-not $SiteGateEnabled) { $SiteGateEnabled = "true" }
 if (-not $SiteGateUsername) { $SiteGateUsername = "videoai" }
+if (-not $AiHandoffProvider) { $AiHandoffProvider = "google-flow-veo" }
 
 if ($SiteGateEnabled -eq "true") {
   if (-not $SiteGatePassword -or $SiteGatePassword -eq "change-me-site-gate-password") {
@@ -278,6 +281,10 @@ Set-DotEnvValue -Path $RootEnvFile -Key "SITE_GATE_ENABLED" -Value $SiteGateEnab
 Set-DotEnvValue -Path $RootEnvFile -Key "SITE_GATE_USERNAME" -Value $SiteGateUsername
 Set-DotEnvValue -Path $RootEnvFile -Key "SITE_GATE_PASSWORD" -Value $SiteGatePassword
 Set-DotEnvValue -Path $RootEnvFile -Key "SITE_GATE_SECRET" -Value $SiteGateSecret
+Set-DotEnvValue -Path $RootEnvFile -Key "AI_HANDOFF_PROVIDER" -Value $AiHandoffProvider
+if ($AiHandoffTargetUrl) {
+  Set-DotEnvValue -Path $RootEnvFile -Key "AI_HANDOFF_TARGET_URL" -Value $AiHandoffTargetUrl
+}
 Write-Ok "Updated root .env for same-origin public API calls"
 
 if (-not $SkipLocalApp -and $StartLocalApp -ne "0") {

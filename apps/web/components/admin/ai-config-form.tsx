@@ -2,11 +2,12 @@
 
 import { type ReactNode, useMemo, useState } from "react";
 import type { AiConfig, ContentMode } from "@videoai/contracts";
-import { ChevronDown, ChevronRight, KeyRound, Loader2, Save, TestTube2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, KeyRound, Loader2, Save, TestTube2 } from "lucide-react";
 import { useI18n } from "../i18n/language-provider";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { FeedbackToast, useFeedbackToast } from "../ui/feedback-toast";
+import { TextareaWithCounter } from "../ui/textarea-with-counter";
 
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
@@ -36,12 +37,175 @@ const modelSuggestionsByProvider: Record<string, string[]> = {
   veo: ["veo-default", "veo-3.1", "veo-3.1-fast"],
 };
 
+const aiHandoffDomDetectorScript = String.raw`(() => {
+  const esc = (value) =>
+    window.CSS?.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, "\\$&");
+
+  const attrs = [
+    "id",
+    "data-testid",
+    "data-test",
+    "data-qa",
+    "aria-label",
+    "placeholder",
+    "name",
+    "role",
+    "type",
+  ];
+
+  const unique = (selector) => {
+    try {
+      return document.querySelectorAll(selector).length === 1;
+    } catch {
+      return false;
+    }
+  };
+
+  const simpleSelector = (el) => {
+    const tag = el.tagName.toLowerCase();
+
+    if (el.id) return tag + "#" + esc(el.id);
+
+    for (const attr of attrs) {
+      const value = el.getAttribute(attr);
+      if (value) {
+        const selector = tag + "[" + attr + '="' + esc(value) + '"]';
+        if (unique(selector)) return selector;
+      }
+    }
+
+    const classes = [...el.classList].filter(Boolean).slice(0, 4);
+    if (classes.length) {
+      const selector = tag + "." + classes.map(esc).join(".");
+      if (unique(selector)) return selector;
+      return selector;
+    }
+
+    return tag;
+  };
+
+  const selectorPath = (el) => {
+    const parts = [];
+    let current = el;
+
+    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body) {
+      const tag = current.tagName.toLowerCase();
+      let part = simpleSelector(current);
+
+      if (!unique(parts.length ? part + " > " + parts.join(" > ") : part)) {
+        const parent = current.parentElement;
+        if (parent) {
+          const sameTagSiblings = [...parent.children].filter(
+            (child) => child.tagName === current.tagName,
+          );
+          const index = sameTagSiblings.indexOf(current) + 1;
+          part = tag + ":nth-of-type(" + index + ")";
+        }
+      }
+
+      parts.unshift(part);
+      const full = parts.join(" > ");
+      if (unique(full)) return full;
+
+      current = current.parentElement;
+    }
+
+    parts.unshift("body");
+    return parts.join(" > ");
+  };
+
+  const classSegment = (el, includeTag) => {
+    const classes = [...el.classList].filter(Boolean);
+    if (!classes.length) return includeTag ? el.tagName.toLowerCase() : "";
+    const classNames = classes.map((className) => "." + esc(className)).join("");
+    return includeTag ? el.tagName.toLowerCase() + classNames : classNames;
+  };
+
+  const classSelectorPath = (el, includeTag) => {
+    const parts = [];
+    let current = el;
+
+    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body) {
+      const segment = classSegment(current, includeTag);
+      if (segment) parts.unshift(segment);
+      current = current.parentElement;
+    }
+
+    return parts.join(" ");
+  };
+
+  const describe = (el) => ({
+    bestSelector: selectorPath(el),
+    classPath: classSelectorPath(el, false),
+    tagClassPath: classSelectorPath(el, true),
+    tag: el.tagName.toLowerCase(),
+    id: el.id || "",
+    className: el.className || "",
+    role: el.getAttribute("role") || "",
+    ariaLabel: el.getAttribute("aria-label") || "",
+    placeholder: el.getAttribute("placeholder") || "",
+    name: el.getAttribute("name") || "",
+    type: el.getAttribute("type") || "",
+    isContentEditable: el.isContentEditable,
+    text: (el.innerText || el.textContent || "").trim().slice(0, 300),
+    value: "value" in el ? String(el.value || "").slice(0, 300) : "",
+    outerHTML: el.outerHTML.slice(0, 1500),
+  });
+
+  const handler = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const el = event.target;
+    const report = {
+      selected: describe(el),
+      editableCandidates: [...document.querySelectorAll(
+        "textarea,input,[contenteditable='true'],[role='textbox']",
+      )].map(describe),
+      buttonCandidates: [...document.querySelectorAll("button,[role='button']")]
+        .map(describe)
+        .filter((item) =>
+          (item.text + " " + item.ariaLabel).toLowerCase().includes("generate"),
+        ),
+      iframes: [...document.querySelectorAll("iframe")].map((frame) => ({
+        src: frame.src,
+        title: frame.title,
+        selector: selectorPath(frame),
+      })),
+    };
+
+    const text = JSON.stringify(report, null, 2);
+    console.log("VideoAI DOM selector report:", report);
+
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("Copied DOM selector report to clipboard.");
+    } catch {
+      alert("Report printed in console. Copy it from console.");
+    }
+
+    document.removeEventListener("click", handler, true);
+  };
+
+  document.addEventListener("click", handler, true);
+  alert("Click the Flow prompt input or Generate button to export its selector.");
+})();`;
+
 function normalizeProvider(value: string) {
   return value.trim().toLowerCase();
 }
 
 function modelSuggestionsFor(provider: string) {
   return modelSuggestionsByProvider[normalizeProvider(provider)] ?? [];
+}
+
+function isValidUrl(value: string) {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function keyStatusVariant(status: ProviderKeyStatus) {
@@ -66,6 +230,15 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
   const [showUserMasterPrompts, setShowUserMasterPrompts] = useState(
     config.showUserMasterPrompts,
   );
+  const [aiHandoffProvider, setAiHandoffProvider] = useState(
+    config.aiHandoffProvider,
+  );
+  const [aiHandoffTargetUrl, setAiHandoffTargetUrl] = useState(
+    config.aiHandoffTargetUrl ?? "",
+  );
+  const [aiHandoffPromptSelector, setAiHandoffPromptSelector] = useState(
+    config.aiHandoffPromptSelector ?? "",
+  );
   const [promptProvider, setPromptProvider] = useState(config.promptProvider);
   const [promptModel, setPromptModel] = useState(config.promptModel);
   const [promptApiKey, setPromptApiKey] = useState("");
@@ -87,6 +260,7 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
   const [errorMessage, setErrorMessage] = useState("");
   const [promptKeyMessage, setPromptKeyMessage] = useState("");
   const [videoKeyMessage, setVideoKeyMessage] = useState("");
+  const [copiedDomDetectorScript, setCopiedDomDetectorScript] = useState(false);
 
   const promptModelSuggestions = useMemo(
     () => modelSuggestionsFor(promptProvider),
@@ -106,6 +280,24 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
 
     const trimmedPromptApiKey = promptApiKey.trim();
     const trimmedVideoApiKey = videoApiKey.trim();
+    const trimmedAiHandoffProvider = normalizeProvider(aiHandoffProvider);
+    const trimmedAiHandoffTargetUrl = aiHandoffTargetUrl.trim();
+
+    if (!trimmedAiHandoffProvider) {
+      const message = t("adminConfig.providerModelRequired");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
+      setIsSaving(false);
+      return;
+    }
+
+    if (trimmedAiHandoffTargetUrl && !isValidUrl(trimmedAiHandoffTargetUrl)) {
+      const message = t("adminConfig.aiHandoffTargetUrlInvalid");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
+      setIsSaving(false);
+      return;
+    }
 
     try {
       const response = await fetch(`${apiBaseUrl}/api/v1/admin/ai-config`, {
@@ -117,6 +309,9 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
         body: JSON.stringify({
           contentMode,
           showUserMasterPrompts,
+          aiHandoffProvider: trimmedAiHandoffProvider,
+          aiHandoffTargetUrl: trimmedAiHandoffTargetUrl,
+          aiHandoffPromptSelector: aiHandoffPromptSelector.trim(),
           promptProvider: normalizeProvider(promptProvider),
           promptModel: promptModel.trim(),
           ...(trimmedPromptApiKey ? { promptApiKey: trimmedPromptApiKey } : {}),
@@ -133,6 +328,9 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
       const payload = (await response.json()) as ApiSuccess<AiConfig>;
       setContentMode(payload.data.contentMode);
       setShowUserMasterPrompts(payload.data.showUserMasterPrompts);
+      setAiHandoffProvider(payload.data.aiHandoffProvider);
+      setAiHandoffTargetUrl(payload.data.aiHandoffTargetUrl ?? "");
+      setAiHandoffPromptSelector(payload.data.aiHandoffPromptSelector ?? "");
       setPromptProvider(payload.data.promptProvider);
       setPromptModel(payload.data.promptModel);
       setPromptKeyStatus(payload.data.promptKeyStatus);
@@ -230,6 +428,22 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
     }));
   }
 
+  async function copyDomDetectorScript() {
+    try {
+      await navigator.clipboard.writeText(aiHandoffDomDetectorScript);
+      setCopiedDomDetectorScript(true);
+      showToast({ type: "success", message: t("adminConfig.domDetectorCopied") });
+      window.setTimeout(() => setCopiedDomDetectorScript(false), 2000);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : t("adminConfig.domDetectorCopyFailed");
+      setCopiedDomDetectorScript(false);
+      showToast({ type: "error", message });
+    }
+  }
+
   function renderSaveControls() {
     return (
       <div className="flex flex-wrap items-center justify-end gap-3">
@@ -304,6 +518,10 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
           onToggle={() => toggleSection("site")}
           summary={`${t("adminConfig.showUserMasterPrompts")}: ${
             showUserMasterPrompts ? t("common.yes") : t("common.no")
+          } - ${t("adminConfig.aiHandoffTargetUrl")}: ${
+            aiHandoffTargetUrl.trim() || t("common.none")
+          } - ${t("adminConfig.aiHandoffPromptSelector")}: ${
+            aiHandoffPromptSelector.trim() || t("common.none")
           }`}
         >
           <label className="block text-sm">
@@ -324,6 +542,69 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
           <p className="mt-3 text-sm text-muted-foreground">
             {t("adminConfig.showUserMasterPromptsHelp")}
           </p>
+          <div className="mt-5 border-t border-border pt-4">
+            <div className="text-sm font-semibold">
+              {t("adminConfig.aiHandoff")}
+            </div>
+            <div className="mt-3 grid gap-4">
+              <TextField
+                label={t("adminConfig.aiHandoffProvider")}
+                value={aiHandoffProvider}
+                onChange={setAiHandoffProvider}
+                placeholder="google-flow-veo"
+              />
+              <TextField
+                label={t("adminConfig.aiHandoffTargetUrl")}
+                value={aiHandoffTargetUrl}
+                onChange={setAiHandoffTargetUrl}
+                placeholder="https://labs.google/fx/tools/flow/project/..."
+              />
+              <TextField
+                label={t("adminConfig.aiHandoffPromptSelector")}
+                value={aiHandoffPromptSelector}
+                onChange={setAiHandoffPromptSelector}
+                placeholder='textarea[aria-label="Prompt"]'
+              />
+              <p className="text-sm text-muted-foreground">
+                {t("adminConfig.aiHandoffHelp")}
+              </p>
+              <div className="rounded-md border border-border bg-muted/30 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">
+                      {t("adminConfig.aiHandoffDomDetector")}
+                    </div>
+                    <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                      {t("adminConfig.aiHandoffDomDetectorHelp")}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    className="gap-2"
+                    variant="secondary"
+                    onClick={() => void copyDomDetectorScript()}
+                  >
+                    {copiedDomDetectorScript ? (
+                      <Check size={15} />
+                    ) : (
+                      <Copy size={15} />
+                    )}
+                    {copiedDomDetectorScript
+                      ? t("adminConfig.domDetectorCopied")
+                      : t("adminConfig.copyDomDetectorScript")}
+                  </Button>
+                </div>
+                <div className="mt-3">
+                  <TextareaWithCounter
+                    value={aiHandoffDomDetectorScript}
+                    readOnly
+                    className="min-h-72 font-mono text-xs leading-5"
+                    aria-label={t("adminConfig.aiHandoffDomDetector")}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </CollapsibleConfigSection>
 
         <CollapsibleConfigSection

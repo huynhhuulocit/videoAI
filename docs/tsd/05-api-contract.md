@@ -199,6 +199,69 @@ Request:
 }
 ```
 
+## 5.1. AI Handoff APIs
+
+AI Handoff APIs persist user-initiated extension handoffs. They do not call video providers and do not store provider credentials.
+
+### `GET /api/v1/projects/{projectId}/ai-handoffs`
+
+Lists AI Handoff records owned by the current user for a project. Optional query `shotId` narrows the list to one shot.
+
+Response item:
+
+```json
+{
+  "id": "ai_handoff_001",
+  "projectId": "project_001",
+  "shotId": "shot_001",
+  "provider": "google-flow-veo",
+  "targetUrl": "https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4",
+  "promptText": "Complete prompt for this shot...",
+  "status": "generate_clicked",
+  "errorMessage": null,
+  "createdAt": "2026-05-23T00:00:00.000Z",
+  "updatedAt": "2026-05-23T00:00:05.000Z"
+}
+```
+
+### `POST /api/v1/projects/{projectId}/ai-handoffs`
+
+Creates a handoff record before sending the prompt to the Chrome extension.
+
+Request:
+
+```json
+{
+  "shotId": "shot_001",
+  "provider": "google-flow-veo",
+  "targetUrl": "https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4",
+  "promptText": "Complete prompt for this shot..."
+}
+```
+
+The API validates that `provider` and `targetUrl` match the active Admin > AI Config AI Handoff settings, then stores status `created`. The frontend then updates status after extension messaging.
+
+### `PATCH /api/v1/projects/{projectId}/ai-handoffs/{handoffId}`
+
+Updates extension/browser progress for the handoff.
+
+Request:
+
+```json
+{
+  "status": "prompt_filled",
+  "errorMessage": null
+}
+```
+
+Allowed statuses are `created`, `sent_to_extension`, `target_opened`, `prompt_filled`, `generate_clicked`, `failed`, and `completed_manually`.
+
+Security:
+
+- The project must be active and owned by the current user.
+- `promptText` is stored because AI Handoff is an explicit prompt transfer workflow.
+- Provider cookies, passwords, API keys and raw binary media are never sent to these endpoints.
+
 ## 6. Media APIs
 
 ### `POST /api/v1/projects/{projectId}/media`
@@ -704,6 +767,7 @@ Updates content mode, models, site config, and optionally rotates provider API k
 
 Admin UI submits free-form provider/model values. The API normalizes provider names to lowercase and accepts any non-empty provider string; runtime provider execution still requires a matching adapter.
 `showUserMasterPrompts` controls whether user Project/One Click screens show editable master prompt fields. It defaults to `false`; when `false`, user generation APIs reject temporary `masterPrompt` overrides and use active admin defaults.
+`aiHandoffProvider`, `aiHandoffTargetUrl`, and `aiHandoffPromptSelector` configure the Step 4 browser-extension handoff target. ENV values seed/bootstrap provider/target URL only; the saved Admin config is authoritative. If `aiHandoffTargetUrl` or `aiHandoffPromptSelector` is blank, Project/One Click handoff must fail clearly.
 If `promptApiKey` or `videoApiKey` is supplied, the API stores it encrypted for the corresponding provider and returns only key status, never key material.
 
 Request:
@@ -712,12 +776,40 @@ Request:
 {
   "contentMode": "script",
   "showUserMasterPrompts": false,
+  "aiHandoffProvider": "google-flow-veo",
+  "aiHandoffTargetUrl": "https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4",
+  "aiHandoffPromptSelector": "textarea[aria-label=\"Prompt\"]",
   "promptProvider": "chatgpt",
   "promptModel": "gpt-5.5",
   "promptApiKey": "optional-new-secret",
   "videoProvider": "veo",
   "videoModel": "veo-default",
   "videoApiKey": "optional-new-secret"
+}
+```
+
+### `PATCH /api/v1/admin/ai-config/ai-handoff-dom`
+
+Saves the prompt input selector captured by the Chrome extension `Check DOM` flow. The `provider` must match the active Admin AI Config provider. This endpoint updates only the AI Handoff DOM selector and preserves the rest of the active config.
+
+Request:
+
+```json
+{
+  "provider": "google-flow-veo",
+  "promptSelector": "textarea[aria-label=\"Prompt\"]"
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "provider": "google-flow-veo",
+    "promptSelector": "textarea[aria-label=\"Prompt\"]",
+    "updatedAt": "2026-05-23T00:00:00.000Z"
+  }
 }
 ```
 
@@ -1066,7 +1158,7 @@ Rules:
 Kept for read/write compatibility during migration. New admin UI should use `/admin/master-prompts`.
 
 - Runtime AI resolves the default `shots`, `scenario` and `scripts` master prompts from `config.master_prompts`; missing active defaults fail with `AI_CONFIG_MISSING`.
-- `GET` includes `showUserMasterPrompts` so Project and One Click can consistently decide whether to render user-editable master prompt textareas. It also returns the resolved `outputFormat`, `scenarioAnalysisOutputFormat`, and `scriptGenerationOutputFormat` fields used to render `{outputFormat}` when a selected master prompt contains that token.
+- `GET` includes `showUserMasterPrompts`, `aiHandoffProvider`, `aiHandoffTargetUrl`, and `aiHandoffPromptSelector` so Project and One Click can consistently render master prompt editability and create extension handoffs from the saved Admin config. It also returns the resolved `outputFormat`, `scenarioAnalysisOutputFormat`, and `scriptGenerationOutputFormat` fields used to render `{outputFormat}` when a selected master prompt contains that token.
 - `PATCH` still writes legacy `ai_site_configs` prompt columns and requires non-empty strings only; placeholder validation is no longer enforced.
 
 ## 13. Admin Log APIs
@@ -1110,6 +1202,7 @@ Recommended first set:
 - `VIDEO_PROVIDER_FAILED`
 - `JOB_NOT_FOUND`
 - `INTERNAL_ERROR`
+
 ## 15. Admin Attribute Catalog APIs
 
 Scenario attribute management is admin-only. The user `/templates` UI is no longer the primary management surface.

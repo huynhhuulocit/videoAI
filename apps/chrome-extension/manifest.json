@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "VideoAI AI Handoff",
+  "description": "Send one VideoAI shot prompt to an allowlisted AI target after a user click.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "VideoAI AI Handoff"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "https://*.trycloudflare.com/*",
+    "https://labs.google/*",
+    "https://flow.google/*",
+    "https://aitestkitchen.withgoogle.com/*"
+  ],
+  "externally_connectable": {
+    "matches": ["http://localhost:3000/*", "https://*.trycloudflare.com/*"]
+  }
+}

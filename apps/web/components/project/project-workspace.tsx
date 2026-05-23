@@ -4,6 +4,8 @@ import type { ChangeEvent, DragEvent, TextareaHTMLAttributes } from "react";
 import { useEffect, useRef, useState } from "react";
 import type {
   ApiError,
+  AiHandoff,
+  AiHandoffStatus,
   AttributeCatalog,
   AttributeSelection,
   GenerateShotsJobResult,
@@ -47,6 +49,7 @@ import {
   Loader2,
   Plus,
   Save,
+  Send,
   Sparkles,
   Trash2,
   Upload,
@@ -64,8 +67,10 @@ import {
   type TranslationValues,
 } from "../../lib/i18n/dictionary";
 
-const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
+const aiHandoffEnabled = process.env.NEXT_PUBLIC_AI_HANDOFF_ENABLED === "true";
+const aiHandoffExtensionId =
+  process.env.NEXT_PUBLIC_AI_HANDOFF_EXTENSION_ID?.trim() ?? "";
 
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const videoTypes = new Set(["video/mp4", "video/quicktime", "video/webm"]);
@@ -80,6 +85,15 @@ type MediaKind = "image" | "video" | "unknown";
 type MediaStatus = "validated" | "rejected";
 type ScenarioAttribute = VideoTemplate["attributes"][number];
 type ScenarioOption = ScenarioAttribute["options"][number];
+
+function isValidAbsoluteUrl(value: string) {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function catalogToVideoTemplate(catalog: AttributeCatalog): VideoTemplate {
   return {
@@ -189,6 +203,35 @@ type RawDataModalState = {
   mediaItems?: MediaItem[];
 };
 
+type AiHandoffExtensionResponse =
+  | {
+      ok: true;
+      handoffId: string;
+      status: AiHandoffStatus;
+      message?: string;
+    }
+  | {
+      ok: false;
+      handoffId?: string;
+      status?: AiHandoffStatus;
+      errorMessage: string;
+    };
+
+type ChromeRuntime = {
+  sendMessage?: (
+    extensionId: string,
+    message: unknown,
+    callback?: (response: unknown) => void,
+  ) => void;
+  lastError?: { message?: string };
+};
+
+type ChromeWindow = Window & {
+  chrome?: {
+    runtime?: ChromeRuntime;
+  };
+};
+
 type ProjectStoryContentResponse = {
   storyContent: string;
 };
@@ -236,7 +279,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function stringifyDetailValue(value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return String(value);
   }
   if (Array.isArray(value)) {
@@ -276,9 +323,14 @@ async function readResponseErrorMessage(response: Response) {
   try {
     const payload = (await response.json()) as unknown;
     if (isRecord(payload)) {
-      if (isRecord(payload.error) && typeof payload.error.message === "string") {
+      if (
+        isRecord(payload.error) &&
+        typeof payload.error.message === "string"
+      ) {
         const code =
-          typeof payload.error.code === "string" ? `${payload.error.code}: ` : "";
+          typeof payload.error.code === "string"
+            ? `${payload.error.code}: `
+            : "";
         return `${code}${payload.error.message}`;
       }
       if (typeof payload.message === "string") {
@@ -297,7 +349,8 @@ async function readResponseErrorMessage(response: Response) {
 
 function formatAiErrorCause(error: ApiError | null | undefined, t: Translate) {
   const details = isRecord(error?.details) ? error.details : {};
-  const provider = detailString(details, "provider") || t("workspace.aiErrorActiveProvider");
+  const provider =
+    detailString(details, "provider") || t("workspace.aiErrorActiveProvider");
   const env = detailString(details, "env") || t("workspace.aiErrorProviderEnv");
 
   if (error?.code === "AI_CONFIG_MISSING") {
@@ -318,16 +371,19 @@ function formatAiErrorCause(error: ApiError | null | undefined, t: Translate) {
   return t("workspace.aiErrorUnknown");
 }
 
-function formatJobFailureMessage(job: Job, fallbackLabel: string, t: Translate) {
+function formatJobFailureMessage(
+  job: Job,
+  fallbackLabel: string,
+  t: Translate,
+) {
   const error = job.error;
   const details = isRecord(error?.details) ? error.details : {};
-  const lines = [
-    fallbackLabel,
-    formatAiErrorCause(error, t),
-  ];
+  const lines = [fallbackLabel, formatAiErrorCause(error, t)];
 
   if (error?.message) {
-    lines.push(t("workspace.aiErrorProviderMessage", { message: error.message }));
+    lines.push(
+      t("workspace.aiErrorProviderMessage", { message: error.message }),
+    );
   }
   if (error?.code) {
     lines.push(t("workspace.aiErrorCode", { code: error.code }));
@@ -543,6 +599,60 @@ async function apiGet<T>(path: string): Promise<T> {
   return payload.data;
 }
 
+function isAiHandoffExtensionResponse(
+  value: unknown,
+): value is AiHandoffExtensionResponse {
+  if (!isRecord(value) || typeof value.ok !== "boolean") {
+    return false;
+  }
+  if (value.ok) {
+    return (
+      typeof value.handoffId === "string" && typeof value.status === "string"
+    );
+  }
+  return typeof value.errorMessage === "string";
+}
+
+function sendAiHandoffToExtension(
+  payload: {
+    handoffId: string;
+    provider: string;
+    targetUrl: string;
+    promptText: string;
+    promptSelector: string;
+    shotId: string;
+  },
+  missingMessage: string,
+  rejectedMessage: string,
+) {
+  return new Promise<AiHandoffExtensionResponse>((resolve, reject) => {
+    const runtime = (window as ChromeWindow).chrome?.runtime;
+    if (!aiHandoffExtensionId || !runtime?.sendMessage) {
+      reject(new Error(missingMessage));
+      return;
+    }
+
+    runtime.sendMessage(
+      aiHandoffExtensionId,
+      {
+        type: "VIDEOAI_AI_HANDOFF_START",
+        payload,
+      },
+      (response) => {
+        if (runtime.lastError) {
+          reject(new Error(runtime.lastError.message || missingMessage));
+          return;
+        }
+        if (!isAiHandoffExtensionResponse(response)) {
+          reject(new Error(rejectedMessage));
+          return;
+        }
+        resolve(response);
+      },
+    );
+  });
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -678,9 +788,7 @@ function readScenarioHelperDetails(value?: string | null) {
   const translate = translateLine
     ?.replace(/^(Translate|Vietnamese):\s*/i, "")
     .trim();
-  const description = descriptionLine
-    ?.replace(/^Description:\s*/i, "")
-    .trim();
+  const description = descriptionLine?.replace(/^Description:\s*/i, "").trim();
   const plainDescription =
     !translateLine && !descriptionLine ? lines.join("\n") : "";
 
@@ -699,7 +807,9 @@ function ScenarioTextHelper({
   openHelperId,
   translateLabel,
 }: {
-  description?: ScenarioAttribute["description"] | ScenarioOption["description"];
+  description?:
+    | ScenarioAttribute["description"]
+    | ScenarioOption["description"];
   descriptionLabel: string;
   helperId: string;
   label: string;
@@ -812,12 +922,14 @@ function createLocalShot(durationSeconds: number): VideoShot {
       {
         id: `${id}_start_state`,
         name: "Start state",
-        value: "Continue from the previous shot or establish the first clear visual state.",
+        value:
+          "Continue from the previous shot or establish the first clear visual state.",
       },
       {
         id: `${id}_end_state`,
         name: "End state",
-        value: "Describe the final visual state that the next shot should continue from.",
+        value:
+          "Describe the final visual state that the next shot should continue from.",
       },
       {
         id: `${id}_camera`,
@@ -918,15 +1030,12 @@ function parseShotResultAttributes(value: unknown): VideoShotAttribute[] {
 
       return {
         id:
-          readPlainString(record.id) ||
-          `attr_json_${Date.now()}_${index + 1}`,
+          readPlainString(record.id) || `attr_json_${Date.now()}_${index + 1}`,
         name,
         value: attributeValue,
       };
     })
-    .filter((attribute): attribute is VideoShotAttribute =>
-      Boolean(attribute),
-    );
+    .filter((attribute): attribute is VideoShotAttribute => Boolean(attribute));
 }
 
 function parseShotResultAttributeSelection(value: unknown) {
@@ -935,7 +1044,9 @@ function parseShotResultAttributeSelection(value: unknown) {
   }
   const parsed = AttributeSelectionSchema.nullable().safeParse(value);
   if (!parsed.success) {
-    throw new Error("Shot attributeSelection must match the AttributeSelection JSON shape.");
+    throw new Error(
+      "Shot attributeSelection must match the AttributeSelection JSON shape.",
+    );
   }
   return parsed.data;
 }
@@ -963,9 +1074,7 @@ function parseShotResultShots(value: unknown) {
     }
 
     shots.push({
-      id:
-        readPlainString(record.id) ||
-        `shot_json_${Date.now()}_${index + 1}`,
+      id: readPlainString(record.id) || `shot_json_${Date.now()}_${index + 1}`,
       title,
       description,
       durationSeconds: clampShotDuration(parsedDurationSeconds),
@@ -998,7 +1107,9 @@ function parseShotPlanResultText(
   },
 ): VideoShotPlan {
   const parsed = JSON.parse(value) as unknown;
-  const root = Array.isArray(parsed) ? { shots: parsed } : toPlainRecord(parsed);
+  const root = Array.isArray(parsed)
+    ? { shots: parsed }
+    : toPlainRecord(parsed);
   const shotPlanRoot = toPlainRecord(root.shotPlan);
   const resultRoot = Object.keys(shotPlanRoot).length > 0 ? shotPlanRoot : root;
   const shots =
@@ -1018,7 +1129,9 @@ function parseShotPlanResultText(
     currentShotPlan?.name ||
     context.name.trim();
   if (!name) {
-    throw new Error("Project name is required before syncing Shots result JSON.");
+    throw new Error(
+      "Project name is required before syncing Shots result JSON.",
+    );
   }
 
   const sourceText = currentShotPlan?.sourceText || context.sourceText.trim();
@@ -1035,13 +1148,15 @@ function parseShotPlanResultText(
     name,
     description:
       resultRoot.description === undefined
-        ? currentShotPlan?.description || context.description?.trim() || undefined
+        ? currentShotPlan?.description ||
+          context.description?.trim() ||
+          undefined
         : readPlainString(resultRoot.description) || undefined,
     sourceText,
     durationSeconds,
     attributes:
       resultRoot.attributes === undefined
-        ? currentShotPlan?.attributes ?? []
+        ? (currentShotPlan?.attributes ?? [])
         : parseShotResultAttributes(resultRoot.attributes),
     shots,
     isDefault: currentShotPlan?.isDefault ?? false,
@@ -1088,7 +1203,10 @@ function renderPromptTemplate(
   template: string,
   values: Record<string, string>,
 ) {
-  if (template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) && !values.outputFormat?.trim()) {
+  if (
+    template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) &&
+    !values.outputFormat?.trim()
+  ) {
     return "Cannot render prompt: Output Format is required before using {outputFormat}.";
   }
   return Object.entries(values).reduce(
@@ -1101,12 +1219,15 @@ function requiredOptionIdsForTemplate(template: VideoTemplate | null) {
   if (!template) {
     return {};
   }
-  return template.attributes.reduce<Record<string, string[]>>((selectedIds, attribute) => {
-    if (attribute.required && attribute.options[0]) {
-      selectedIds[attribute.id] = [attribute.options[0].id];
-    }
-    return selectedIds;
-  }, {});
+  return template.attributes.reduce<Record<string, string[]>>(
+    (selectedIds, attribute) => {
+      if (attribute.required && attribute.options[0]) {
+        selectedIds[attribute.id] = [attribute.options[0].id];
+      }
+      return selectedIds;
+    },
+    {},
+  );
 }
 
 function mergeWithRequiredOptionIds(
@@ -1120,7 +1241,11 @@ function mergeWithRequiredOptionIds(
   template.attributes.forEach((attribute) => {
     const firstOption = attribute.options[0];
     const currentIds = next[attribute.id];
-    if (attribute.required && (!currentIds || currentIds.length === 0) && firstOption) {
+    if (
+      attribute.required &&
+      (!currentIds || currentIds.length === 0) &&
+      firstOption
+    ) {
       next[attribute.id] = [firstOption.id];
     }
   });
@@ -1131,12 +1256,15 @@ function requiredOptionIdsForCatalog(catalog: AttributeCatalog | null) {
   if (!catalog) {
     return {};
   }
-  return catalog.attributes.reduce<Record<string, string[]>>((selectedIds, attribute) => {
-    if (attribute.required && attribute.options[0]) {
-      selectedIds[attribute.id] = [attribute.options[0].id];
-    }
-    return selectedIds;
-  }, {});
+  return catalog.attributes.reduce<Record<string, string[]>>(
+    (selectedIds, attribute) => {
+      if (attribute.required && attribute.options[0]) {
+        selectedIds[attribute.id] = [attribute.options[0].id];
+      }
+      return selectedIds;
+    },
+    {},
+  );
 }
 
 function mergeWithRequiredCatalogOptionIds(
@@ -1222,7 +1350,9 @@ function formatAttributeSelectionCompact(selection: AttributeSelection | null) {
     .join("\n");
 }
 
-function attributeSelectionToShotAttributes(selection: AttributeSelection | null): VideoShotAttribute[] {
+function attributeSelectionToShotAttributes(
+  selection: AttributeSelection | null,
+): VideoShotAttribute[] {
   if (!selection) {
     return [];
   }
@@ -1351,7 +1481,9 @@ function formatScenarioAttributesText(attributes: ScenarioAttribute[]) {
   return JSON.stringify(
     {
       attributes: attributes.map((attribute) => {
-        const attributeDetails = readScenarioHelperDetails(attribute.description);
+        const attributeDetails = readScenarioHelperDetails(
+          attribute.description,
+        );
 
         return {
           id: attribute.id,
@@ -1445,7 +1577,9 @@ function parseScenarioAttributesCompactText(value: string) {
     })
     .filter((attribute): attribute is ScenarioAttribute => Boolean(attribute));
 
-  const validated = TemplateAttributeSchema.array().min(1).safeParse(attributes);
+  const validated = TemplateAttributeSchema.array()
+    .min(1)
+    .safeParse(attributes);
   if (!validated.success) {
     throw new Error("Invalid Scenario attributes.");
   }
@@ -1516,9 +1650,7 @@ function parseScenarioAttributesJson(value: string) {
               `${attributeId}-${normalizeScenarioIdentifier(label, `option-${optionIndex + 1}`)}`,
             label,
             value: String(option.value ?? "").trim() || label,
-            ...(optionDescription
-              ? { description: optionDescription }
-              : {}),
+            ...(optionDescription ? { description: optionDescription } : {}),
           };
         })
         .filter((option): option is ScenarioOption => Boolean(option));
@@ -1547,15 +1679,15 @@ function parseScenarioAttributesJson(value: string) {
           String(attribute.id ?? "").trim() ||
           normalizeScenarioIdentifier(name, `attribute-${attributeIndex + 1}`),
         name,
-        ...(attributeDescription
-          ? { description: attributeDescription }
-          : {}),
+        ...(attributeDescription ? { description: attributeDescription } : {}),
         options,
       };
     })
     .filter((attribute): attribute is ScenarioAttribute => Boolean(attribute));
 
-  const validated = TemplateAttributeSchema.array().min(1).safeParse(attributes);
+  const validated = TemplateAttributeSchema.array()
+    .min(1)
+    .safeParse(attributes);
   if (!validated.success) {
     throw new Error("Invalid Scenario attributes.");
   }
@@ -1587,14 +1719,17 @@ export function ProjectWorkspace({
 }: ProjectWorkspaceProps) {
   const { t } = useI18n();
   const isOneClickMode = workspaceMode === "one-click";
-  const oneClickRecordName = projectName?.trim() || t("oneClick.namePlaceholder");
+  const oneClickRecordName =
+    projectName?.trim() || t("oneClick.namePlaceholder");
   const oneClickRecordDescription =
     projectDescription?.trim() || t("oneClick.wizardDescription");
   const projectHeaderTitle =
     projectName?.trim() || t("projectDetail.fallbackTitle");
   const projectHeaderDescription =
     projectDescription?.trim() ||
-    (isOneClickMode ? t("oneClick.wizardDescription") : t("projectDetail.description"));
+    (isOneClickMode
+      ? t("oneClick.wizardDescription")
+      : t("projectDetail.description"));
   const [promptText, setPromptText] = useState(
     defaultPrompt || (isOneClickMode ? "" : t("projectDetail.defaultPrompt")),
   );
@@ -1613,8 +1748,9 @@ export function ProjectWorkspace({
   const [rawTemplateResponse, setRawTemplateResponse] = useState<unknown>(null);
   const [rawProductRequest, setRawProductRequest] = useState<unknown>(null);
   const [rawProductResponse, setRawProductResponse] = useState<unknown>(null);
-  const [rawDataModal, setRawDataModal] =
-    useState<RawDataModalState | null>(null);
+  const [rawDataModal, setRawDataModal] = useState<RawDataModalState | null>(
+    null,
+  );
   const [isRawDataCopied, setIsRawDataCopied] = useState(false);
   const [templates, setTemplates] = useState<VideoTemplate[]>([]);
   const [oneClickScenarioName, setOneClickScenarioName] = useState("");
@@ -1636,8 +1772,12 @@ export function ProjectWorkspace({
     useState<AttributeCatalog | null>(null);
   const [shotAttributeCatalog, setShotAttributeCatalog] =
     useState<AttributeCatalog | null>(null);
-  const [storyOptionIds, setStoryOptionIds] = useState<Record<string, string[]>>({});
-  const [shotsOptionIds, setShotsOptionIds] = useState<Record<string, string[]>>({});
+  const [storyOptionIds, setStoryOptionIds] = useState<
+    Record<string, string[]>
+  >({});
+  const [shotsOptionIds, setShotsOptionIds] = useState<
+    Record<string, string[]>
+  >({});
   const [templateAnalysisCompact, setTemplateAnalysisCompact] = useState("");
   const [generatedShotPrompts, setGeneratedShotPrompts] = useState<
     Record<string, string>
@@ -1656,6 +1796,15 @@ export function ProjectWorkspace({
   >({});
   const [rawShotVideoResponses, setRawShotVideoResponses] = useState<
     Record<string, unknown>
+  >({});
+  const [handoffShotIds, setHandoffShotIds] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [shotHandoffMessages, setShotHandoffMessages] = useState<
+    Record<string, string>
+  >({});
+  const [shotHandoffErrors, setShotHandoffErrors] = useState<
+    Record<string, string>
   >({});
   const [shotPromptTemplate, setShotPromptTemplate] = useState("");
   const [shotPromptOutputFormat, setShotPromptOutputFormat] = useState("");
@@ -1676,6 +1825,9 @@ export function ProjectWorkspace({
   const [scriptGenerationOutputFormat, setScriptGenerationOutputFormat] =
     useState(DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT);
   const [showUserMasterPrompts, setShowUserMasterPrompts] = useState(false);
+  const [aiHandoffProvider, setAiHandoffProvider] = useState("");
+  const [aiHandoffTargetUrl, setAiHandoffTargetUrl] = useState("");
+  const [aiHandoffPromptSelector, setAiHandoffPromptSelector] = useState("");
   const [isStoryStepOpen, setIsStoryStepOpen] = useState(true);
   const [isTemplateStepOpen, setIsTemplateStepOpen] = useState(true);
   const [isTemplateAttributesOpen, setIsTemplateAttributesOpen] =
@@ -1921,9 +2073,7 @@ export function ProjectWorkspace({
         );
         if (!cancelled && saved.storyContent.trim()) {
           setPromptText((current) =>
-            hasUserEditedStoryContentRef.current
-              ? current
-              : saved.storyContent,
+            hasUserEditedStoryContentRef.current ? current : saved.storyContent,
           );
         }
       } catch {
@@ -1965,7 +2115,7 @@ export function ProjectWorkspace({
           setSelectedShotIds((current) =>
             current.length > 0
               ? current
-              : loadedShotPlans[0]?.shots.map((shot) => shot.id) ?? [],
+              : (loadedShotPlans[0]?.shots.map((shot) => shot.id) ?? []),
           );
         }
       } catch {
@@ -2013,7 +2163,9 @@ export function ProjectWorkspace({
               ),
             );
           } else if (loadedTemplates[0]) {
-            setSelectedOptionIds(requiredOptionIdsForTemplate(loadedTemplates[0]));
+            setSelectedOptionIds(
+              requiredOptionIdsForTemplate(loadedTemplates[0]),
+            );
           }
         }
       } catch {
@@ -2087,7 +2239,9 @@ export function ProjectWorkspace({
           setShotPromptTemplate(config.shotPrompt);
           setShotPromptOutputFormat(config.shotOutputFormat);
           setShotGenerationPrompt(
-            config.prompt || config.defaultPrompt || DEFAULT_SHOT_GENERATION_PROMPT,
+            config.prompt ||
+              config.defaultPrompt ||
+              DEFAULT_SHOT_GENERATION_PROMPT,
           );
           setShotGenerationOutputFormat(
             config.outputFormat ??
@@ -2115,6 +2269,9 @@ export function ProjectWorkspace({
               DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
           );
           setShowUserMasterPrompts(config.showUserMasterPrompts);
+          setAiHandoffProvider(config.aiHandoffProvider);
+          setAiHandoffTargetUrl(config.aiHandoffTargetUrl ?? "");
+          setAiHandoffPromptSelector(config.aiHandoffPromptSelector ?? "");
         }
       } catch {
         if (!cancelled) {
@@ -2123,9 +2280,16 @@ export function ProjectWorkspace({
           setShotGenerationPrompt(DEFAULT_SHOT_GENERATION_PROMPT);
           setShotGenerationOutputFormat(DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT);
           setScenarioAnalysisPrompt(DEFAULT_TEMPLATE_SELECTION_PROMPT);
-          setScenarioAnalysisOutputFormat(DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT);
+          setScenarioAnalysisOutputFormat(
+            DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
+          );
           setScriptGenerationPrompt(DEFAULT_SCRIPT_GENERATION_PROMPT);
-          setScriptGenerationOutputFormat(DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT);
+          setScriptGenerationOutputFormat(
+            DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
+          );
+          setAiHandoffProvider("");
+          setAiHandoffTargetUrl("");
+          setAiHandoffPromptSelector("");
         }
       }
     }
@@ -2225,7 +2389,7 @@ export function ProjectWorkspace({
       });
     }
 
-  if (latest.status !== "succeeded") {
+    if (latest.status !== "succeeded") {
       throw new JobFailureError(
         latest,
         latest.error?.message ?? t("workspace.requestIncomplete"),
@@ -2460,7 +2624,9 @@ export function ProjectWorkspace({
       setStatus({ label: t("workspace.shotMediaSaved"), tone: "success" });
     } catch (error) {
       setErrorMessage(
-        error instanceof Error ? error.message : t("workspace.shotMediaSaveFailed"),
+        error instanceof Error
+          ? error.message
+          : t("workspace.shotMediaSaveFailed"),
       );
       setStatus({ label: t("workspace.shotMediaSaveFailed"), tone: "danger" });
     }
@@ -2533,7 +2699,9 @@ export function ProjectWorkspace({
             (shot.mediaIds ?? []).includes(mediaId)
               ? {
                   ...shot,
-                  mediaIds: (shot.mediaIds ?? []).filter((id) => id !== mediaId),
+                  mediaIds: (shot.mediaIds ?? []).filter(
+                    (id) => id !== mediaId,
+                  ),
                 }
               : shot,
           ),
@@ -2565,7 +2733,9 @@ export function ProjectWorkspace({
     setRawProductResponse(null);
   }
 
-  function updateSelectedShotPlan(updater: (shotPlan: VideoShotPlan) => VideoShotPlan) {
+  function updateSelectedShotPlan(
+    updater: (shotPlan: VideoShotPlan) => VideoShotPlan,
+  ) {
     if (!selectedShotPlan) {
       return;
     }
@@ -2727,10 +2897,12 @@ export function ProjectWorkspace({
         {
           sourceText,
           attributes: templateSelectionToShotAttributes(templateSelection),
-          scenarioAttributes:
-            attributeSelectionToShotAttributes(scenarioAttributeSelection),
-          shotsAttributes:
-            attributeSelectionToShotAttributes(shotsAttributeSelection),
+          scenarioAttributes: attributeSelectionToShotAttributes(
+            scenarioAttributeSelection,
+          ),
+          shotsAttributes: attributeSelectionToShotAttributes(
+            shotsAttributeSelection,
+          ),
           ...(showUserMasterPrompts ? { masterPrompt } : {}),
           ...(isOneClickMode
             ? {
@@ -2778,16 +2950,12 @@ export function ProjectWorkspace({
     }
 
     try {
-      const nextShotPlan = parseShotPlanResultText(
-        nextText,
-        selectedShotPlan,
-        {
-          projectId,
-          name: projectHeaderTitle,
-          description: projectHeaderDescription,
-          sourceText: promptText,
-        },
-      );
+      const nextShotPlan = parseShotPlanResultText(nextText, selectedShotPlan, {
+        projectId,
+        name: projectHeaderTitle,
+        description: projectHeaderDescription,
+        sourceText: promptText,
+      });
       setShotPlans((current) => {
         const existingIndex = current.findIndex(
           (shotPlan) => shotPlan.id === nextShotPlan.id,
@@ -2809,7 +2977,9 @@ export function ProjectWorkspace({
       return nextShotPlan;
     } catch (error) {
       setShotsResultJsonError(
-        error instanceof Error ? error.message : t("workspace.shotsResultInvalid"),
+        error instanceof Error
+          ? error.message
+          : t("workspace.shotsResultInvalid"),
       );
       return null;
     }
@@ -2926,7 +3096,9 @@ export function ProjectWorkspace({
       setStatus({ label: t("workspace.projectSaved"), tone: "success" });
     } catch (error) {
       const nextError =
-        error instanceof Error ? error.message : t("workspace.projectSaveFailed");
+        error instanceof Error
+          ? error.message
+          : t("workspace.projectSaveFailed");
       setErrorMessage(nextError);
       setStatus({ label: t("workspace.projectSaveFailed"), tone: "danger" });
     } finally {
@@ -3019,7 +3191,10 @@ export function ProjectWorkspace({
       setPromptText(result.generatedPrompt);
       setFinalPrompt(result.generatedPrompt);
       setProductAnalysis(null);
-      setStatus({ label: t("workspace.storyGenerateSuccess"), tone: "success" });
+      setStatus({
+        label: t("workspace.storyGenerateSuccess"),
+        tone: "success",
+      });
     } catch (error) {
       const nextError = formatStoryGenerationError(error, t);
       setErrorMessage(nextError);
@@ -3083,7 +3258,9 @@ export function ProjectWorkspace({
     }
     if (showUserMasterPrompts && !masterPrompt) {
       setErrorMessage(t("workspace.templateMasterPromptMissing"));
-      setTemplateAnalysisErrorMessage(t("workspace.templateMasterPromptMissing"));
+      setTemplateAnalysisErrorMessage(
+        t("workspace.templateMasterPromptMissing"),
+      );
       return;
     }
     if (!selectedTemplate) {
@@ -3150,12 +3327,12 @@ export function ProjectWorkspace({
     setStatus({ label: t("workspace.templateSelectionSaving"), tone: "info" });
 
     try {
-      await apiPatch<{ saved: boolean; templateSelection: TemplateSelection | null }>(
-        `/projects/${projectId}/template-selection`,
-        {
-          templateSelection,
-        },
-      );
+      await apiPatch<{
+        saved: boolean;
+        templateSelection: TemplateSelection | null;
+      }>(`/projects/${projectId}/template-selection`, {
+        templateSelection,
+      });
       await saveProjectAttributeSelections();
       setStatus({
         label: t("workspace.templateSelectionSaved"),
@@ -3251,7 +3428,9 @@ export function ProjectWorkspace({
   function formatPlanAttributesForPrompt(attributes: VideoShotAttribute[]) {
     const lines = attributes
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
-      .map((attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`);
+      .map(
+        (attribute) => `${attribute.name.trim()}=${attribute.value.trim()};`,
+      );
     return lines.length > 0
       ? lines.join("\n")
       : "none=No extra plan-level attributes provided;";
@@ -3368,7 +3547,9 @@ export function ProjectWorkspace({
     const mediaInstruction =
       previewMediaItems.length > 0
         ? [
-            t("workspace.promptPreviewMedia", { count: previewMediaItems.length }),
+            t("workspace.promptPreviewMedia", {
+              count: previewMediaItems.length,
+            }),
             formatMediaPromptSummary(previewMediaItems, ""),
           ].join("\n")
         : t("workspace.promptPreviewNoMedia");
@@ -3457,7 +3638,10 @@ export function ProjectWorkspace({
           setIsPromptPreviewCopied(true);
         }
       } catch {
-        setStatus({ label: t("workspace.shotPromptCopyFailed"), tone: "danger" });
+        setStatus({
+          label: t("workspace.shotPromptCopyFailed"),
+          tone: "danger",
+        });
       }
     }
 
@@ -3563,7 +3747,10 @@ export function ProjectWorkspace({
           setIsRawDataCopied(true);
         }
       } catch {
-        setStatus({ label: t("workspace.shotPromptCopyFailed"), tone: "danger" });
+        setStatus({
+          label: t("workspace.shotPromptCopyFailed"),
+          tone: "danger",
+        });
       }
     }
 
@@ -3588,9 +3775,7 @@ export function ProjectWorkspace({
               >
                 {modalTitle}
               </h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {modalHelp}
-              </p>
+              <p className="mt-1 text-sm text-muted-foreground">{modalHelp}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <button
@@ -3657,7 +3842,8 @@ export function ProjectWorkspace({
                         {item.name}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {item.id} | {item.mimeType} | {formatBytes(item.sizeBytes)}
+                        {item.id} | {item.mimeType} |{" "}
+                        {formatBytes(item.sizeBytes)}
                       </div>
                     </div>
                   </div>
@@ -3718,7 +3904,9 @@ export function ProjectWorkspace({
 
         {targetMediaItems.length === 0 ? (
           <div className="mt-4 rounded-md border border-sky-100 bg-white p-4 text-sm text-muted-foreground">
-            {shot ? t("workspace.shotMediaEmpty") : t("workspace.dropzoneEmpty")}
+            {shot
+              ? t("workspace.shotMediaEmpty")
+              : t("workspace.dropzoneEmpty")}
           </div>
         ) : (
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -3914,15 +4102,9 @@ export function ProjectWorkspace({
               <span className="min-w-0">
                 <span className="flex min-w-0 items-center gap-2 font-medium">
                   {isPanelOpen ? (
-                    <ChevronDown
-                      size={18}
-                      className="text-muted-foreground"
-                    />
+                    <ChevronDown size={18} className="text-muted-foreground" />
                   ) : (
-                    <ChevronRight
-                      size={18}
-                      className="text-muted-foreground"
-                    />
+                    <ChevronRight size={18} className="text-muted-foreground" />
                   )}
                   <span className="truncate">{title}</span>
                 </span>
@@ -4158,9 +4340,7 @@ export function ProjectWorkspace({
               {help}
             </p>
           </div>
-          <Badge variant="info">
-            {selectedCount} selected
-          </Badge>
+          <Badge variant="info">{selectedCount} selected</Badge>
         </div>
         <div className="mt-3">{attributeList}</div>
       </div>
@@ -4220,7 +4400,10 @@ export function ProjectWorkspace({
               <div>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <label className="text-sm font-medium" htmlFor="scenarioStory">
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="scenarioStory"
+                    >
                       {t("workspace.storyInputLabel")}
                     </label>
                     <p className="mt-1 text-xs text-muted-foreground">
@@ -4416,7 +4599,9 @@ export function ProjectWorkspace({
         attribute.id === attributeId
           ? {
               ...attribute,
-              options: attribute.options.filter((option) => option.id !== optionId),
+              options: attribute.options.filter(
+                (option) => option.id !== optionId,
+              ),
             }
           : attribute,
       ),
@@ -4546,7 +4731,9 @@ export function ProjectWorkspace({
       <div className="rounded-md border border-border bg-white p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold">{t("template.editTitle")}</div>
+            <div className="text-sm font-semibold">
+              {t("template.editTitle")}
+            </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {t("template.editorDescription")}
             </p>
@@ -4624,7 +4811,10 @@ export function ProjectWorkspace({
           </div>
 
           {selectedTemplate.attributes.map((attribute, attributeIndex) => (
-            <div key={attribute.id} className="rounded-md border border-border p-3">
+            <div
+              key={attribute.id}
+              className="rounded-md border border-border p-3"
+            >
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-800">
                   {attributeIndex + 1}
@@ -4774,7 +4964,10 @@ export function ProjectWorkspace({
           ) : null}
 
           <div>
-            <label className="text-sm font-medium" htmlFor="oneClickStoryReview">
+            <label
+              className="text-sm font-medium"
+              htmlFor="oneClickStoryReview"
+            >
               {t("workspace.storyInputLabel")}
             </label>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -4879,7 +5072,6 @@ export function ProjectWorkspace({
               </pre>
             </div>
           ) : null}
-
         </div>
       </div>
     );
@@ -4887,7 +5079,9 @@ export function ProjectWorkspace({
 
   function toggleTemplateOption(attributeId: string, optionId: string) {
     setSelectedOptionIds((current) => {
-      const attribute = selectedTemplate?.attributes.find((item) => item.id === attributeId);
+      const attribute = selectedTemplate?.attributes.find(
+        (item) => item.id === attributeId,
+      );
       const selectedIds = current[attributeId] ?? [];
       const nextIds = selectedIds.includes(optionId)
         ? selectedIds.filter((selectedId) => selectedId !== optionId)
@@ -5003,7 +5197,9 @@ export function ProjectWorkspace({
   async function createShotVideo(shot: VideoShot) {
     let finalPrompt = "";
     try {
-      finalPrompt = (generatedShotPrompts[shot.id] ?? composeShotPrompt(shot)).trim();
+      finalPrompt = (
+        generatedShotPrompts[shot.id] ?? composeShotPrompt(shot)
+      ).trim();
     } catch (error) {
       const message =
         error instanceof Error
@@ -5053,7 +5249,10 @@ export function ProjectWorkspace({
       delete next[shot.id];
       return next;
     });
-    setRawShotVideoRequests((current) => ({ ...current, [shot.id]: appRequest }));
+    setRawShotVideoRequests((current) => ({
+      ...current,
+      [shot.id]: appRequest,
+    }));
     setRawShotVideoResponses((current) => {
       const next = { ...current };
       delete next[shot.id];
@@ -5093,7 +5292,10 @@ export function ProjectWorkspace({
               result: error.job.result,
             }
           : {
-              error: error instanceof Error ? error.message : t("workspace.shotVideoFailed"),
+              error:
+                error instanceof Error
+                  ? error.message
+                  : t("workspace.shotVideoFailed"),
             };
       setRawShotVideoResponses((current) => ({
         ...current,
@@ -5106,6 +5308,160 @@ export function ProjectWorkspace({
       setStatus({ label: t("workspace.shotVideoFailed"), tone: "danger" });
     } finally {
       setCreatingVideoShotIds((current) => {
+        const next = { ...current };
+        delete next[shot.id];
+        return next;
+      });
+    }
+  }
+
+  async function startAiHandoff(shot: VideoShot) {
+    if (!aiHandoffEnabled || !aiHandoffExtensionId) {
+      setShotHandoffErrors((current) => ({
+        ...current,
+        [shot.id]: t("workspace.aiHandoffDisabled"),
+      }));
+      setStatus({ label: t("workspace.aiHandoffFailed"), tone: "danger" });
+      return;
+    }
+
+    const handoffProvider = aiHandoffProvider.trim();
+    const handoffTargetUrl = aiHandoffTargetUrl.trim();
+    const handoffPromptSelector = aiHandoffPromptSelector.trim();
+    if (!handoffProvider || !handoffTargetUrl) {
+      setShotHandoffErrors((current) => ({
+        ...current,
+        [shot.id]: t("workspace.aiHandoffTargetMissing"),
+      }));
+      setStatus({ label: t("workspace.aiHandoffFailed"), tone: "danger" });
+      return;
+    }
+    if (!handoffPromptSelector) {
+      setShotHandoffErrors((current) => ({
+        ...current,
+        [shot.id]: t("workspace.aiHandoffPromptSelectorMissing"),
+      }));
+      setStatus({ label: t("workspace.aiHandoffFailed"), tone: "danger" });
+      return;
+    }
+    if (!isValidAbsoluteUrl(handoffTargetUrl)) {
+      setShotHandoffErrors((current) => ({
+        ...current,
+        [shot.id]: t("workspace.aiHandoffTargetInvalid"),
+      }));
+      setStatus({ label: t("workspace.aiHandoffFailed"), tone: "danger" });
+      return;
+    }
+
+    let promptText = "";
+    try {
+      promptText = (
+        generatedShotPrompts[shot.id] ?? composeShotPrompt(shot)
+      ).trim();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : t("workspace.shotVideoMissingPrompt");
+      setShotHandoffErrors((current) => ({
+        ...current,
+        [shot.id]: message,
+      }));
+      setStatus({ label: t("workspace.aiHandoffFailed"), tone: "danger" });
+      return;
+    }
+
+    if (!promptText) {
+      setShotHandoffErrors((current) => ({
+        ...current,
+        [shot.id]: t("workspace.shotVideoMissingPrompt"),
+      }));
+      setStatus({ label: t("workspace.aiHandoffFailed"), tone: "danger" });
+      return;
+    }
+
+    setHandoffShotIds((current) => ({ ...current, [shot.id]: true }));
+    setGeneratedShotPrompts((current) => ({
+      ...current,
+      [shot.id]: promptText,
+    }));
+    setShotHandoffMessages((current) => {
+      const next = { ...current };
+      delete next[shot.id];
+      return next;
+    });
+    setShotHandoffErrors((current) => {
+      const next = { ...current };
+      delete next[shot.id];
+      return next;
+    });
+    setStatus({ label: t("workspace.aiHandoffSending"), tone: "info" });
+
+    let handoff: AiHandoff | null = null;
+    try {
+      handoff = await apiPost<AiHandoff>(`/projects/${projectId}/ai-handoffs`, {
+        shotId: shot.id,
+        provider: handoffProvider,
+        targetUrl: handoffTargetUrl,
+        promptText,
+      });
+      await apiPatch<AiHandoff>(
+        `/projects/${projectId}/ai-handoffs/${handoff.id}`,
+        {
+          status: "sent_to_extension",
+        },
+      );
+      const extensionResult = await sendAiHandoffToExtension(
+        {
+          handoffId: handoff.id,
+          provider: handoff.provider,
+          targetUrl: handoff.targetUrl,
+          promptText: handoff.promptText,
+          promptSelector: handoffPromptSelector,
+          shotId: handoff.shotId,
+        },
+        t("workspace.aiHandoffExtensionMissing"),
+        t("workspace.aiHandoffExtensionRejected"),
+      );
+
+      if (!extensionResult.ok) {
+        throw new Error(extensionResult.errorMessage);
+      }
+
+      await apiPatch<AiHandoff>(
+        `/projects/${projectId}/ai-handoffs/${handoff.id}`,
+        {
+          status: extensionResult.status,
+        },
+      );
+      setShotHandoffMessages((current) => ({
+        ...current,
+        [shot.id]: extensionResult.message || t("workspace.aiHandoffSuccess"),
+      }));
+      setStatus({ label: t("workspace.aiHandoffSuccess"), tone: "success" });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t("workspace.aiHandoffFailed");
+      if (handoff) {
+        try {
+          await apiPatch<AiHandoff>(
+            `/projects/${projectId}/ai-handoffs/${handoff.id}`,
+            {
+              status: "failed",
+              errorMessage: message,
+            },
+          );
+        } catch {
+          // The inline error below still tells the user what failed.
+        }
+      }
+      setShotHandoffErrors((current) => ({
+        ...current,
+        [shot.id]: message,
+      }));
+      setStatus({ label: t("workspace.aiHandoffFailed"), tone: "danger" });
+    } finally {
+      setHandoffShotIds((current) => {
         const next = { ...current };
         delete next[shot.id];
         return next;
@@ -5146,569 +5502,607 @@ export function ProjectWorkspace({
     return (
       <>
         <div className="mt-4 rounded-lg border border-border bg-white p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <button
-            type="button"
-            className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
-            onClick={() => setIsShotsStepOpen((current) => !current)}
-            aria-expanded={isShotsStepOpen}
-          >
-            <div className="flex items-center gap-2 font-medium">
-              {isShotsStepOpen ? (
-                <ChevronDown size={18} className="text-muted-foreground" />
-              ) : (
-                <ChevronRight size={18} className="text-muted-foreground" />
-              )}
-              <Clapperboard size={18} className="text-sky-600" />
-              {t("workspace.shotsTitle")}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t("workspace.shotsHelp")}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("workspace.shotsAdminManaged")}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {scenarioShotAttributes.length > 0
-                ? t("workspace.shotsScenarioAttributes", {
-                    attributes: scenarioAttributeSummary,
-                  })
-                : t("workspace.shotsScenarioAttributesEmpty")}
-            </p>
-          </button>
-        </div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <button
+              type="button"
+              className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+              onClick={() => setIsShotsStepOpen((current) => !current)}
+              aria-expanded={isShotsStepOpen}
+            >
+              <div className="flex items-center gap-2 font-medium">
+                {isShotsStepOpen ? (
+                  <ChevronDown size={18} className="text-muted-foreground" />
+                ) : (
+                  <ChevronRight size={18} className="text-muted-foreground" />
+                )}
+                <Clapperboard size={18} className="text-sky-600" />
+                {t("workspace.shotsTitle")}
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {t("workspace.shotsHelp")}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("workspace.shotsAdminManaged")}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {scenarioShotAttributes.length > 0
+                  ? t("workspace.shotsScenarioAttributes", {
+                      attributes: scenarioAttributeSummary,
+                    })
+                  : t("workspace.shotsScenarioAttributesEmpty")}
+              </p>
+            </button>
+          </div>
 
-        {isShotsStepOpen ? (
-          <>
-            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-              <div className="min-w-0">
-                {showUserMasterPrompts ? (
-                  <MasterPromptField
-                    id="shotsMasterPrompt"
-                    label={t("workspace.shotsMasterPromptLabel")}
-                    help={t("workspace.shotsMasterPromptHelp")}
-                    rows={7}
-                    value={shotGenerationPrompt}
-                    onChange={(event) => {
-                      setShotGenerationPrompt(event.target.value);
-                      setRawShotRequest(null);
-                      setRawShotResponse(null);
-                      setShotGenerationErrorMessage("");
-                      setShotGenerationSuccessMessage("");
-                      setRawDataModal(null);
-                    }}
-                    placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shots}
-                  />
-                ) : null}
+          {isShotsStepOpen ? (
+            <>
+              <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+                <div className="min-w-0">
+                  {showUserMasterPrompts ? (
+                    <MasterPromptField
+                      id="shotsMasterPrompt"
+                      label={t("workspace.shotsMasterPromptLabel")}
+                      help={t("workspace.shotsMasterPromptHelp")}
+                      rows={7}
+                      value={shotGenerationPrompt}
+                      onChange={(event) => {
+                        setShotGenerationPrompt(event.target.value);
+                        setRawShotRequest(null);
+                        setRawShotResponse(null);
+                        setShotGenerationErrorMessage("");
+                        setShotGenerationSuccessMessage("");
+                        setRawDataModal(null);
+                      }}
+                      placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shots}
+                    />
+                  ) : null}
 
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={isGeneratingShots}
-                    onClick={() => void generateShots()}
-                  >
-                    {isGeneratingShots ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Sparkles size={16} />
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isGeneratingShots}
+                      onClick={() => void generateShots()}
+                    >
+                      {isGeneratingShots ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Sparkles size={16} />
+                      )}
+                      {t("workspace.shotsGenerate")}
+                    </Button>
+                    {renderFullPromptButton(
+                      t("workspace.shotsFullPrompt"),
+                      t("workspace.shotsFullPromptHelp"),
+                      buildShotGenerationFullPrompt(),
+                      requestMediaItems,
                     )}
-                    {t("workspace.shotsGenerate")}
-                  </Button>
-                  {renderFullPromptButton(
-                    t("workspace.shotsFullPrompt"),
-                    t("workspace.shotsFullPromptHelp"),
-                    buildShotGenerationFullPrompt(),
-                    requestMediaItems,
-                  )}
-                  {renderRawDataButton(
-                    t("workspace.rawRequestButton"),
-                    t("shots.rawRequest"),
-                    t("shots.rawRequestHelp"),
-                    rawShotRequest,
-                  )}
-                  {renderRawDataButton(
-                    t("workspace.rawResponseButton"),
-                    t("shots.rawResponse"),
-                    t("shots.rawResponseHelp"),
-                    rawShotResponse,
-                  )}
-                </div>
-
-                <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
-                  <div>
-                    <h4 className="text-sm font-semibold text-foreground">
-                      {t("workspace.shotsResultTitle")}
-                    </h4>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {t("workspace.shotsResultHelp")}
-                    </p>
+                    {renderRawDataButton(
+                      t("workspace.rawRequestButton"),
+                      t("shots.rawRequest"),
+                      t("shots.rawRequestHelp"),
+                      rawShotRequest,
+                    )}
+                    {renderRawDataButton(
+                      t("workspace.rawResponseButton"),
+                      t("shots.rawResponse"),
+                      t("shots.rawResponseHelp"),
+                      rawShotResponse,
+                    )}
                   </div>
-                  <TextareaWithCounter
-                    rows={10}
-                    value={shotsResultText}
-                    onChange={(event) => syncShotsResultJson(event.target.value)}
-                    placeholder={t("workspace.shotsResultPlaceholder")}
-                    spellCheck={false}
-                    className="mt-3 min-h-72 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
-                  />
-                  {shotsResultJsonError ? (
-                    <div className="mt-2 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-xs leading-5 text-red-700">
-                      {shotsResultJsonError}
+
+                  <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-foreground">
+                        {t("workspace.shotsResultTitle")}
+                      </h4>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {t("workspace.shotsResultHelp")}
+                      </p>
+                    </div>
+                    <TextareaWithCounter
+                      rows={10}
+                      value={shotsResultText}
+                      onChange={(event) =>
+                        syncShotsResultJson(event.target.value)
+                      }
+                      placeholder={t("workspace.shotsResultPlaceholder")}
+                      spellCheck={false}
+                      className="mt-3 min-h-72 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
+                    />
+                    {shotsResultJsonError ? (
+                      <div className="mt-2 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-xs leading-5 text-red-700">
+                        {shotsResultJsonError}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {shotGenerationErrorMessage ? (
+                    <div className="mt-3 flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
+                      <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                      <span className="whitespace-pre-wrap">
+                        {shotGenerationErrorMessage}
+                      </span>
+                    </div>
+                  ) : shotGenerationSuccessMessage ? (
+                    <div className="mt-3 flex items-start gap-2 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm leading-6 text-emerald-700">
+                      <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+                      <span>{shotGenerationSuccessMessage}</span>
                     </div>
                   ) : null}
                 </div>
 
-                {shotGenerationErrorMessage ? (
-                  <div className="mt-3 flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
-                    <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                    <span className="whitespace-pre-wrap">
-                      {shotGenerationErrorMessage}
-                    </span>
-                  </div>
-                ) : shotGenerationSuccessMessage ? (
-                  <div className="mt-3 flex items-start gap-2 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm leading-6 text-emerald-700">
-                    <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-                    <span>{shotGenerationSuccessMessage}</span>
-                  </div>
-                ) : null}
+                <aside className="min-w-0 space-y-3">
+                  {renderAttributeCatalogSelection({
+                    catalog: shotsAttributeCatalog,
+                    selectedIds: shotsOptionIds,
+                    setSelectedIds: setShotsOptionIds,
+                    title: "Shots Attributes",
+                    help: "Admin-managed Shots attributes used when the Shots master prompt contains {shotsAttributes}. Required attributes keep at least one selected option.",
+                    helperPrefix: "shots",
+                    panelOpen: isShotsAttributesOpen,
+                    onPanelToggle: () =>
+                      setIsShotsAttributesOpen((current) => !current),
+                  })}
+                </aside>
               </div>
 
-              <aside className="min-w-0 space-y-3">
-                {renderAttributeCatalogSelection({
-                  catalog: shotsAttributeCatalog,
-                  selectedIds: shotsOptionIds,
-                  setSelectedIds: setShotsOptionIds,
-                  title: "Shots Attributes",
-                  help: "Admin-managed Shots attributes used when the Shots master prompt contains {shotsAttributes}. Required attributes keep at least one selected option.",
-                  helperPrefix: "shots",
-                  panelOpen: isShotsAttributesOpen,
-                  onPanelToggle: () =>
-                    setIsShotsAttributesOpen((current) => !current),
-                })}
-              </aside>
-            </div>
-
-            <div className="mt-4 rounded-md bg-muted p-3 text-sm text-muted-foreground">
-              {t("workspace.shotsSourceFromScenario")}
-            </div>
-          </>
-        ) : null}
-      </div>
-
-      <div className="mt-4 rounded-lg border border-border bg-white p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <button
-            type="button"
-            className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
-            onClick={() => setIsShotCardsStepOpen((current) => !current)}
-            aria-expanded={isShotCardsStepOpen}
-          >
-            <div className="flex items-center gap-2 font-medium">
-              {isShotCardsStepOpen ? (
-                <ChevronDown size={18} className="text-muted-foreground" />
-              ) : (
-                <ChevronRight size={18} className="text-muted-foreground" />
-              )}
-              <Clapperboard size={18} className="text-sky-600" />
-              {t("workspace.shotsCardsTitle")}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t("workspace.shotsCardsHelp")}
-            </p>
-          </button>
+              <div className="mt-4 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                {t("workspace.shotsSourceFromScenario")}
+              </div>
+            </>
+          ) : null}
         </div>
 
-        {isShotCardsStepOpen ? (
-          !selectedShotPlan ? (
-            <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
-              {t("workspace.shotsNone")}
-            </div>
-          ) : (
-            <>
-              {showUserMasterPrompts ? (
-                <div className="mt-4">
-                  <MasterPromptField
-                    id="shotMasterPrompt"
-                    label={t("workspace.shotMasterPromptLabel")}
-                    help={t("workspace.shotMasterPromptHelp")}
-                    rows={7}
-                    value={shotPromptTemplate}
-                    onChange={(event) => {
-                      setShotPromptTemplate(event.target.value);
-                      setGeneratedShotPrompts({});
-                      setRawDataModal(null);
-                    }}
-                    placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shot}
-                  />
-                </div>
-              ) : null}
+        <div className="mt-4 rounded-lg border border-border bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <button
+              type="button"
+              className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+              onClick={() => setIsShotCardsStepOpen((current) => !current)}
+              aria-expanded={isShotCardsStepOpen}
+            >
+              <div className="flex items-center gap-2 font-medium">
+                {isShotCardsStepOpen ? (
+                  <ChevronDown size={18} className="text-muted-foreground" />
+                ) : (
+                  <ChevronRight size={18} className="text-muted-foreground" />
+                )}
+                <Clapperboard size={18} className="text-sky-600" />
+                {t("workspace.shotsCardsTitle")}
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {t("workspace.shotsCardsHelp")}
+              </p>
+            </button>
+          </div>
 
-              <div className="mt-4 grid gap-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-foreground">
-                      {t("workspace.shotsEditorTitle")}
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t("workspace.shotsEditorHelp")}
-                    </p>
+          {isShotCardsStepOpen ? (
+            !selectedShotPlan ? (
+              <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                {t("workspace.shotsNone")}
+              </div>
+            ) : (
+              <>
+                {showUserMasterPrompts ? (
+                  <div className="mt-4">
+                    <MasterPromptField
+                      id="shotMasterPrompt"
+                      label={t("workspace.shotMasterPromptLabel")}
+                      help={t("workspace.shotMasterPromptHelp")}
+                      rows={7}
+                      value={shotPromptTemplate}
+                      onChange={(event) => {
+                        setShotPromptTemplate(event.target.value);
+                        setGeneratedShotPrompts({});
+                        setRawDataModal(null);
+                      }}
+                      placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shot}
+                    />
                   </div>
-                  <div className="flex shrink-0 flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="gap-2"
-                      onClick={addShot}
-                    >
-                      <Plus size={16} />
-                      {t("workspace.shotsAdd")}
-                    </Button>
-                    <Button
-                      type="button"
-                      className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={isSavingShots}
-                      onClick={() => void saveShotPlan()}
-                    >
-                      {isSavingShots ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : (
-                        <Save size={16} />
-                      )}
-                      {t("workspace.shotsSave")}
-                    </Button>
-                  </div>
-                </div>
+                ) : null}
 
-                {selectedShotPlan.shots.map((shot, shotIndex) => {
-                  const checked = selectedShotIds.includes(shot.id);
-                  const shotAttributes = shot.attributes.filter(
-                    (attribute) => !isDialogueAttribute(attribute),
-                  );
-                  const adminShotSelectedIds = attributeSelectionToOptionIds(
-                    buildShotAttributeSelectionForShot(shot),
-                  );
-                  const isShotAttributesOpen =
-                    openShotAttributePanelIds[shot.id] ?? false;
-                  const isAdminShotAttributesOpen =
-                    openAdminShotAttributePanelIds[shot.id] ?? false;
-                  const isCreatingShotVideo =
-                    creatingVideoShotIds[shot.id] ?? false;
-                  const shotVideoMessage = shotVideoMessages[shot.id];
-                  const shotVideoError = shotVideoErrors[shot.id];
-                  return (
-                    <div
-                      key={shot.id}
-                      className={`rounded-md border p-3 transition ${
-                        checked
-                          ? "border-sky-300 bg-sky-50"
-                          : "border-border bg-white"
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-start gap-3">
-                        <label className="mt-2 inline-flex items-center gap-2 text-sm font-medium">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-border"
-                            checked={checked}
-                            onChange={() => toggleShotSelection(shot.id)}
-                          />
-                          {t("workspace.shotsUse")}
-                        </label>
-                        <input
-                          value={shot.title}
-                          onChange={(event) =>
-                            updateShot(shot.id, (currentShot) => ({
-                              ...currentShot,
-                              title: event.target.value,
-                            }))
-                          }
-                          aria-label={t("workspace.shotsTitleInput", {
-                            index: shotIndex + 1,
-                          })}
-                          className="h-10 min-w-0 flex-1 rounded-md border border-border bg-white px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-sky-200"
-                        />
-                        <input
-                          type="number"
-                          min={1}
-                          max={8}
-                          value={shot.durationSeconds}
-                          onChange={(event) =>
-                            updateShot(shot.id, (currentShot) => ({
-                              ...currentShot,
-                              durationSeconds: clampShotDuration(
-                                Number(event.target.value),
-                              ),
-                            }))
-                          }
-                          aria-label={t("workspace.shotsDurationInput", {
-                            index: shotIndex + 1,
-                          })}
-                          className="h-10 w-20 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
-                        />
-                        <button
-                          type="button"
-                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-white hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
-                          onClick={() => removeShot(shot.id)}
-                          aria-label={t("workspace.shotsRemove", {
-                            title: shot.title,
-                          })}
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                <div className="mt-4 grid gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">
+                        {t("workspace.shotsEditorTitle")}
                       </div>
-                      <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-                        <aside className="order-2 min-w-0 space-y-3 xl:col-start-2 xl:row-start-1 xl:order-none">
-                          {renderAttributeCatalogSelection({
-                            catalog: shotAttributeCatalog,
-                            selectedIds: adminShotSelectedIds,
-                            setSelectedIds: (updater) => {
-                              updateShot(shot.id, (currentShot) => {
-                                const currentIds = shotAttributeCatalog
-                                  ? mergeWithRequiredCatalogOptionIds(
-                                      shotAttributeCatalog,
-                                      attributeSelectionToOptionIds(
-                                        currentShot.attributeSelection,
-                                      ),
-                                    )
-                                  : attributeSelectionToOptionIds(
-                                      currentShot.attributeSelection,
-                                    );
-                                const nextIds = updater(
-                                  currentIds,
-                                );
-                                return {
-                                  ...currentShot,
-                                  attributeSelection: shotAttributeCatalog
-                                    ? buildAttributeSelection(
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t("workspace.shotsEditorHelp")}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="gap-2"
+                        onClick={addShot}
+                      >
+                        <Plus size={16} />
+                        {t("workspace.shotsAdd")}
+                      </Button>
+                      <Button
+                        type="button"
+                        className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isSavingShots}
+                        onClick={() => void saveShotPlan()}
+                      >
+                        {isSavingShots ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Save size={16} />
+                        )}
+                        {t("workspace.shotsSave")}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {selectedShotPlan.shots.map((shot, shotIndex) => {
+                    const checked = selectedShotIds.includes(shot.id);
+                    const shotAttributes = shot.attributes.filter(
+                      (attribute) => !isDialogueAttribute(attribute),
+                    );
+                    const adminShotSelectedIds = attributeSelectionToOptionIds(
+                      buildShotAttributeSelectionForShot(shot),
+                    );
+                    const isShotAttributesOpen =
+                      openShotAttributePanelIds[shot.id] ?? false;
+                    const isAdminShotAttributesOpen =
+                      openAdminShotAttributePanelIds[shot.id] ?? false;
+                    const isCreatingShotVideo =
+                      creatingVideoShotIds[shot.id] ?? false;
+                    const isSendingHandoff = handoffShotIds[shot.id] ?? false;
+                    const shotVideoMessage = shotVideoMessages[shot.id];
+                    const shotVideoError = shotVideoErrors[shot.id];
+                    const shotHandoffMessage = shotHandoffMessages[shot.id];
+                    const shotHandoffError = shotHandoffErrors[shot.id];
+                    return (
+                      <div
+                        key={shot.id}
+                        className={`rounded-md border p-3 transition ${
+                          checked
+                            ? "border-sky-300 bg-sky-50"
+                            : "border-border bg-white"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start gap-3">
+                          <label className="mt-2 inline-flex items-center gap-2 text-sm font-medium">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-border"
+                              checked={checked}
+                              onChange={() => toggleShotSelection(shot.id)}
+                            />
+                            {t("workspace.shotsUse")}
+                          </label>
+                          <input
+                            value={shot.title}
+                            onChange={(event) =>
+                              updateShot(shot.id, (currentShot) => ({
+                                ...currentShot,
+                                title: event.target.value,
+                              }))
+                            }
+                            aria-label={t("workspace.shotsTitleInput", {
+                              index: shotIndex + 1,
+                            })}
+                            className="h-10 min-w-0 flex-1 rounded-md border border-border bg-white px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-sky-200"
+                          />
+                          <input
+                            type="number"
+                            min={1}
+                            max={8}
+                            value={shot.durationSeconds}
+                            onChange={(event) =>
+                              updateShot(shot.id, (currentShot) => ({
+                                ...currentShot,
+                                durationSeconds: clampShotDuration(
+                                  Number(event.target.value),
+                                ),
+                              }))
+                            }
+                            aria-label={t("workspace.shotsDurationInput", {
+                              index: shotIndex + 1,
+                            })}
+                            className="h-10 w-20 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                          />
+                          <button
+                            type="button"
+                            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-white hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+                            onClick={() => removeShot(shot.id)}
+                            aria-label={t("workspace.shotsRemove", {
+                              title: shot.title,
+                            })}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                        <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+                          <aside className="order-2 min-w-0 space-y-3 xl:col-start-2 xl:row-start-1 xl:order-none">
+                            {renderAttributeCatalogSelection({
+                              catalog: shotAttributeCatalog,
+                              selectedIds: adminShotSelectedIds,
+                              setSelectedIds: (updater) => {
+                                updateShot(shot.id, (currentShot) => {
+                                  const currentIds = shotAttributeCatalog
+                                    ? mergeWithRequiredCatalogOptionIds(
                                         shotAttributeCatalog,
-                                        nextIds,
+                                        attributeSelectionToOptionIds(
+                                          currentShot.attributeSelection,
+                                        ),
                                       )
-                                    : null,
-                                };
-                              });
-                            },
-                            title: t("workspace.adminShotAttributesTitle"),
-                            help: t("workspace.adminShotAttributesHelp"),
-                            helperPrefix: `admin-shot-${shot.id}`,
-                            panelOpen: isAdminShotAttributesOpen,
-                            onPanelToggle: () =>
-                              setOpenAdminShotAttributePanelIds((current) => ({
-                                ...current,
-                                [shot.id]: !isAdminShotAttributesOpen,
-                              })),
-                          })}
-                          <div className="rounded-md border border-border bg-white">
-                            <button
-                              type="button"
-                              className="flex w-full items-start justify-between gap-3 p-3 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
-                              onClick={() =>
-                                setOpenShotAttributePanelIds((current) => ({
-                                  ...current,
-                                  [shot.id]: !isShotAttributesOpen,
-                                }))
-                              }
-                              aria-expanded={isShotAttributesOpen}
-                            >
-                              <span className="min-w-0">
-                                <span className="flex min-w-0 items-center gap-2 font-medium">
-                                  {isShotAttributesOpen ? (
-                                    <ChevronDown
-                                      size={18}
-                                      className="text-muted-foreground"
-                                    />
-                                  ) : (
-                                    <ChevronRight
-                                      size={18}
-                                      className="text-muted-foreground"
-                                    />
-                                  )}
-                                  <span className="truncate">
-                                    {t("workspace.shotGeneratedAttributesTitle")}
+                                    : attributeSelectionToOptionIds(
+                                        currentShot.attributeSelection,
+                                      );
+                                  const nextIds = updater(currentIds);
+                                  return {
+                                    ...currentShot,
+                                    attributeSelection: shotAttributeCatalog
+                                      ? buildAttributeSelection(
+                                          shotAttributeCatalog,
+                                          nextIds,
+                                        )
+                                      : null,
+                                  };
+                                });
+                              },
+                              title: t("workspace.adminShotAttributesTitle"),
+                              help: t("workspace.adminShotAttributesHelp"),
+                              helperPrefix: `admin-shot-${shot.id}`,
+                              panelOpen: isAdminShotAttributesOpen,
+                              onPanelToggle: () =>
+                                setOpenAdminShotAttributePanelIds(
+                                  (current) => ({
+                                    ...current,
+                                    [shot.id]: !isAdminShotAttributesOpen,
+                                  }),
+                                ),
+                            })}
+                            <div className="rounded-md border border-border bg-white">
+                              <button
+                                type="button"
+                                className="flex w-full items-start justify-between gap-3 p-3 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+                                onClick={() =>
+                                  setOpenShotAttributePanelIds((current) => ({
+                                    ...current,
+                                    [shot.id]: !isShotAttributesOpen,
+                                  }))
+                                }
+                                aria-expanded={isShotAttributesOpen}
+                              >
+                                <span className="min-w-0">
+                                  <span className="flex min-w-0 items-center gap-2 font-medium">
+                                    {isShotAttributesOpen ? (
+                                      <ChevronDown
+                                        size={18}
+                                        className="text-muted-foreground"
+                                      />
+                                    ) : (
+                                      <ChevronRight
+                                        size={18}
+                                        className="text-muted-foreground"
+                                      />
+                                    )}
+                                    <span className="truncate">
+                                      {t(
+                                        "workspace.shotGeneratedAttributesTitle",
+                                      )}
+                                    </span>
+                                  </span>
+                                  <span className="mt-1 block text-xs text-muted-foreground">
+                                    {t("workspace.shotAttributesCount", {
+                                      count: shotAttributes.length,
+                                    })}
                                   </span>
                                 </span>
-                                <span className="mt-1 block text-xs text-muted-foreground">
-                                  {t("workspace.shotAttributesCount", {
-                                    count: shotAttributes.length,
-                                  })}
+                                <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                                  {shotAttributes.length}
                                 </span>
-                              </span>
-                              <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
-                                {shotAttributes.length}
-                              </span>
-                            </button>
+                              </button>
 
-                            {isShotAttributesOpen ? (
-                              <div className="border-t border-border p-3">
-                                <p className="mb-3 text-xs text-muted-foreground">
-                                  {t("workspace.shotAttributesPanelHelp")}
-                                </p>
-                                <div className="grid gap-3">
-                                  {shotAttributes.length === 0 ? (
-                                    <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-                                      {t("workspace.shotPromptNoAttributes")}
-                                    </div>
-                                  ) : null}
-                                  {shotAttributes.map(
-                                    (attribute, attributeIndex) => (
-                                      <div
-                                        key={attribute.id}
-                                        className="rounded-md border border-border p-3"
-                                      >
-                                        <div className="flex items-center gap-2">
-                                          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm text-sky-800">
-                                            {attributeIndex + 1}
-                                          </span>
-                                          <input
-                                            value={attribute.name}
+                              {isShotAttributesOpen ? (
+                                <div className="border-t border-border p-3">
+                                  <p className="mb-3 text-xs text-muted-foreground">
+                                    {t("workspace.shotAttributesPanelHelp")}
+                                  </p>
+                                  <div className="grid gap-3">
+                                    {shotAttributes.length === 0 ? (
+                                      <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+                                        {t("workspace.shotPromptNoAttributes")}
+                                      </div>
+                                    ) : null}
+                                    {shotAttributes.map(
+                                      (attribute, attributeIndex) => (
+                                        <div
+                                          key={attribute.id}
+                                          className="rounded-md border border-border p-3"
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm text-sky-800">
+                                              {attributeIndex + 1}
+                                            </span>
+                                            <input
+                                              value={attribute.name}
+                                              onChange={(event) =>
+                                                updateShotAttribute(
+                                                  shot.id,
+                                                  attribute.id,
+                                                  (currentAttribute) => ({
+                                                    ...currentAttribute,
+                                                    name: event.target.value,
+                                                  }),
+                                                )
+                                              }
+                                              aria-label={t(
+                                                "workspace.shotsAttributeName",
+                                              )}
+                                              className="h-9 min-w-0 flex-1 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                                            />
+                                            <button
+                                              type="button"
+                                              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
+                                              onClick={() =>
+                                                removeShotAttribute(
+                                                  shot.id,
+                                                  attribute.id,
+                                                )
+                                              }
+                                              aria-label={t(
+                                                "workspace.shotsRemoveAttribute",
+                                              )}
+                                            >
+                                              <Trash2 size={15} />
+                                            </button>
+                                          </div>
+                                          <AutoResizeTextarea
+                                            value={attribute.value}
                                             onChange={(event) =>
                                               updateShotAttribute(
                                                 shot.id,
                                                 attribute.id,
                                                 (currentAttribute) => ({
                                                   ...currentAttribute,
-                                                  name: event.target.value,
+                                                  value: event.target.value,
                                                 }),
                                               )
                                             }
                                             aria-label={t(
-                                              "workspace.shotsAttributeName",
+                                              "workspace.shotsAttributeValue",
                                             )}
-                                            className="h-9 min-w-0 flex-1 rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                                            className="mt-2 min-h-9 w-full resize-none overflow-hidden rounded-md border border-border bg-white px-3 py-2 text-sm leading-5 outline-none focus:ring-2 focus:ring-sky-200"
                                           />
-                                          <button
-                                            type="button"
-                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-sky-200"
-                                            onClick={() =>
-                                              removeShotAttribute(
-                                                shot.id,
-                                                attribute.id,
-                                              )
-                                            }
-                                            aria-label={t(
-                                              "workspace.shotsRemoveAttribute",
-                                            )}
-                                          >
-                                            <Trash2 size={15} />
-                                          </button>
                                         </div>
-                                        <AutoResizeTextarea
-                                          value={attribute.value}
-                                          onChange={(event) =>
-                                            updateShotAttribute(
-                                              shot.id,
-                                              attribute.id,
-                                              (currentAttribute) => ({
-                                                ...currentAttribute,
-                                                value: event.target.value,
-                                              }),
-                                            )
-                                          }
-                                          aria-label={t(
-                                            "workspace.shotsAttributeValue",
-                                          )}
-                                          className="mt-2 min-h-9 w-full resize-none overflow-hidden rounded-md border border-border bg-white px-3 py-2 text-sm leading-5 outline-none focus:ring-2 focus:ring-sky-200"
-                                        />
-                                      </div>
-                                    ),
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-border bg-white px-3 text-sm font-medium transition hover:bg-muted"
-                                    onClick={() => addShotAttribute(shot.id)}
-                                  >
-                                    <Plus size={15} />
-                                    {t("workspace.shotsAddAttribute")}
-                                  </button>
+                                      ),
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-border bg-white px-3 text-sm font-medium transition hover:bg-muted"
+                                      onClick={() => addShotAttribute(shot.id)}
+                                    >
+                                      <Plus size={15} />
+                                      {t("workspace.shotsAddAttribute")}
+                                    </button>
+                                  </div>
                                 </div>
+                              ) : null}
+                            </div>
+                          </aside>
+
+                          <div className="order-1 min-w-0 xl:col-start-1 xl:row-start-1 xl:order-none">
+                            <TextareaWithCounter
+                              rows={3}
+                              value={shot.description}
+                              onChange={(event) =>
+                                updateShot(shot.id, (currentShot) => ({
+                                  ...currentShot,
+                                  description: event.target.value,
+                                }))
+                              }
+                              className="w-full rounded-md border border-border bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                            />
+                            <label className="mt-3 block text-sm font-medium text-foreground">
+                              {t("workspace.shotDialogue")}
+                              <TextareaWithCounter
+                                rows={3}
+                                value={getShotDialogue(shot)}
+                                onChange={(event) =>
+                                  updateShotDialogue(
+                                    shot.id,
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder={t(
+                                  "workspace.shotDialoguePlaceholder",
+                                )}
+                                className="mt-2 w-full rounded-md border border-border bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                              />
+                            </label>
+                            {renderMediaUpload(shot)}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                className="gap-2"
+                                onClick={() => openShotPrompt(shot)}
+                              >
+                                <FileText size={15} />
+                                {t("workspace.fullPromptButton")}
+                              </Button>
+                              <Button
+                                type="button"
+                                className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={isCreatingShotVideo}
+                                onClick={() => void createShotVideo(shot)}
+                              >
+                                {isCreatingShotVideo ? (
+                                  <Loader2 size={15} className="animate-spin" />
+                                ) : (
+                                  <FileVideo size={15} />
+                                )}
+                                {isCreatingShotVideo
+                                  ? t("workspace.shotVideoCreating")
+                                  : t("workspace.shotVideoCreate")}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={isSendingHandoff}
+                                onClick={() => void startAiHandoff(shot)}
+                              >
+                                {isSendingHandoff ? (
+                                  <Loader2 size={15} className="animate-spin" />
+                                ) : (
+                                  <Send size={15} />
+                                )}
+                                {isSendingHandoff
+                                  ? t("workspace.aiHandoffSending")
+                                  : t("workspace.aiHandoffButton")}
+                              </Button>
+                              {renderRawDataButton(
+                                t("workspace.rawRequestButton"),
+                                t("workspace.shotVideoRawRequest"),
+                                t("workspace.shotVideoRawRequestHelp"),
+                                rawShotVideoRequests[shot.id],
+                              )}
+                              {renderRawDataButton(
+                                t("workspace.rawResponseButton"),
+                                t("workspace.shotVideoRawResponse"),
+                                t("workspace.shotVideoRawResponseHelp"),
+                                rawShotVideoResponses[shot.id],
+                              )}
+                            </div>
+                            {shotVideoMessage ? (
+                              <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">
+                                {shotVideoMessage}
+                              </div>
+                            ) : null}
+                            {shotVideoError ? (
+                              <div className="mt-3 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+                                {shotVideoError}
+                              </div>
+                            ) : null}
+                            {shotHandoffMessage ? (
+                              <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">
+                                {shotHandoffMessage}
+                              </div>
+                            ) : null}
+                            {shotHandoffError ? (
+                              <div className="mt-3 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+                                {shotHandoffError}
                               </div>
                             ) : null}
                           </div>
-                        </aside>
-
-                        <div className="order-1 min-w-0 xl:col-start-1 xl:row-start-1 xl:order-none">
-                          <TextareaWithCounter
-                            rows={3}
-                            value={shot.description}
-                            onChange={(event) =>
-                              updateShot(shot.id, (currentShot) => ({
-                                ...currentShot,
-                                description: event.target.value,
-                              }))
-                            }
-                            className="w-full rounded-md border border-border bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
-                          />
-                          <label className="mt-3 block text-sm font-medium text-foreground">
-                            {t("workspace.shotDialogue")}
-                            <TextareaWithCounter
-                              rows={3}
-                              value={getShotDialogue(shot)}
-                              onChange={(event) =>
-                                updateShotDialogue(shot.id, event.target.value)
-                              }
-                              placeholder={t("workspace.shotDialoguePlaceholder")}
-                              className="mt-2 w-full rounded-md border border-border bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
-                            />
-                          </label>
-                          {renderMediaUpload(shot)}
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              className="gap-2"
-                              onClick={() => openShotPrompt(shot)}
-                            >
-                              <FileText size={15} />
-                              {t("workspace.fullPromptButton")}
-                            </Button>
-                            <Button
-                              type="button"
-                              className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                              disabled={isCreatingShotVideo}
-                              onClick={() => void createShotVideo(shot)}
-                            >
-                              {isCreatingShotVideo ? (
-                                <Loader2 size={15} className="animate-spin" />
-                              ) : (
-                                <FileVideo size={15} />
-                              )}
-                              {isCreatingShotVideo
-                                ? t("workspace.shotVideoCreating")
-                                : t("workspace.shotVideoCreate")}
-                            </Button>
-                            {renderRawDataButton(
-                              t("workspace.rawRequestButton"),
-                              t("workspace.shotVideoRawRequest"),
-                              t("workspace.shotVideoRawRequestHelp"),
-                              rawShotVideoRequests[shot.id],
-                            )}
-                            {renderRawDataButton(
-                              t("workspace.rawResponseButton"),
-                              t("workspace.shotVideoRawResponse"),
-                              t("workspace.shotVideoRawResponseHelp"),
-                              rawShotVideoResponses[shot.id],
-                            )}
-                          </div>
-                          {shotVideoMessage ? (
-                            <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">
-                              {shotVideoMessage}
-                            </div>
-                          ) : null}
-                          {shotVideoError ? (
-                            <div className="mt-3 whitespace-pre-wrap rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">
-                              {shotVideoError}
-                            </div>
-                          ) : null}
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )
-        ) : null}
-      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )
+          ) : null}
+        </div>
       </>
     );
   }
@@ -5748,321 +6142,330 @@ export function ProjectWorkspace({
               )}
               {templateTitle}
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {templateHelp}
-            </p>
+            <p className="mt-1 text-sm text-muted-foreground">{templateHelp}</p>
           </button>
         </div>
 
         {isTemplateStepOpen ? (
           <>
-        {templates.length === 0 || !activeTemplate ? (
-          <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
-            {t("workspace.templateNone")}
-          </div>
-        ) : (
-          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-            <div className="min-w-0 xl:col-start-1 xl:row-start-1">
-              <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
-                <div className="font-medium">Active Scenario catalog</div>
-                <p className="mt-1">{activeTemplate.name}</p>
-                {activeTemplate.description ? (
-                  <p className="mt-1 text-xs leading-5 text-sky-800">
-                    {activeTemplate.description}
-                  </p>
-                ) : null}
+            {templates.length === 0 || !activeTemplate ? (
+              <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                {t("workspace.templateNone")}
               </div>
-
-              {flowType === "script" ? (
-                <div className="mt-4 grid gap-4">
-                  {showUserMasterPrompts ? (
-                    <MasterPromptField
-                      id="scenarioMasterPrompt"
-                      label={t("workspace.templateMasterPromptLabel")}
-                      help={t("workspace.templateMasterPromptHelp")}
-                      rows={7}
-                      value={scenarioAnalysisPrompt}
-                      onChange={(event) => {
-                        setScenarioAnalysisPrompt(event.target.value);
-                        setTemplateAnalysisCompact("");
-                        setTemplateAnalysisErrorMessage("");
-                        setRawTemplateRequest(null);
-                        setRawTemplateResponse(null);
-                        setRawDataModal(null);
-                      }}
-                      placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
-                    />
-                  ) : null}
-                </div>
-              ) : null}
-
-              <div className="mt-4 flex flex-wrap gap-3">
-                {flowType === "script" ? (
-                  <Button
-                    type="button"
-                    className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={isAnalyzingTemplate || !selectedTemplate}
-                    onClick={() => void analyzeTemplateSelection()}
-                  >
-                    {isAnalyzingTemplate ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Sparkles size={16} />
-                    )}
-                    {isAnalyzingTemplate
-                      ? t("workspace.templateAnalyzing")
-                      : t("workspace.templateAnalyze")}
-                  </Button>
-                ) : null}
-                {flowType === "script" ? (
-                  <>
-                    {renderFullPromptButton(
-                      t("workspace.scenarioFullPrompt"),
-                      t("workspace.scenarioFullPromptHelp"),
-                      buildScenarioAnalysisFullPrompt(),
-                    )}
-                    {renderRawDataButton(
-                      t("workspace.rawRequestButton"),
-                      t("workspace.scenarioRawRequest"),
-                      t("workspace.scenarioRawRequestHelp"),
-                      rawTemplateRequest,
-                    )}
-                    {renderRawDataButton(
-                      t("workspace.rawResponseButton"),
-                      t("workspace.scenarioRawResponse"),
-                      t("workspace.scenarioRawResponseHelp"),
-                      rawTemplateResponse,
-                    )}
-                  </>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isSavingTemplateSelection}
-                  onClick={() => void saveTemplateSelection()}
-                >
-                  {isSavingTemplateSelection ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <Save size={16} />
-                  )}
-                  {isSavingTemplateSelection
-                    ? t("workspace.templateSelectionSaving")
-                    : t("workspace.templateSelectionSave")}
-                </Button>
-              </div>
-
-              {templateAnalysisErrorMessage ? (
-                <div className="mt-3 flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
-                  <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                  <span className="whitespace-pre-wrap">
-                    {templateAnalysisErrorMessage}
-                  </span>
-                </div>
-              ) : null}
-
-              {templateAnalysisCompact ? (
-                <div className="mt-4 rounded-md border border-sky-100 bg-sky-50 p-3 font-mono text-xs leading-5 text-sky-950">
-                  <div className="mb-1 font-sans text-sm font-medium text-sky-900">
-                    {t("workspace.templateAnalysisResult")}
-                  </div>
-                  <pre className="whitespace-pre-wrap break-words">
-                    {templateAnalysisCompact}
-                  </pre>
-                </div>
-              ) : null}
-            </div>
-
-            <aside className="min-w-0 xl:col-start-2 xl:row-start-1">
-              {selectedTemplate ? (
-                <div className="rounded-md border border-border bg-white">
-                  <button
-                    type="button"
-                    className="flex w-full items-start justify-between gap-3 p-3 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
-                    onClick={() =>
-                      setIsTemplateAttributesOpen((current) => !current)
-                    }
-                    aria-expanded={isTemplateAttributesOpen}
-                  >
-                    <span className="min-w-0">
-                      <span className="flex min-w-0 items-center gap-2 font-medium">
-                        {isTemplateAttributesOpen ? (
-                          <ChevronDown
-                            size={18}
-                            className="text-muted-foreground"
-                          />
-                        ) : (
-                          <ChevronRight
-                            size={18}
-                            className="text-muted-foreground"
-                          />
-                        )}
-                        <span className="truncate">
-                          {t("workspace.templateAttributesTitle")}
-                        </span>
-                      </span>
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        {t("workspace.templateSelectedCount", {
-                          count: selectedTemplateOptionCount,
-                        })}
-                      </span>
-                    </span>
-                    <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
-                      {selectedTemplate.attributes.length}
-                    </span>
-                  </button>
-
-                  {isTemplateAttributesOpen ? (
-                    <div className="border-t border-border p-3">
-                      <p className="mb-3 text-xs text-muted-foreground">
-                        {t("workspace.templateAttributesHelp")}
+            ) : (
+              <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+                <div className="min-w-0 xl:col-start-1 xl:row-start-1">
+                  <div className="rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
+                    <div className="font-medium">Active Scenario catalog</div>
+                    <p className="mt-1">{activeTemplate.name}</p>
+                    {activeTemplate.description ? (
+                      <p className="mt-1 text-xs leading-5 text-sky-800">
+                        {activeTemplate.description}
                       </p>
-                      <div className="grid gap-3">
-                        {selectedTemplate.attributes.map(
-                          (attribute, attributeIndex) => {
-                            const isAttributeCollapsed =
-                              collapsedTemplateAttributeIds[attribute.id] ??
-                              true;
-                            const selectedCount = (
-                              selectedOptionIds[attribute.id] ?? []
-                            ).length;
-                            return (
-                              <div
-                                key={attribute.id}
-                                className="rounded-md border border-border p-3"
-                              >
-                                <div className="flex w-full items-center justify-between gap-2">
-                                  <button
-                                    type="button"
-                                    className="flex min-w-0 flex-1 items-center gap-2 text-left font-medium focus:outline-none focus:ring-2 focus:ring-sky-200"
-                                    onClick={() =>
-                                      setCollapsedTemplateAttributeIds(
-                                        (current) => ({
-                                          ...current,
-                                          [attribute.id]: !isAttributeCollapsed,
-                                        }),
-                                      )
-                                    }
-                                    aria-expanded={!isAttributeCollapsed}
-                                  >
-                                    {isAttributeCollapsed ? (
-                                      <ChevronRight
-                                        size={16}
-                                        className="shrink-0 text-muted-foreground"
-                                      />
-                                    ) : (
-                                      <ChevronDown
-                                        size={16}
-                                        className="shrink-0 text-muted-foreground"
-                                      />
-                                    )}
-                                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm text-sky-800">
-                                      {attributeIndex + 1}
-                                    </span>
-                                    <span className="truncate">
-                                      {attribute.name}
-                                    </span>
-                                  </button>
-                                  <div className="flex shrink-0 items-center gap-2">
-                                    <ScenarioTextHelper
-                                      description={attribute.description}
-                                      descriptionLabel={t(
-                                        "workspace.scenarioHelperDescription",
-                                      )}
-                                      helperId={`attribute:${attribute.id}`}
-                                      label={t("workspace.scenarioHelperOpen")}
-                                      onToggle={setOpenScenarioHelperId}
-                                      openHelperId={openScenarioHelperId}
-                                      translateLabel={t(
-                                        "workspace.scenarioHelperTranslate",
-                                      )}
-                                    />
-                                    <span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
-                                      {t("workspace.templateSelectedCount", {
-                                        count: selectedCount,
-                                      })}
-                                    </span>
-                                  </div>
-                                </div>
-                                {!isAttributeCollapsed ? (
-                                  <div className="mt-3 grid gap-2">
-                                    {attribute.options.map(
-                                      (option, optionIndex) => {
-                                        const checked = (
-                                          selectedOptionIds[attribute.id] ?? []
-                                        ).includes(option.id);
-                                        const optionInputId = `template-option-${attribute.id}-${option.id}`;
-                                        return (
-                                          <div
-                                            key={option.id}
-                                            className={`grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-md border px-3 py-2 text-sm transition ${
-                                              checked
-                                                ? "border-sky-300 bg-sky-50 text-sky-800"
-                                                : "border-border bg-white text-foreground hover:bg-muted"
-                                            }`}
-                                          >
-                                            <input
-                                              id={optionInputId}
-                                              type="checkbox"
-                                              className="h-4 w-4 rounded border-border"
-                                              checked={checked}
-                                              onChange={() =>
-                                                toggleTemplateOption(
-                                                  attribute.id,
-                                                  option.id,
-                                                )
-                                              }
-                                            />
-                                            <label
-                                              htmlFor={optionInputId}
-                                              className="flex min-w-0 cursor-pointer items-center gap-2"
-                                            >
-                                              <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                                {attributeIndex + 1}.
-                                                {optionIndex + 1}
-                                              </span>
-                                              <span className="truncate">
-                                                {option.label}
-                                              </span>
-                                            </label>
-                                            <ScenarioTextHelper
-                                              description={option.description}
-                                              descriptionLabel={t(
-                                                "workspace.scenarioHelperDescription",
-                                              )}
-                                              helperId={`option:${attribute.id}:${option.id}`}
-                                              label={t(
-                                                "workspace.scenarioHelperOpen",
-                                              )}
-                                              onToggle={
-                                                setOpenScenarioHelperId
-                                              }
-                                              openHelperId={
-                                                openScenarioHelperId
-                                              }
-                                              translateLabel={t(
-                                                "workspace.scenarioHelperTranslate",
-                                              )}
-                                            />
-                                          </div>
-                                        );
-                                      },
-                                    )}
-                                  </div>
-                                ) : null}
-                              </div>
-                            );
-                          },
+                    ) : null}
+                  </div>
+
+                  {flowType === "script" ? (
+                    <div className="mt-4 grid gap-4">
+                      {showUserMasterPrompts ? (
+                        <MasterPromptField
+                          id="scenarioMasterPrompt"
+                          label={t("workspace.templateMasterPromptLabel")}
+                          help={t("workspace.templateMasterPromptHelp")}
+                          rows={7}
+                          value={scenarioAnalysisPrompt}
+                          onChange={(event) => {
+                            setScenarioAnalysisPrompt(event.target.value);
+                            setTemplateAnalysisCompact("");
+                            setTemplateAnalysisErrorMessage("");
+                            setRawTemplateRequest(null);
+                            setRawTemplateResponse(null);
+                            setRawDataModal(null);
+                          }}
+                          placeholderSuggestions={
+                            MASTER_PROMPT_PLACEHOLDERS.scenario
+                          }
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    {flowType === "script" ? (
+                      <Button
+                        type="button"
+                        className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isAnalyzingTemplate || !selectedTemplate}
+                        onClick={() => void analyzeTemplateSelection()}
+                      >
+                        {isAnalyzingTemplate ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={16} />
                         )}
+                        {isAnalyzingTemplate
+                          ? t("workspace.templateAnalyzing")
+                          : t("workspace.templateAnalyze")}
+                      </Button>
+                    ) : null}
+                    {flowType === "script" ? (
+                      <>
+                        {renderFullPromptButton(
+                          t("workspace.scenarioFullPrompt"),
+                          t("workspace.scenarioFullPromptHelp"),
+                          buildScenarioAnalysisFullPrompt(),
+                        )}
+                        {renderRawDataButton(
+                          t("workspace.rawRequestButton"),
+                          t("workspace.scenarioRawRequest"),
+                          t("workspace.scenarioRawRequestHelp"),
+                          rawTemplateRequest,
+                        )}
+                        {renderRawDataButton(
+                          t("workspace.rawResponseButton"),
+                          t("workspace.scenarioRawResponse"),
+                          t("workspace.scenarioRawResponseHelp"),
+                          rawTemplateResponse,
+                        )}
+                      </>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isSavingTemplateSelection}
+                      onClick={() => void saveTemplateSelection()}
+                    >
+                      {isSavingTemplateSelection ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Save size={16} />
+                      )}
+                      {isSavingTemplateSelection
+                        ? t("workspace.templateSelectionSaving")
+                        : t("workspace.templateSelectionSave")}
+                    </Button>
+                  </div>
+
+                  {templateAnalysisErrorMessage ? (
+                    <div className="mt-3 flex items-start gap-2 rounded-md border border-red-100 bg-red-50 p-3 text-sm leading-6 text-red-700">
+                      <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                      <span className="whitespace-pre-wrap">
+                        {templateAnalysisErrorMessage}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {templateAnalysisCompact ? (
+                    <div className="mt-4 rounded-md border border-sky-100 bg-sky-50 p-3 font-mono text-xs leading-5 text-sky-950">
+                      <div className="mb-1 font-sans text-sm font-medium text-sky-900">
+                        {t("workspace.templateAnalysisResult")}
                       </div>
+                      <pre className="whitespace-pre-wrap break-words">
+                        {templateAnalysisCompact}
+                      </pre>
                     </div>
                   ) : null}
                 </div>
-              ) : null}
-            </aside>
-          </div>
-        )}
+
+                <aside className="min-w-0 xl:col-start-2 xl:row-start-1">
+                  {selectedTemplate ? (
+                    <div className="rounded-md border border-border bg-white">
+                      <button
+                        type="button"
+                        className="flex w-full items-start justify-between gap-3 p-3 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+                        onClick={() =>
+                          setIsTemplateAttributesOpen((current) => !current)
+                        }
+                        aria-expanded={isTemplateAttributesOpen}
+                      >
+                        <span className="min-w-0">
+                          <span className="flex min-w-0 items-center gap-2 font-medium">
+                            {isTemplateAttributesOpen ? (
+                              <ChevronDown
+                                size={18}
+                                className="text-muted-foreground"
+                              />
+                            ) : (
+                              <ChevronRight
+                                size={18}
+                                className="text-muted-foreground"
+                              />
+                            )}
+                            <span className="truncate">
+                              {t("workspace.templateAttributesTitle")}
+                            </span>
+                          </span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {t("workspace.templateSelectedCount", {
+                              count: selectedTemplateOptionCount,
+                            })}
+                          </span>
+                        </span>
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                          {selectedTemplate.attributes.length}
+                        </span>
+                      </button>
+
+                      {isTemplateAttributesOpen ? (
+                        <div className="border-t border-border p-3">
+                          <p className="mb-3 text-xs text-muted-foreground">
+                            {t("workspace.templateAttributesHelp")}
+                          </p>
+                          <div className="grid gap-3">
+                            {selectedTemplate.attributes.map(
+                              (attribute, attributeIndex) => {
+                                const isAttributeCollapsed =
+                                  collapsedTemplateAttributeIds[attribute.id] ??
+                                  true;
+                                const selectedCount = (
+                                  selectedOptionIds[attribute.id] ?? []
+                                ).length;
+                                return (
+                                  <div
+                                    key={attribute.id}
+                                    className="rounded-md border border-border p-3"
+                                  >
+                                    <div className="flex w-full items-center justify-between gap-2">
+                                      <button
+                                        type="button"
+                                        className="flex min-w-0 flex-1 items-center gap-2 text-left font-medium focus:outline-none focus:ring-2 focus:ring-sky-200"
+                                        onClick={() =>
+                                          setCollapsedTemplateAttributeIds(
+                                            (current) => ({
+                                              ...current,
+                                              [attribute.id]:
+                                                !isAttributeCollapsed,
+                                            }),
+                                          )
+                                        }
+                                        aria-expanded={!isAttributeCollapsed}
+                                      >
+                                        {isAttributeCollapsed ? (
+                                          <ChevronRight
+                                            size={16}
+                                            className="shrink-0 text-muted-foreground"
+                                          />
+                                        ) : (
+                                          <ChevronDown
+                                            size={16}
+                                            className="shrink-0 text-muted-foreground"
+                                          />
+                                        )}
+                                        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm text-sky-800">
+                                          {attributeIndex + 1}
+                                        </span>
+                                        <span className="truncate">
+                                          {attribute.name}
+                                        </span>
+                                      </button>
+                                      <div className="flex shrink-0 items-center gap-2">
+                                        <ScenarioTextHelper
+                                          description={attribute.description}
+                                          descriptionLabel={t(
+                                            "workspace.scenarioHelperDescription",
+                                          )}
+                                          helperId={`attribute:${attribute.id}`}
+                                          label={t(
+                                            "workspace.scenarioHelperOpen",
+                                          )}
+                                          onToggle={setOpenScenarioHelperId}
+                                          openHelperId={openScenarioHelperId}
+                                          translateLabel={t(
+                                            "workspace.scenarioHelperTranslate",
+                                          )}
+                                        />
+                                        <span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                                          {t(
+                                            "workspace.templateSelectedCount",
+                                            {
+                                              count: selectedCount,
+                                            },
+                                          )}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    {!isAttributeCollapsed ? (
+                                      <div className="mt-3 grid gap-2">
+                                        {attribute.options.map(
+                                          (option, optionIndex) => {
+                                            const checked = (
+                                              selectedOptionIds[attribute.id] ??
+                                              []
+                                            ).includes(option.id);
+                                            const optionInputId = `template-option-${attribute.id}-${option.id}`;
+                                            return (
+                                              <div
+                                                key={option.id}
+                                                className={`grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-md border px-3 py-2 text-sm transition ${
+                                                  checked
+                                                    ? "border-sky-300 bg-sky-50 text-sky-800"
+                                                    : "border-border bg-white text-foreground hover:bg-muted"
+                                                }`}
+                                              >
+                                                <input
+                                                  id={optionInputId}
+                                                  type="checkbox"
+                                                  className="h-4 w-4 rounded border-border"
+                                                  checked={checked}
+                                                  onChange={() =>
+                                                    toggleTemplateOption(
+                                                      attribute.id,
+                                                      option.id,
+                                                    )
+                                                  }
+                                                />
+                                                <label
+                                                  htmlFor={optionInputId}
+                                                  className="flex min-w-0 cursor-pointer items-center gap-2"
+                                                >
+                                                  <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                                    {attributeIndex + 1}.
+                                                    {optionIndex + 1}
+                                                  </span>
+                                                  <span className="truncate">
+                                                    {option.label}
+                                                  </span>
+                                                </label>
+                                                <ScenarioTextHelper
+                                                  description={
+                                                    option.description
+                                                  }
+                                                  descriptionLabel={t(
+                                                    "workspace.scenarioHelperDescription",
+                                                  )}
+                                                  helperId={`option:${attribute.id}:${option.id}`}
+                                                  label={t(
+                                                    "workspace.scenarioHelperOpen",
+                                                  )}
+                                                  onToggle={
+                                                    setOpenScenarioHelperId
+                                                  }
+                                                  openHelperId={
+                                                    openScenarioHelperId
+                                                  }
+                                                  translateLabel={t(
+                                                    "workspace.scenarioHelperTranslate",
+                                                  )}
+                                                />
+                                              </div>
+                                            );
+                                          },
+                                        )}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              },
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </aside>
+              </div>
+            )}
           </>
         ) : null}
       </div>

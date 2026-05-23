@@ -62,6 +62,7 @@ Yêu cầu:
 - Placeholder khuyến nghị theo nhóm: `Story Content` dùng `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `Scenario` dùng `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `Shots` dùng `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `Shot` dùng `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
 - Each Story Content, Scenario, Shots, and Shot master prompt editor includes an `Output Format placeholder` textarea. That text is inserted into the provider prompt only when `Prompt content` contains `{outputFormat}`. If `{outputFormat}` is present but the Output Format field is empty, save/preview/runtime must fail with a clear error instead of using fallback text.
 - Each Story Content, Scenario, Shots, and Shot master prompt editor also shows the matching admin Attribute catalog below `Master Prompt Attribute`: Story Content shows `Story Attribute`, Scenario shows `Scenario Attribute`, Shots shows `Shots Attribute`, and Shot shows `Shot Attribute`. Admin can select options per master prompt record; those selections are saved separately from the global Master Prompt Config selection.
+- Each Story Content, Scenario, Shots, and Shot master prompt editor keeps the prompt name, short editor description, and action buttons in a sticky top editor bar. `Prompt`, `Set default`, `Delete`, and the primary `Save` action remain reachable while the admin scrolls through long placeholder, output format, Master Prompt Attribute, and workflow Attribute sections.
 - Admin UI hiển thị danh sách placeholder ngay dưới `Prompt content` để admin click chèn token. Danh sách chỉ hiển thị token; mô tả nằm sau helper icon để hover/click xem khi cần. Khi admin nhập `{...`, textarea cũng gợi ý placeholder hợp lệ cho nhóm đang chỉnh; admin có thể click hoặc nhấn Enter/Tab để chèn token chính xác.
 - Admin editor có nút `Prompt` để xem preview chính xác của draft master prompt. Preview render `{masterPromptAttributes}` từ selection admin đang chọn, render placeholder attribute theo type khi admin đã chọn option trong section Story/Scenario/Shots Attribute, và render `{outputFormat}` từ Output Format; các placeholder runtime khác của user được giữ nguyên vì editor admin không có dữ liệu runtime user.
 - Backend replace placeholder nếu có và không tự nối runtime context ẩn sau master prompt. Runtime data chỉ xuất hiện trong prompt khi prompt có placeholder tương ứng.
@@ -110,6 +111,7 @@ Yêu cầu:
 - Không trả API key về client sau khi lưu.
 - Chỉ admin có role `admin` mới được xem và cập nhật cấu hình AI.
 - Mọi thay đổi cấu hình nên có audit log gồm admin thực hiện, thời gian và loại cấu hình thay đổi.
+
 ## 6. Attribute Catalog Administration
 
 - Story, Scenario, Shots, and Shot attribute catalogs are admin-managed and separate from provider/model AI Config.
@@ -131,3 +133,24 @@ Yêu cầu:
 - User Project and One Click screens must not show Master Prompt Attribute selectors or suggest `{masterPromptAttributes}`.
 - Runtime replaces `{masterPromptAttributes}` only with the selection saved on the active admin master prompt. If the token is absent, no Master Prompt Config data is included.
 - Temporary user prompt overrides containing `{masterPromptAttributes}` are invalid and must be rejected with a readable validation error.
+
+## 8. AI Handoff Extension Configuration
+
+- AI Handoff install/detection is configured through environment variables, not through provider API keys:
+  - `NEXT_PUBLIC_AI_HANDOFF_ENABLED`
+  - `NEXT_PUBLIC_AI_HANDOFF_EXTENSION_ID`
+  - `NEXT_PUBLIC_AI_HANDOFF_EXTENSION_URL`
+- The runtime AI target is configured in Admin > AI Config > Site Config > AI Handoff:
+  - `aiHandoffProvider`, default `google-flow-veo`
+  - `aiHandoffTargetUrl`, seeded from `AI_HANDOFF_TARGET_URL` during local/bootstrap setup
+- `aiHandoffPromptSelector`, captured from the live target page by the extension `Check DOM` action.
+- `AI_HANDOFF_PROVIDER` and `AI_HANDOFF_TARGET_URL` are bootstrap defaults only. After Admin config is saved, the saved Admin values are authoritative. If the saved target URL or prompt selector is blank, Step 4 `AI Handoff` fails clearly and does not use a hardcoded runtime fallback or selector.
+- The default local target URL is `https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4`.
+- AI Handoff is separate from API-based video generation. It opens an allowlisted AI website in the user's browser and fills one prompt after the user clicks the Step 4 `AI Handoff` button.
+- Chrome Web Store distribution is the supported customer install path. Internal developer-mode extension loading is for testing only.
+- Chrome distribution reference: https://developer.chrome.com/docs/extensions/how-to/distribute
+- Chrome user install reference: https://support.google.com/chrome/answer/2664769
+- The extension must not store provider cookies, passwords, API keys, or VideoAI session secrets.
+- Admin video provider/model config continues to power `Create video`; AI Handoff uses extension target adapters such as `google-flow-veo`.
+- The extension popup includes `Check DOM`, `Test input prompt`, `Simple insert test`, `Copy selector`, and `Copy selector report`. `Check DOM` asks the admin to click the live Flow prompt input, saves the captured selector to Admin config, displays the saved selector in the popup, and attempts to copy the selector value to the clipboard. `Copy selector report` remains available for debugging metadata. `Test input prompt` inserts the hardcoded text `test input prompt` into the configured prompt input and never clicks Generate. `Simple insert test` is a developer diagnostic that runs directly on the active Flow tab with the known Slate selector `div[role="textbox"][contenteditable="true"][data-slate-editor="true"]` and inserts `hello 123`, bypassing Admin config so selector/input mechanics can be tested separately from the full handoff flow. For Slate/contenteditable editors such as Google Flow, the extension focuses the configured selector or its nearest editable parent and uses the browser insert-text command; no fallback selectors are used, so if VEO/Flow changes its DOM, run `Check DOM` again.
+- Admin > AI Config > Site Config also keeps a read-only `JS DOM detector script` helper for manual selector inspection when extension capture needs deeper debugging.

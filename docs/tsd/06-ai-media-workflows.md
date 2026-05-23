@@ -63,7 +63,7 @@ One Click reuses the Scenario data model and AI workflows instead of adding a ne
 5. Successful Step 2 analysis saves the selected scenario attributes/options to the project and creates a Scenario record named/described from the One Click setup so later prompt composition and shot generation can reuse them.
 6. Step 3 calls `shot_generation` with the Step 1 Story Content, temporary `Shots` master prompt and selected scenario attributes when present. One Click does not show an existing shot-plan selector; the project-scoped shot generation endpoint is used so the resulting shot plan is saved, linked to the project and named/described from the One Click setup.
 7. After a shot card exists, the user can open `Prompt` to inspect the composed per-shot prompt without calling AI, or click `Create video` to submit that prompt to the configured video provider/model through `POST /api/v1/projects/{projectId}/videos`. The shot-level Request/Response popups show the redacted provider request and response/job error for that shot. Provider failures must mark the video job failed and must not create fallback video success data.
-7. Generated shot plans, raw request/response logging, provider errors and prompt preview behavior remain the same as Scenario.
+8. Generated shot plans, raw request/response logging, provider errors and prompt preview behavior remain the same as Scenario.
 
 ## 2.1. Template Generation Flow
 
@@ -78,11 +78,11 @@ Steps:
 7. System stores the template in `content.video_templates`.
 8. Success returns the saved template plus redacted `rawRequest`, `rawResponse`, provider and model so the Scenario create/edit UI can show `Request` and `Response` debug popups next to `Generate scenario with AI`.
 9. If provider execution fails because the key is missing, quota is exhausted, HTTP fails, response text is empty, JSON is invalid or the JSON does not match the scenario-template contract, the API returns `AI_CONFIG_MISSING`, `AI_RATE_LIMITED` or `AI_PROVIDER_FAILED` with safe readable details. Raw provider payloads stay in Admin > AI Logs.
-9. The system must not fallback to fake/sample scenario data when AI fails.
-10. User can edit, add attributes, add options, or paste compact schema text such as `videoPurpose=Storytelling,Commercial;` before saving the normalized JSON.
-11. Project workspace loads active templates and renders each attribute option as a checkbox.
-12. User can select multiple options per attribute.
-13. Prompt/product analysis request includes `templateSelection`.
+10. The system must not fallback to fake/sample scenario data when AI fails.
+11. User can edit, add attributes, add options, or paste compact schema text such as `videoPurpose=Storytelling,Commercial;` before saving the normalized JSON.
+12. Project workspace loads active templates and renders each attribute option as a checkbox.
+13. User can select multiple options per attribute.
+14. Prompt/product analysis request includes `templateSelection`.
 
 ## 2.1.1. Project Template Selection Analysis
 
@@ -128,17 +128,17 @@ Steps:
    - Gemini receives the richer response JSON schema with duration bounds.
    - ChatGPT receives a provider-compatible strict JSON schema with `additionalProperties: false` on every object; duration bounds are enforced during backend normalization.
 8. User-facing script create/edit pages expose `Prompt`, `Request` and `Response` buttons for this workflow; the full prompt is computed before submission and the raw request/response popups use the completed job result.
-8. AI must return strict JSON with `name`, `durationSeconds` and `shots[]`. Each shot includes `title`, `description`, `durationSeconds` and editable `attributes[]`; every shot should include `Start state`, `End state` and `Dialogue`.
-9. System stores the redacted raw provider request and raw AI JSON in the AI logs and completed job result. The workspace shows a `Prompt` button before `Request` beside `Generate Shots` so users can inspect exactly the rendered prompt after placeholder replacement; adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run.
-10. System validates the provider JSON before persistence: required text fields and duration must be present, each shot must include `Start state`, `End state` and `Dialogue`, plan-level attributes are preserved, and invalid/missing required fields fail with `AI_PROVIDER_FAILED`.
-11. System stores the normalized shot plan in `content.video_shot_plans`, including owner user ID, nullable source project ID, plan-level `attributes` JSON and per-shot `shots` JSON.
-12. If no saved key exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails for other reasons or returns invalid/contract-mismatched JSON, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to fake or mock shot generation.
-13. User can edit, add or remove shots, arbitrary shot attributes and the dedicated per-shot dialogue/voiceover textarea.
-14. User can upload reference media inside each shot card; validated media IDs are stored in that shot JSON as `mediaIds`.
-15. Step 4 loads the active admin `Shot` master prompt and active `Shot Attribute` catalog. The `Shot` prompt is singular and distinct from the Step 3 `Shots` prompt: `Shots` creates the shot-list JSON, while `Shot` creates the final prompt for one selected shot.
-16. User can select per-shot `Shot Attribute` options in each shot card. Required Shot attributes auto-select the first option and cannot be cleared to zero selections. The selection is saved on that shot JSON as `attributeSelection`.
-17. Media-aware prompt popups show the saved image/video preview and metadata. Prompt copy remains text-only and does not copy image binaries from the media card or popup.
-18. The per-shot `Prompt` action renders the active `Shot` master prompt with exact placeholder replacement only. Supported placeholders include `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{masterPromptAttributes}` and `{outputFormat}`. The UI must not append hidden runtime context, provider output contract text or fallback prompt content.
+9. AI must return strict JSON with `name`, `durationSeconds` and `shots[]`. Each shot includes `title`, `description`, `durationSeconds` and editable `attributes[]`; every shot should include `Start state`, `End state` and `Dialogue`.
+10. System stores the redacted raw provider request and raw AI JSON in the AI logs and completed job result. The workspace shows a `Prompt` button before `Request` beside `Generate Shots` so users can inspect exactly the rendered prompt after placeholder replacement; adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run.
+11. System validates the provider JSON before persistence: required text fields and duration must be present, each shot must include `Start state`, `End state` and `Dialogue`, plan-level attributes are preserved, and invalid/missing required fields fail with `AI_PROVIDER_FAILED`.
+12. System stores the normalized shot plan in `content.video_shot_plans`, including owner user ID, nullable source project ID, plan-level `attributes` JSON and per-shot `shots` JSON.
+13. If no saved key exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails for other reasons or returns invalid/contract-mismatched JSON, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to fake or mock shot generation.
+14. User can edit, add or remove shots, arbitrary shot attributes and the dedicated per-shot dialogue/voiceover textarea.
+15. User can upload reference media inside each shot card; validated media IDs are stored in that shot JSON as `mediaIds`.
+16. Step 4 loads the active admin `Shot` master prompt and active `Shot Attribute` catalog. The `Shot` prompt is singular and distinct from the Step 3 `Shots` prompt: `Shots` creates the shot-list JSON, while `Shot` creates the final prompt for one selected shot.
+17. User can select per-shot `Shot Attribute` options in each shot card. Required Shot attributes auto-select the first option and cannot be cleared to zero selections. The selection is saved on that shot JSON as `attributeSelection`.
+18. Media-aware prompt popups show the saved image/video preview and metadata. Prompt copy remains text-only and does not copy image binaries from the media card or popup.
+19. The per-shot `Prompt` action renders the active `Shot` master prompt with exact placeholder replacement only. Supported placeholders include `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{masterPromptAttributes}` and `{outputFormat}`. The UI must not append hidden runtime context, provider output contract text or fallback prompt content.
 
 ## 2.4. Script Prompt/Content Generation
 
@@ -318,6 +318,7 @@ userId:projectId:operation:clientRequestId
 ```
 
 Workers must tolerate duplicate job execution and should check whether a result already exists before writing final output.
+
 ## 10. Attribute Catalog Workflow
 
 - Story, Scenario, Shots, and Shot attributes are admin-managed catalogs, separate from Master Prompts.
@@ -336,3 +337,19 @@ Workers must tolerate duplicate job execution and should check whether a result 
   - Shot: `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`
 - `{outputFormat}` renders from the Output Format textarea saved on the active master prompt. If the prompt contains `{outputFormat}` and that saved field is empty, the workflow fails with a clear validation error. No hidden output contract text is appended.
 - The legacy `{attributes}` token remains compatibility-only and should not be expanded for new defaults or docs.
+
+## 11. AI Handoff Workflow
+
+AI Handoff is separate from API-based video generation.
+
+- The web app renders one Step 4 shot prompt exactly as the `Prompt` popup shows it.
+- The web app reads `aiHandoffProvider`, `aiHandoffTargetUrl`, and `aiHandoffPromptSelector` from the active Admin AI Config, creates an `ai_handoffs` record with those saved values, sends one explicit user-initiated message to the Chrome extension, and persists extension status updates.
+- ENV values `AI_HANDOFF_PROVIDER` and `AI_HANDOFF_TARGET_URL` seed local/bootstrap setup only. Runtime does not use a hardcoded fallback; if the saved Admin target URL is blank, AI Handoff fails clearly.
+- The extension opens the configured target URL for the selected adapter, injects its content script into that allowlisted tab, fills the prompt through the saved Admin prompt selector, and clicks Generate only on allowlisted origins. The default configured target is `https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4`.
+- The first adapter is `google-flow-veo`; future adapters must define explicit allowed origins and selectors.
+- No fallback selectors are allowed. If the target page layout changes or the exact selector does not appear within the configured wait period, the extension must fail with a clear layout/selector error. Admins can rerun extension `Check DOM` on the live Flow page to recapture the prompt selector; `Test fill` validates the selector by inserting hardcoded text without clicking Generate.
+- The extension must fail clearly when the target page is not logged in, the prompt field is missing, the generate button is missing, or the generate button is disabled.
+- The extension must not bypass login, quota, CAPTCHA, safety dialogs, or provider restrictions.
+- The extension must not store provider cookies, passwords, API keys, or access tokens.
+- AI Handoff v1 transfers prompt text only. Reference images/videos remain available in VideoAI and are uploaded manually to the target AI website.
+- Because no provider API is called by VideoAI for AI Handoff, normal provider request/response AI logs are not created for this flow; `ai_handoffs` is the audit record for browser handoff progress.

@@ -1,0 +1,15 @@
+{
+  "name": "@videoai/chrome-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "VideoAI AI Handoff Chrome extension.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package": "npm run build && node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

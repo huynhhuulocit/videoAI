@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>VideoAI AI Handoff</title>
+  </head>
+  <body>
+    <main>
+      <div class="badge" id="status">Loading</div>
+      <h1>AI Handoff</h1>
+      <p>
+        Send one VideoAI shot prompt to an allowlisted AI target after a user
+        click. Reference media stays manual in v1.
+      </p>
+      <div class="actions">
+        <button id="check-dom" type="button">Check DOM</button>
+        <button id="test-fill" type="button">Test input prompt</button>
+        <button id="simple-insert-test" type="button">Simple insert test</button>
+        <button id="copy-selector" type="button">Copy selector</button>
+        <button id="copy-report" type="button">Copy selector report</button>
+      </div>
+      <p class="hint" id="action-message">
+        Open the configured Flow project tab before using Check DOM or Test input prompt.
+      </p>
+      <section>
+        <h2>DOM selector</h2>
+        <pre id="dom-result">Loading...</pre>
+      </section>
+      <section>
+        <h2>Last handoff</h2>
+        <pre id="last-result">Loading...</pre>
+      </section>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

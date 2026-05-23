@@ -9,6 +9,7 @@ const messages = {
   "common.login": "Login",
   "common.logout": "Logout",
   "common.no": "No",
+  "common.none": "None",
   "common.default": "Default",
   "common.delete": "Delete",
   "common.edit": "Edit",
@@ -58,6 +59,23 @@ const messages = {
   "home.cardWorkspaceBody":
     "Track projects, uploads, generated prompts, scripts, jobs, and outputs in one workspace.",
   "home.cardWorkspaceTitle": "Video-ready project workspace",
+  "home.aiHandoffTitle": "AI Handoff extension",
+  "home.aiHandoffBody":
+    "Install from Chrome Web Store to send one generated shot prompt to an allowlisted AI website after you click AI Handoff. Media upload stays manual in v1.",
+  "home.aiHandoffInstall": "Install extension",
+  "home.aiHandoffInstallUnavailable": "Store install unavailable",
+  "home.aiHandoffCheck": "Check installed",
+  "home.aiHandoffChecking": "Checking extension",
+  "home.aiHandoffDetected": "Extension detected",
+  "home.aiHandoffNotDetected": "Extension is not detected in this browser.",
+  "home.aiHandoffDisabled":
+    "AI Handoff is not configured for this environment.",
+  "home.aiHandoffLocalInstallMode":
+    "Local extension mode: load apps/chrome-extension/dist from chrome://extensions, reload the extension after each build, then click Check installed.",
+  "home.aiHandoffExtensionIdMissing":
+    "Extension ID is not configured yet. Set NEXT_PUBLIC_AI_HANDOFF_EXTENSION_ID after installing or publishing the extension.",
+  "home.aiHandoffSafety":
+    "The extension never stores provider passwords, cookies, or API keys, and only runs on configured target origins.",
   "home.eyebrow": "AI video workflow",
   "home.headline":
     "Create product scripts and video prompts from text, URLs, and reference media.",
@@ -86,9 +104,10 @@ const messages = {
     "All of your Scenario and Product Flow projects, ready to reopen or extend.",
   "projects.delete": "Delete project",
   "projects.deleteConfirm":
-    "Delete project \"{name}\"? It will be hidden from the project list.",
+    'Delete project "{name}"? It will be hidden from the project list.',
   "projects.deleteFailed": "Cannot delete project.",
-  "projects.empty": "No projects yet. Create your first project to start the video workflow.",
+  "projects.empty":
+    "No projects yet. Create your first project to start the video workflow.",
   "projects.listTitle": "All projects",
   "projects.title": "Projects",
   "flow.product": "Product Flow",
@@ -238,7 +257,8 @@ const messages = {
     "Enter a script or generate final content before generating shots.",
   "workspace.shotsName": "Shot group name",
   "workspace.shotsNeedOne": "Add at least one shot before saving.",
-  "workspace.shotsNone": "No shots exist for this project yet. Generate shots or paste valid Shots result JSON.",
+  "workspace.shotsNone":
+    "No shots exist for this project yet. Generate shots or paste valid Shots result JSON.",
   "workspace.shotsRemove": "Remove {title}",
   "workspace.shotsRemoveAttribute": "Remove attribute",
   "workspace.shotsResultHelp":
@@ -309,7 +329,24 @@ const messages = {
   "workspace.shotVideoRawResponse": "Raw shot video response",
   "workspace.shotVideoRawResponseHelp":
     "The provider response or job error returned while creating video for this shot.",
-  "workspace.shotVideoSuccess": "Video generation request completed for this shot.",
+  "workspace.shotVideoSuccess":
+    "Video generation request completed for this shot.",
+  "workspace.aiHandoffButton": "AI Handoff",
+  "workspace.aiHandoffSending": "Sending handoff",
+  "workspace.aiHandoffSuccess": "Prompt sent to AI Handoff extension",
+  "workspace.aiHandoffFailed": "AI Handoff failed",
+  "workspace.aiHandoffDisabled":
+    "AI Handoff is not configured for this environment.",
+  "workspace.aiHandoffExtensionMissing":
+    "AI Handoff extension is not detected. Install it from the Chrome Web Store, then try again.",
+  "workspace.aiHandoffExtensionRejected":
+    "The AI Handoff extension rejected the request.",
+  "workspace.aiHandoffTargetMissing":
+    "AI Handoff target URL is not configured. Ask an admin to set Admin > AI Config > AI Handoff target URL.",
+  "workspace.aiHandoffTargetInvalid":
+    "AI Handoff target URL is invalid. Ask an admin to save a valid target URL in Admin > AI Config.",
+  "workspace.aiHandoffPromptSelectorMissing":
+    "AI Handoff prompt selector is not configured. Open Flow, run Check DOM, then try again.",
   "workspace.shotMediaEmpty": "No reference media for this shot yet.",
   "workspace.shotMediaHelp":
     "Add images or videos for this shot so the prompt can follow the right context, camera angle, and visual style.",
@@ -328,7 +365,8 @@ const messages = {
   "workspace.templateMasterPromptHelp":
     "This default prompt is managed by admin. You can edit it temporarily for this analysis. Use {scenarioAttributes} to include the active Scenario catalog.",
   "workspace.templateMasterPromptLabel": "Scenario analysis master prompt",
-  "workspace.templateMasterPromptMissing": "Enter a master prompt before analyzing the scenario.",
+  "workspace.templateMasterPromptMissing":
+    "Enter a master prompt before analyzing the scenario.",
   "workspace.templateNone":
     "No active Admin Scenario attribute catalog is configured.",
   "workspace.templateSelect": "Choose scenario",
@@ -464,7 +502,7 @@ const messages = {
   "shots.description":
     "Create reusable scripts/shot plans for your account, save them to the database, and select them in any project workspace.",
   "shots.delete": "Delete shot plan",
-  "shots.deleteConfirm": "Delete shot plan \"{name}\"?",
+  "shots.deleteConfirm": 'Delete shot plan "{name}"?',
   "shots.deleteFailed": "Cannot delete shot plan.",
   "shots.defaultFailed": "Cannot set the default shot plan.",
   "shots.editorDescription": "Add or edit a reusable shot plan.",
@@ -482,8 +520,10 @@ const messages = {
   "shots.noPlanAttributes": "No shot plan attributes yet.",
   "shots.new": "Add shot plan",
   "shots.newTitle": "Add shot plan",
-  "shots.noProjects": "No shot plans yet. Enter a story and create the first shot plan.",
-  "shots.noScriptProjects": "No Scenario project exists yet. Create a Scenario project before generating shots.",
+  "shots.noProjects":
+    "No shot plans yet. Enter a story and create the first shot plan.",
+  "shots.noScriptProjects":
+    "No Scenario project exists yet. Create a Scenario project before generating shots.",
   "shots.notFound": "Shot plan not found.",
   "shots.openProject": "Open project workspace",
   "shots.planAttributes": "Shot plan attributes",
@@ -503,9 +543,12 @@ const messages = {
   "shots.shotCount": "{count} shot(s)",
   "shots.savedPlanAttributesHelp":
     "These attributes are saved with the shot plan and used when the plan is selected for prompt composition.",
-  "shots.sourcePlaceholder": "Keep the fixed prompt and replace only the story section so AI can split it into shots.",
-  "shots.storyInputPlaceholder": "Paste your long story or script content here.",
-  "shots.storyPlaceholder": "Paste or write the story content that should be split into shots.",
+  "shots.sourcePlaceholder":
+    "Keep the fixed prompt and replace only the story section so AI can split it into shots.",
+  "shots.storyInputPlaceholder":
+    "Paste your long story or script content here.",
+  "shots.storyPlaceholder":
+    "Paste or write the story content that should be split into shots.",
   "shots.storyText": "Story content",
   "shots.sourceText": "Source content",
   "shots.title": "Shot plans",
@@ -520,7 +563,7 @@ const messages = {
     "Create and save scenario attributes/options used to generate video prompts.",
   "template.descriptionField": "Description",
   "template.delete": "Delete scenario",
-  "template.deleteConfirm": "Delete scenario \"{name}\"?",
+  "template.deleteConfirm": 'Delete scenario "{name}"?',
   "template.deleted": "Scenario deleted",
   "template.deleteFailed": "Cannot delete scenario",
   "template.defaultFailed": "Cannot set the default scenario.",
@@ -562,12 +605,15 @@ const messages = {
   "template.scenarioMasterPrompt": "Scenario master prompt",
   "template.scenarioMasterPromptHelp":
     "This admin-managed default prompt can be edited temporarily for this generation; runtime data is included only through placeholders in this prompt.",
-  "template.scenarioMasterPromptMissing": "Enter a Scenario master prompt before generating with AI.",
-  "template.scenarioMasterPromptPlaceholder": "Enter the Scenario master prompt for this generation.",
+  "template.scenarioMasterPromptMissing":
+    "Enter a Scenario master prompt before generating with AI.",
+  "template.scenarioMasterPromptPlaceholder":
+    "Enter the Scenario master prompt for this generation.",
   "template.title": "Scenario",
   "template.attributeCount": "{count} attributes",
   "adminConfig.apiKey": "API key",
-  "adminConfig.apiKeyPlaceholder": "Enter a new key, then use Save configuration",
+  "adminConfig.apiKeyPlaceholder":
+    "Enter a new key, then use Save configuration",
   "adminConfig.chatGptApiNote":
     "ChatGPT Plus is for the ChatGPT app. This app still needs an OpenAI API key saved in Admin > AI Config for the ChatGPT/OpenAI provider.",
   "adminConfig.contentMode": "Content mode",
@@ -580,9 +626,24 @@ const messages = {
   "adminConfig.description":
     "Control site-wide prompt/script and video generation behavior.",
   "adminConfig.model": "Model",
+  "adminConfig.aiHandoff": "AI Handoff",
+  "adminConfig.aiHandoffDomDetector": "JS DOM detector script",
+  "adminConfig.aiHandoffDomDetectorHelp":
+    "Copy this script, paste it into the target AI page console, then click the prompt input or Generate button to export selectors for the extension adapter.",
+  "adminConfig.aiHandoffHelp":
+    "Target URL is saved in Admin config and sent to the extension. If the target origin changes, update the extension allowlist and adapter config.",
+  "adminConfig.aiHandoffProvider": "AI Handoff provider",
+  "adminConfig.aiHandoffTargetUrl": "AI Handoff target URL",
+  "adminConfig.aiHandoffPromptSelector": "AI Handoff prompt selector",
+  "adminConfig.aiHandoffTargetUrlInvalid":
+    "Enter a valid AI Handoff target URL or leave it blank to disable handoff.",
+  "adminConfig.copyDomDetectorScript": "Copy script",
+  "adminConfig.domDetectorCopied": "Script copied",
+  "adminConfig.domDetectorCopyFailed": "Cannot copy script",
   "adminConfig.promptProvider": "Prompt provider/model",
   "adminConfig.provider": "Provider",
-  "adminConfig.providerModelRequired": "Enter provider and model before testing.",
+  "adminConfig.providerModelRequired":
+    "Enter provider and model before testing.",
   "adminConfig.keyRequired": "Enter an API key before saving.",
   "adminConfig.keySaved": "Key saved with configuration",
   "adminConfig.keySaveFailed": "Cannot save key",
@@ -595,8 +656,7 @@ const messages = {
   "adminConfig.saved": "Configuration saved",
   "adminConfig.saveFailed": "Cannot save configuration",
   "adminConfig.saveKey": "Save key",
-  "adminConfig.showUserMasterPrompts":
-    "Show master prompts in user workspace",
+  "adminConfig.showUserMasterPrompts": "Show master prompts in user workspace",
   "adminConfig.showUserMasterPromptsHelp":
     "No hides the editable Story, Scenario, and Shots master prompt fields in Project and One Click. Prompt preview buttons remain visible, and AI uses the active admin defaults.",
   "adminConfig.siteConfig": "Site Config",
@@ -626,12 +686,15 @@ const messages = {
   "adminShotPrompt.placeholderHelp":
     "The prompt must include these placeholders so the backend can inject story, attributes, and shot duration.",
   "adminShotPrompt.placeholders": "Required placeholders",
-  "adminShotPrompt.scenarioCustomMode": "Scenario analysis master prompt is customized",
-  "adminShotPrompt.scenarioDefaultMode": "Scenario analysis master prompt is using the default",
+  "adminShotPrompt.scenarioCustomMode":
+    "Scenario analysis master prompt is customized",
+  "adminShotPrompt.scenarioDefaultMode":
+    "Scenario analysis master prompt is using the default",
   "adminShotPrompt.scenarioEditor": "Scenario analysis master prompt",
   "adminShotPrompt.scenarioHelp":
     "This prompt is the default instruction used when users analyze a scenario so AI can choose matching options.",
-  "adminShotPrompt.scenarioRequired": "Scenario analysis master prompt is required.",
+  "adminShotPrompt.scenarioRequired":
+    "Scenario analysis master prompt is required.",
   "adminShotPrompt.save": "Save Shot Prompt",
   "adminShotPrompt.saved": "Shot Prompt saved",
   "adminShotPrompt.saveFailed": "Cannot save Shot Prompt",
@@ -640,7 +703,8 @@ const messages = {
   "adminShotPrompt.updated": "Updated {date}",
   "adminShotPrompt.useDefault": "Use default",
   "adminShotPrompt.valid": "Prompt includes all required placeholders.",
-  "adminMasterPrompt.builtInReadOnly": "Built-in default prompt is read-only. Create a new prompt to edit.",
+  "adminMasterPrompt.builtInReadOnly":
+    "Built-in default prompt is read-only. Create a new prompt to edit.",
   "adminMasterPrompt.builtInBadge": "Built-in",
   "adminMasterPrompt.content": "Prompt content",
   "adminMasterPrompt.outputFormat": "Output Format placeholder",
@@ -651,14 +715,16 @@ const messages = {
   "adminMasterPrompt.defaultSaved": "Default saved",
   "adminMasterPrompt.delete": "Delete",
   "adminMasterPrompt.deleted": "Prompt deleted",
-  "adminMasterPrompt.deleteDefaultBlocked": "Cannot delete the default prompt. Set another prompt as default first.",
+  "adminMasterPrompt.deleteDefaultBlocked":
+    "Cannot delete the default prompt. Set another prompt as default first.",
   "adminMasterPrompt.deleteFailed": "Cannot delete prompt",
   "adminMasterPrompt.description":
     "Manage Story Content, Scenario and Shots master prompts. Each type has one active default prompt.",
   "adminMasterPrompt.edit": "Edit",
   "adminMasterPrompt.freeFormHelp":
     "Placeholders are supported and recommended per group, but they are not required to save. Runtime data is included only through placeholders in the selected prompt.",
-  "adminMasterPrompt.listHelp": "This list only shows prompts for the selected Master Prompt child item.",
+  "adminMasterPrompt.listHelp":
+    "This list only shows prompts for the selected Master Prompt child item.",
   "adminMasterPrompt.menuTitle": "Master Prompt",
   "adminMasterPrompt.name": "Prompt name",
   "adminMasterPrompt.newPrompt": "New prompt",
@@ -667,7 +733,8 @@ const messages = {
   "adminMasterPrompt.save": "Save",
   "adminMasterPrompt.saved": "Prompt saved",
   "adminMasterPrompt.saveFailed": "Cannot save prompt",
-  "adminMasterPrompt.selectPromptHelp": "Select Edit on a prompt or create a new prompt to open the editor.",
+  "adminMasterPrompt.selectPromptHelp":
+    "Select Edit on a prompt or create a new prompt to open the editor.",
   "adminMasterPrompt.sections": "Master prompt groups",
   "adminMasterPrompt.setDefault": "Set default",
   "adminMasterPrompt.title": "Master Prompt",
@@ -683,10 +750,7 @@ const messages = {
 export type TranslationKey = keyof typeof messages;
 export type TranslationValues = Record<string, string | number>;
 
-export function translate(
-  key: TranslationKey,
-  values?: TranslationValues,
-) {
+export function translate(key: TranslationKey, values?: TranslationValues) {
   let message: string = messages[key] ?? key;
 
   if (values) {

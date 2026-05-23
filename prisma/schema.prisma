@@ -26,16 +26,16 @@ model UserProfile {
 }
 
 model ProjectRecord {
-  id          String   @id
-  ownerUserId String   @map("owner_user_id")
-  name        String
-  description String?
-  flowType    String   @map("flow_type")
-  templateSelection Json?   @map("template_selection")
-  attributeSelections Json?   @map("attribute_selections")
-  status      String   @default("active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id                  String   @id
+  ownerUserId         String   @map("owner_user_id")
+  name                String
+  description         String?
+  flowType            String   @map("flow_type")
+  templateSelection   Json?    @map("template_selection")
+  attributeSelections Json?    @map("attribute_selections")
+  status              String   @default("active")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   @@index([ownerUserId])
   @@index([ownerUserId, createdAt])
@@ -229,21 +229,45 @@ model VideoGenerationRecord {
   @@schema("video")
 }
 
+model AiHandoffRecord {
+  id           String   @id
+  projectId    String   @map("project_id")
+  shotId       String   @map("shot_id")
+  ownerUserId  String   @map("owner_user_id")
+  provider     String
+  targetUrl    String   @map("target_url")
+  promptText   String   @map("prompt_text") @db.Text
+  status       String   @default("created")
+  errorMessage String?  @map("error_message") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([projectId, shotId])
+  @@index([ownerUserId, updatedAt])
+  @@index([status])
+  @@map("ai_handoffs")
+  @@schema("projects")
+}
+
 model AiSiteConfig {
-  id                   String   @id @default(cuid())
-  contentMode          String   @map("content_mode")
-  showUserMasterPrompts Boolean @default(false) @map("show_user_master_prompts")
-  promptProvider       String   @map("prompt_provider")
-  promptModel          String   @map("prompt_model")
-  shotGenerationPrompt String?  @map("shot_generation_prompt")
-  shotComposerPrompt   String?  @map("shot_composer_prompt")
+  id                      String   @id @default(cuid())
+  contentMode             String   @map("content_mode")
+  showUserMasterPrompts   Boolean  @default(false) @map("show_user_master_prompts")
+  aiHandoffProvider       String   @default("google-flow-veo") @map("ai_handoff_provider")
+  aiHandoffTargetUrl      String?  @default("https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4") @map("ai_handoff_target_url")
+  aiHandoffPromptSelector String?  @map("ai_handoff_prompt_selector") @db.Text
+  promptProvider          String   @map("prompt_provider")
+  promptModel             String   @map("prompt_model")
+  shotGenerationPrompt    String?  @map("shot_generation_prompt")
+  shotComposerPrompt      String?  @map("shot_composer_prompt")
   templateSelectionPrompt String?  @map("template_selection_prompt")
-  videoProvider        String   @map("video_provider")
-  videoModel           String   @map("video_model")
-  isActive             Boolean  @default(true) @map("is_active")
-  createdByAdminId     String?  @map("created_by_admin_id")
-  createdAt            DateTime @default(now()) @map("created_at")
-  updatedAt            DateTime @updatedAt @map("updated_at")
+  videoProvider           String   @map("video_provider")
+  videoModel              String   @map("video_model")
+  isActive                Boolean  @default(true) @map("is_active")
+  createdByAdminId        String?  @map("created_by_admin_id")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
 
   @@index([isActive])
   @@map("ai_site_configs")
@@ -265,18 +289,18 @@ model AiProviderKey {
 }
 
 model MasterPrompt {
-  id               String   @id @default(cuid())
-  type             String
-  name             String
-  content          String   @db.Text
-  outputFormat     String?  @map("output_format") @db.Text
-  attributeSelection Json?  @map("attribute_selection")
-  workflowAttributeSelection Json? @map("workflow_attribute_selection")
-  isDefault        Boolean  @default(false) @map("is_default")
-  status           String   @default("active")
-  createdByAdminId String?  @map("created_by_admin_id")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                         String   @id @default(cuid())
+  type                       String
+  name                       String
+  content                    String   @db.Text
+  outputFormat               String?  @map("output_format") @db.Text
+  attributeSelection         Json?    @map("attribute_selection")
+  workflowAttributeSelection Json?    @map("workflow_attribute_selection")
+  isDefault                  Boolean  @default(false) @map("is_default")
+  status                     String   @default("active")
+  createdByAdminId           String?  @map("created_by_admin_id")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
 
   @@index([type, status])
   @@index([type, isDefault])

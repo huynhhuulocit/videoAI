@@ -156,7 +156,7 @@ Admin async actions use a shared feedback pattern: the active button is disabled
 
 Visible master prompt editors use a shared cyan prompt surface. This applies to project workspace Story Content, Scenario, Shots and Shot master prompts, scenario create/edit master prompts and the admin Master Prompt editor. Ordinary content/schema/output textareas stay neutral.
 
-Admin master prompt navigation uses list/editor route separation. `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, and `/admin/shot/master-prompt` are list-only pages. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in prompt rows open `/new?source=built-in` so admin users create persisted copies instead of editing built-in content. Editor pages expose `Prompt content` plus a separate `Output Format placeholder` textarea. They also show the matching admin workflow Attribute catalog below `Master Prompt Attribute`: Story Content shows Story Attribute, Scenario shows Scenario Attribute, Shots shows Shots Attribute, and Shot shows Shot Attribute. Their `Prompt` preview button renders the exact draft prompt, replacing admin-owned `{masterPromptAttributes}`, replacing the matching type-specific attribute placeholder when admin selections exist, and replacing `{outputFormat}` while leaving other user runtime placeholders unchanged.
+Admin master prompt navigation uses list/editor route separation. `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, and `/admin/shot/master-prompt` are list-only pages. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in prompt rows open `/new?source=built-in` so admin users create persisted copies instead of editing built-in content. Editor pages expose `Prompt content` plus a separate `Output Format placeholder` textarea. They keep prompt name, the editor description, and `Prompt`/`Set default`/`Delete`/`Save` controls in a sticky top editor bar so long attribute sections can still be saved without scrolling to the bottom. They also show the matching admin workflow Attribute catalog below `Master Prompt Attribute`: Story Content shows Story Attribute, Scenario shows Scenario Attribute, Shots shows Shots Attribute, and Shot shows Shot Attribute. Their `Prompt` preview button renders the exact draft prompt, replacing admin-owned `{masterPromptAttributes}`, replacing the matching type-specific attribute placeholder when admin selections exist, and replacing `{outputFormat}` while leaving other user runtime placeholders unchanged.
 
 ## 7. Integration With API Gateway
 
@@ -179,6 +179,7 @@ Frontend changes should be verified with:
 - Playwright screenshots for desktop and mobile dashboards.
 
 For UI-heavy changes, screenshots are part of implementation verification, not optional polish.
+
 ## 9. Admin Attribute Navigation
 
 - Admin navigation groups Story, Scenario, Shots, and Shot as non-clickable parents.
@@ -207,3 +208,15 @@ For UI-heavy changes, screenshots are part of implementation verification, not o
 - Master Prompt Attribute selection rows show names only. Descriptions are helper-icon content and are not inserted into `{masterPromptAttributes}`.
 - Admin master prompt placeholder suggestions include `{masterPromptAttributes}`.
 - User Project and One Click master prompt editors continue to use the user-safe placeholder list and must not show `{masterPromptAttributes}` or Master Prompt Attribute selectors.
+
+## 11. AI Handoff Frontend Architecture
+
+- Public Home renders an AI Handoff install/status card when the feature is configured.
+- The install action opens the Chrome Web Store listing configured by `NEXT_PUBLIC_AI_HANDOFF_EXTENSION_URL`; the browser owns the final `Add to Chrome` installation step.
+- `Check installed` pings `NEXT_PUBLIC_AI_HANDOFF_EXTENSION_ID` through Chrome external messaging and renders a detected/not-detected state.
+- Project and One Click Step 4 shot cards show `AI Handoff` beside `Prompt` and `Create video`.
+- The button is disabled while a handoff is in progress and shows inline success/error feedback in the shot card.
+- The web page loads `aiHandoffProvider`, `aiHandoffTargetUrl`, and `aiHandoffPromptSelector` from the workspace prompt config response, which mirrors Admin > AI Config. It sends the exact rendered shot prompt and saved Admin handoff metadata to the extension; it does not send provider credentials or media bytes.
+- Extension popup `Check DOM` captures the live Flow prompt selector, saves it to Admin config, displays the saved selector in the popup, and attempts to copy the selector value to the clipboard. `Copy selector` copies the saved selector value, while `Copy selector report` copies the full debug report. `Test input prompt` validates the saved selector by inserting the hardcoded text `test input prompt` and does not click Generate. For Slate/contenteditable editors such as Google Flow, the extension focuses the configured selector or its nearest editable parent and uses the browser insert-text command; it does not try fallback selectors.
+- Extension status/error responses are persisted through the project handoff API and surfaced as user-readable feedback.
+- If AI Handoff is disabled, missing an extension id, or missing/invalid saved target URL, the UI must fail clearly instead of attempting a fallback target.

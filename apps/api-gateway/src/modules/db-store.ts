@@ -1,4 +1,9 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
 import { prisma, type Prisma } from "@videoai/database";
 import {
   ContentModeSchema,
@@ -10,6 +15,7 @@ import {
   DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
   DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
+  AiHandoffStatusSchema,
   AttributeCatalogAttributeSchema,
   AttributeCatalogTypeSchema,
   FlowTypeSchema,
@@ -30,6 +36,7 @@ import {
   VideoShotSchema,
   VideoShotAttributeSchema,
   type AiConfig,
+  type AiHandoff,
   type AttributeCatalog,
   type AttributeCatalogType,
   type AiLog,
@@ -50,22 +57,49 @@ import {
   type ProviderKeyStatus,
   type UserProfile,
   type VideoShotPlan,
-  type VideoTemplate
+  type VideoTemplate,
 } from "@videoai/contracts";
 
 type DbUser = Awaited<ReturnType<typeof prisma.userProfile.findFirstOrThrow>>;
-type DbProject = Awaited<ReturnType<typeof prisma.projectRecord.findFirstOrThrow>>;
-type DbConfig = Awaited<ReturnType<typeof prisma.aiSiteConfig.findFirstOrThrow>>;
-type DbJob = Awaited<ReturnType<typeof prisma.jobStatusRecord.findFirstOrThrow>>;
-type DbMediaAsset = Awaited<ReturnType<typeof prisma.mediaAsset.findFirstOrThrow>>;
-type DbVideoTemplate = Awaited<ReturnType<typeof prisma.videoTemplateRecord.findFirstOrThrow>>;
-type DbStoryAttributeCatalog = Awaited<ReturnType<typeof prisma.storyAttributeCatalog.findFirstOrThrow>>;
-type DbScenarioAttributeCatalog = Awaited<ReturnType<typeof prisma.scenarioAttributeCatalog.findFirstOrThrow>>;
-type DbShotAttributeCatalog = Awaited<ReturnType<typeof prisma.shotAttributeCatalog.findFirstOrThrow>>;
-type DbVideoShotPlan = Awaited<ReturnType<typeof prisma.videoShotPlanRecord.findFirstOrThrow>>;
-type DbMasterPrompt = Awaited<ReturnType<typeof prisma.masterPrompt.findFirstOrThrow>>;
-type DbMasterPromptAttributeConfig = Awaited<ReturnType<typeof prisma.masterPromptAttributeConfig.findFirstOrThrow>>;
-type DbAiLog = Awaited<ReturnType<typeof prisma.aiRequestLog.findFirstOrThrow>> & {
+type DbProject = Awaited<
+  ReturnType<typeof prisma.projectRecord.findFirstOrThrow>
+>;
+type DbConfig = Awaited<
+  ReturnType<typeof prisma.aiSiteConfig.findFirstOrThrow>
+>;
+type DbJob = Awaited<
+  ReturnType<typeof prisma.jobStatusRecord.findFirstOrThrow>
+>;
+type DbMediaAsset = Awaited<
+  ReturnType<typeof prisma.mediaAsset.findFirstOrThrow>
+>;
+type DbVideoTemplate = Awaited<
+  ReturnType<typeof prisma.videoTemplateRecord.findFirstOrThrow>
+>;
+type DbStoryAttributeCatalog = Awaited<
+  ReturnType<typeof prisma.storyAttributeCatalog.findFirstOrThrow>
+>;
+type DbScenarioAttributeCatalog = Awaited<
+  ReturnType<typeof prisma.scenarioAttributeCatalog.findFirstOrThrow>
+>;
+type DbShotAttributeCatalog = Awaited<
+  ReturnType<typeof prisma.shotAttributeCatalog.findFirstOrThrow>
+>;
+type DbVideoShotPlan = Awaited<
+  ReturnType<typeof prisma.videoShotPlanRecord.findFirstOrThrow>
+>;
+type DbAiHandoff = Awaited<
+  ReturnType<typeof prisma.aiHandoffRecord.findFirstOrThrow>
+>;
+type DbMasterPrompt = Awaited<
+  ReturnType<typeof prisma.masterPrompt.findFirstOrThrow>
+>;
+type DbMasterPromptAttributeConfig = Awaited<
+  ReturnType<typeof prisma.masterPromptAttributeConfig.findFirstOrThrow>
+>;
+type DbAiLog = Awaited<
+  ReturnType<typeof prisma.aiRequestLog.findFirstOrThrow>
+> & {
   responses?: Array<{
     responsePayload: unknown;
     errorCode: string | null;
@@ -78,16 +112,37 @@ export const defaultUserId = "user_001";
 export const defaultAdminId = "admin_001";
 
 const encryptedKeyPrefix = "enc:v1";
-const masterPromptTypes = ["scenario", "shots", "scripts", "shot"] as const satisfies readonly MasterPromptType[];
+const masterPromptTypes = [
+  "scenario",
+  "shots",
+  "scripts",
+  "shot",
+] as const satisfies readonly MasterPromptType[];
 
 function normalizeProvider(provider: string): Provider {
   return ProviderSchema.parse(provider);
 }
 
+const defaultAiHandoffProvider = normalizeProvider(
+  process.env.AI_HANDOFF_PROVIDER?.trim() || "google-flow-veo",
+);
+const defaultAiHandoffTargetUrl =
+  process.env.AI_HANDOFF_TARGET_URL?.trim() || null;
+
+function normalizeOptionalUrl(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return new URL(trimmed).toString();
+}
+
 function getProviderEncryptionKey() {
   const seed = process.env.AI_CONFIG_ENCRYPTION_KEY?.trim();
   if (!seed) {
-    throw new Error("AI_CONFIG_ENCRYPTION_KEY is required to store or read provider API keys.");
+    throw new Error(
+      "AI_CONFIG_ENCRYPTION_KEY is required to store or read provider API keys.",
+    );
   }
   return createHash("sha256").update(seed).digest();
 }
@@ -95,13 +150,16 @@ function getProviderEncryptionKey() {
 function encryptProviderKey(apiKey: string) {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", getProviderEncryptionKey(), iv);
-  const ciphertext = Buffer.concat([cipher.update(apiKey, "utf8"), cipher.final()]);
+  const ciphertext = Buffer.concat([
+    cipher.update(apiKey, "utf8"),
+    cipher.final(),
+  ]);
   const tag = cipher.getAuthTag();
   return [
     encryptedKeyPrefix,
     iv.toString("base64"),
     tag.toString("base64"),
-    ciphertext.toString("base64")
+    ciphertext.toString("base64"),
   ].join(":");
 }
 
@@ -119,12 +177,12 @@ function decryptProviderKey(encryptedKey: string | null | undefined) {
     const decipher = createDecipheriv(
       "aes-256-gcm",
       getProviderEncryptionKey(),
-      Buffer.from(ivBase64, "base64")
+      Buffer.from(ivBase64, "base64"),
     );
     decipher.setAuthTag(Buffer.from(tagBase64, "base64"));
     return Buffer.concat([
       decipher.update(Buffer.from(ciphertextBase64, "base64")),
-      decipher.final()
+      decipher.final(),
     ]).toString("utf8");
   } catch {
     return null;
@@ -195,7 +253,7 @@ function builtInMasterPrompt(type: MasterPromptType): MasterPrompt {
     status: "active",
     isBuiltIn: true,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
   };
 }
 
@@ -204,7 +262,7 @@ export function mapUser(row: DbUser): UserProfile {
     id: row.id,
     displayName: row.displayName,
     role: UserRoleSchema.parse(row.role),
-    status: UserStatusSchema.parse(row.status)
+    status: UserStatusSchema.parse(row.status),
   };
 }
 
@@ -216,17 +274,21 @@ export function mapProject(row: DbProject): Project {
     flowType: row.flowType === "script" ? "script" : "product",
     status: row.status === "archived" ? "archived" : "active",
     createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString()
+    updatedAt: row.updatedAt.toISOString(),
   };
 
   if (row.description) {
     project.description = row.description;
   }
   if (row.templateSelection) {
-    project.templateSelection = TemplateSelectionSchema.parse(row.templateSelection);
+    project.templateSelection = TemplateSelectionSchema.parse(
+      row.templateSelection,
+    );
   }
   if (row.attributeSelections) {
-    project.attributeSelections = ProjectAttributeSelectionsSchema.parse(row.attributeSelections);
+    project.attributeSelections = ProjectAttributeSelectionsSchema.parse(
+      row.attributeSelections,
+    );
   }
 
   return project;
@@ -242,11 +304,13 @@ export function mapMediaAsset(row: DbMediaAsset): MediaAsset {
     originalFilename: row.originalFilename,
     sizeBytes: row.sizeBytes,
     status:
-      row.status === "uploaded" || row.status === "rejected" || row.status === "deleted"
+      row.status === "uploaded" ||
+      row.status === "rejected" ||
+      row.status === "deleted"
         ? row.status
         : "validated",
     previewUrl: `/api/v1/projects/${row.projectId}/media/${row.id}/content`,
-    createdAt: row.createdAt.toISOString()
+    createdAt: row.createdAt.toISOString(),
   };
 
   if (row.validationError) {
@@ -265,7 +329,7 @@ export function mapVideoTemplate(row: DbVideoTemplate): VideoTemplate {
     isDefault: row.isDefault,
     status: row.status === "archived" ? "archived" : "active",
     createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString()
+    updatedAt: row.updatedAt.toISOString(),
   };
 
   if (row.description) {
@@ -278,9 +342,15 @@ export function mapVideoTemplate(row: DbVideoTemplate): VideoTemplate {
   return template;
 }
 
-type DbAttributeCatalog = DbStoryAttributeCatalog | DbScenarioAttributeCatalog | DbShotAttributeCatalog;
+type DbAttributeCatalog =
+  | DbStoryAttributeCatalog
+  | DbScenarioAttributeCatalog
+  | DbShotAttributeCatalog;
 
-export function mapAttributeCatalog(type: AttributeCatalogType, row: DbAttributeCatalog): AttributeCatalog {
+export function mapAttributeCatalog(
+  type: AttributeCatalogType,
+  row: DbAttributeCatalog,
+): AttributeCatalog {
   return {
     id: row.id,
     type,
@@ -290,29 +360,31 @@ export function mapAttributeCatalog(type: AttributeCatalogType, row: DbAttribute
     isDefault: row.isDefault,
     status: row.status === "archived" ? "archived" : "active",
     createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString()
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-export async function getDefaultAttributeCatalog(typeInput: AttributeCatalogType) {
+export async function getDefaultAttributeCatalog(
+  typeInput: AttributeCatalogType,
+) {
   const type = AttributeCatalogTypeSchema.parse(typeInput);
   if (type === "story") {
     const row = await prisma.storyAttributeCatalog.findFirst({
       where: { status: "active", isDefault: true },
-      orderBy: { updatedAt: "desc" }
+      orderBy: { updatedAt: "desc" },
     });
     return row ? mapAttributeCatalog(type, row) : null;
   }
   if (type === "scenario") {
     const row = await prisma.scenarioAttributeCatalog.findFirst({
       where: { status: "active", isDefault: true },
-      orderBy: { updatedAt: "desc" }
+      orderBy: { updatedAt: "desc" },
     });
     return row ? mapAttributeCatalog(type, row) : null;
   }
   const row = await prisma.shotAttributeCatalog.findFirst({
     where: { type, status: "active", isDefault: true },
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   return row ? mapAttributeCatalog(type, row) : null;
 }
@@ -331,7 +403,22 @@ export function mapVideoShotPlan(row: DbVideoShotPlan): VideoShotPlan {
     isDefault: row.isDefault,
     status: row.status === "archived" ? "archived" : "active",
     createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString()
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export function mapAiHandoff(row: DbAiHandoff): AiHandoff {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    shotId: row.shotId,
+    provider: normalizeProvider(row.provider),
+    targetUrl: row.targetUrl,
+    promptText: row.promptText,
+    status: AiHandoffStatusSchema.parse(row.status),
+    errorMessage: row.errorMessage,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -342,36 +429,42 @@ export function mapMasterPrompt(row: DbMasterPrompt): MasterPrompt {
     name: row.name,
     content: row.content,
     outputFormat: row.outputFormat ?? "",
-    attributeSelection: MasterPromptAttributeSelectionSchema.parse(row.attributeSelection ?? { attributes: [] }),
+    attributeSelection: MasterPromptAttributeSelectionSchema.parse(
+      row.attributeSelection ?? { attributes: [] },
+    ),
     workflowAttributeSelection: MasterPromptAttributeSelectionSchema.parse(
-      row.workflowAttributeSelection ?? { attributes: [] }
+      row.workflowAttributeSelection ?? { attributes: [] },
     ),
     isDefault: row.isDefault,
     status: MasterPromptStatusSchema.parse(row.status),
     isBuiltIn: false,
     createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString()
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-function mapMasterPromptAttributeConfig(row: DbMasterPromptAttributeConfig | null): MasterPromptAttributeConfig {
+function mapMasterPromptAttributeConfig(
+  row: DbMasterPromptAttributeConfig | null,
+): MasterPromptAttributeConfig {
   if (!row) {
     return MasterPromptAttributeConfigSchema.parse({
       id: null,
       attributes: [],
-      updatedAt: null
+      updatedAt: null,
     });
   }
   return MasterPromptAttributeConfigSchema.parse({
     id: row.id,
     attributes: MasterPromptAttributeSchema.array().parse(row.attributes),
-    updatedAt: row.updatedAt.toISOString()
+    updatedAt: row.updatedAt.toISOString(),
   });
 }
 
 export async function getCurrentUser(demoRole?: string) {
   const username = demoRole === "admin" ? "admin" : "user";
-  const user = await prisma.userProfile.findUniqueOrThrow({ where: { username } });
+  const user = await prisma.userProfile.findUniqueOrThrow({
+    where: { username },
+  });
   return mapUser(user);
 }
 
@@ -386,11 +479,14 @@ export function mapAiConfig(
     shotsOutputFormat: string;
     scriptsPrompt: string;
     scriptsOutputFormat: string;
-  }
+  },
 ): AiConfig {
   return {
     contentMode: ContentModeSchema.parse(row.contentMode),
     showUserMasterPrompts: row.showUserMasterPrompts,
+    aiHandoffProvider: normalizeProvider(row.aiHandoffProvider),
+    aiHandoffTargetUrl: normalizeOptionalUrl(row.aiHandoffTargetUrl),
+    aiHandoffPromptSelector: row.aiHandoffPromptSelector?.trim() || null,
     promptProvider: normalizeProvider(row.promptProvider),
     promptModel: row.promptModel,
     shotGenerationPrompt: masterPrompts.shotsPrompt,
@@ -403,18 +499,21 @@ export function mapAiConfig(
     videoProvider: normalizeProvider(row.videoProvider),
     videoModel: row.videoModel,
     videoKeyStatus,
-    updatedAt: row.updatedAt.toISOString()
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-export async function getDefaultMasterPrompt(type: MasterPromptType, legacyPrompt?: string | null) {
+export async function getDefaultMasterPrompt(
+  type: MasterPromptType,
+  legacyPrompt?: string | null,
+) {
   const defaultPrompt = await prisma.masterPrompt.findFirst({
     where: {
       type,
       status: "active",
-      isDefault: true
+      isDefault: true,
     },
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   if (defaultPrompt) {
     return mapMasterPrompt(defaultPrompt);
@@ -423,9 +522,9 @@ export async function getDefaultMasterPrompt(type: MasterPromptType, legacyPromp
   const firstPrompt = await prisma.masterPrompt.findFirst({
     where: {
       type,
-      status: "active"
+      status: "active",
     },
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   if (firstPrompt) {
     return mapMasterPrompt(firstPrompt);
@@ -439,7 +538,7 @@ export async function getDefaultMasterPrompt(type: MasterPromptType, legacyPromp
       name: `Legacy ${type} master prompt`,
       content: legacyContent,
       outputFormat: "",
-      isBuiltIn: true
+      isBuiltIn: true,
     };
   }
 
@@ -451,9 +550,9 @@ export async function getConfiguredDefaultMasterPrompt(type: MasterPromptType) {
     where: {
       type,
       status: "active",
-      isDefault: true
+      isDefault: true,
     },
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   if (defaultPrompt) {
     return mapMasterPrompt(defaultPrompt);
@@ -462,62 +561,105 @@ export async function getConfiguredDefaultMasterPrompt(type: MasterPromptType) {
   const firstPrompt = await prisma.masterPrompt.findFirst({
     where: {
       type,
-      status: "active"
+      status: "active",
     },
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   return firstPrompt ? mapMasterPrompt(firstPrompt) : null;
 }
 
-export async function getDefaultMasterPromptContent(type: MasterPromptType, legacyPrompt?: string | null) {
+export async function getDefaultMasterPromptContent(
+  type: MasterPromptType,
+  legacyPrompt?: string | null,
+) {
   const prompt = await getDefaultMasterPrompt(type, legacyPrompt);
   return renderMasterPromptText(prompt);
 }
 
 export async function getMasterPromptAttributeConfig(): Promise<MasterPromptAttributeConfig> {
   const row = await prisma.masterPromptAttributeConfig.findFirst({
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   return mapMasterPromptAttributeConfig(row);
 }
 
-export async function replaceMasterPromptAttributeConfig(input: { attributes: MasterPromptAttribute[] }) {
-  const attributes = MasterPromptAttributeSchema.array().min(1).parse(input.attributes);
+export async function replaceMasterPromptAttributeConfig(input: {
+  attributes: MasterPromptAttribute[];
+}) {
+  const attributes = MasterPromptAttributeSchema.array()
+    .min(1)
+    .parse(input.attributes);
   const existing = await prisma.masterPromptAttributeConfig.findFirst({
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   const row = existing
     ? await prisma.masterPromptAttributeConfig.update({
         where: { id: existing.id },
         data: {
           attributes: attributes as unknown as Prisma.InputJsonValue,
-          createdByAdminId: defaultAdminId
-        }
+          createdByAdminId: defaultAdminId,
+        },
       })
     : await prisma.masterPromptAttributeConfig.create({
         data: {
           attributes: attributes as unknown as Prisma.InputJsonValue,
-          createdByAdminId: defaultAdminId
-        }
+          createdByAdminId: defaultAdminId,
+        },
       });
   return mapMasterPromptAttributeConfig(row);
 }
 
+function normalizeSelectionForAttributes(
+  selection: MasterPromptAttributeSelection,
+  attributes: Array<{ id: string; options: Array<{ id: string }> }>,
+): MasterPromptAttributeSelection {
+  const attributesById = new Map(attributes.map((attribute) => [attribute.id, attribute]));
+  return {
+    attributes: selection.attributes.flatMap((selectedAttribute) => {
+      const attribute = attributesById.get(selectedAttribute.attributeId);
+      if (!attribute) {
+        return [];
+      }
+      const optionIds = new Set(attribute.options.map((option) => option.id));
+      const selectedOptionIds = [...new Set(selectedAttribute.optionIds)].filter((optionId) =>
+        optionIds.has(optionId),
+      );
+      return selectedOptionIds.length > 0
+        ? [{ attributeId: selectedAttribute.attributeId, optionIds: selectedOptionIds }]
+        : [];
+    }),
+  };
+}
+
 function selectedMasterPromptAttributeText(
   configAttributes: MasterPromptAttribute[],
-  selection: MasterPromptAttributeSelection
+  selection: MasterPromptAttributeSelection,
 ) {
-  const selectedLines = selection.attributes.flatMap((selectedAttribute) => {
-    const attribute = configAttributes.find((candidate) => candidate.id === selectedAttribute.attributeId);
+  const normalizedSelection = normalizeSelectionForAttributes(
+    selection,
+    configAttributes,
+  );
+  const selectedLines = normalizedSelection.attributes.flatMap((selectedAttribute) => {
+    const attribute = configAttributes.find(
+      (candidate) => candidate.id === selectedAttribute.attributeId,
+    );
     if (!attribute) {
-      throw new Error(`Master Prompt Attribute "${selectedAttribute.attributeId}" is not configured.`);
+      throw new Error(
+        `Master Prompt Attribute "${selectedAttribute.attributeId}" is not configured.`,
+      );
     }
     const selectedOptions = selectedAttribute.optionIds.map((optionId) => {
-      const option = attribute.options.find((candidate) => candidate.id === optionId);
+      const option = attribute.options.find(
+        (candidate) => candidate.id === optionId,
+      );
       if (!option) {
-        throw new Error(`Master Prompt Attribute option "${optionId}" is not configured.`);
+        throw new Error(
+          `Master Prompt Attribute option "${optionId}" is not configured.`,
+        );
       }
-      return option.description ? `${option.name} (${option.description})` : option.name;
+      return option.description
+        ? `${option.name} (${option.description})`
+        : option.name;
     });
     return selectedOptions.length > 0
       ? [`${attribute.name}: ${selectedOptions.join(", ")}`]
@@ -525,29 +667,45 @@ function selectedMasterPromptAttributeText(
   });
 
   if (selectedLines.length === 0) {
-    throw new Error("Master Prompt Attribute selection is required for {masterPromptAttributes}.");
+    throw new Error(
+      "Master Prompt Attribute selection is required for {masterPromptAttributes}.",
+    );
   }
 
   return selectedLines.join("\n");
 }
 
-function masterPromptWorkflowCatalogType(type: MasterPromptType): AttributeCatalogType {
+function masterPromptWorkflowCatalogType(
+  type: MasterPromptType,
+): AttributeCatalogType {
   return type === "scripts" ? "story" : type;
 }
 
 function selectedWorkflowAttributeText(
   catalog: AttributeCatalog,
-  selection: MasterPromptAttributeSelection
+  selection: MasterPromptAttributeSelection,
 ) {
-  const selectedLines = selection.attributes.flatMap((selectedAttribute) => {
-    const attribute = catalog.attributes.find((candidate) => candidate.id === selectedAttribute.attributeId);
+  const normalizedSelection = normalizeSelectionForAttributes(
+    selection,
+    catalog.attributes,
+  );
+  const selectedLines = normalizedSelection.attributes.flatMap((selectedAttribute) => {
+    const attribute = catalog.attributes.find(
+      (candidate) => candidate.id === selectedAttribute.attributeId,
+    );
     if (!attribute) {
-      throw new Error(`${catalog.name} Attribute "${selectedAttribute.attributeId}" is not configured.`);
+      throw new Error(
+        `${catalog.name} Attribute "${selectedAttribute.attributeId}" is not configured.`,
+      );
     }
     const selectedOptions = selectedAttribute.optionIds.map((optionId) => {
-      const option = attribute.options.find((candidate) => candidate.id === optionId);
+      const option = attribute.options.find(
+        (candidate) => candidate.id === optionId,
+      );
       if (!option) {
-        throw new Error(`${catalog.name} Attribute option "${optionId}" is not configured.`);
+        throw new Error(
+          `${catalog.name} Attribute option "${optionId}" is not configured.`,
+        );
       }
       return option.name;
     });
@@ -565,26 +723,42 @@ function selectedWorkflowAttributeText(
 
 export async function validateMasterPromptWorkflowAttributeSelection(
   typeInput: MasterPromptType,
-  rawSelection?: MasterPromptAttributeSelection | null
+  rawSelection?: MasterPromptAttributeSelection | null,
 ) {
-  const selection = MasterPromptAttributeSelectionSchema.parse(rawSelection ?? { attributes: [] });
-  const hasSelectedOptions = selection.attributes.some((attribute) => attribute.optionIds.length > 0);
-  if (!hasSelectedOptions) {
+  const selection = MasterPromptAttributeSelectionSchema.parse(
+    rawSelection ?? { attributes: [] },
+  );
+  const rawHasSelectedOptions = selection.attributes.some(
+    (attribute) => attribute.optionIds.length > 0,
+  );
+  if (!rawHasSelectedOptions) {
     return selection;
   }
 
   const catalogType = masterPromptWorkflowCatalogType(typeInput);
   const catalog = await getDefaultAttributeCatalog(catalogType);
   if (!catalog) {
-    throw new Error(`${catalogType} Attribute catalog is required before selecting workflow attributes on this master prompt.`);
+    throw new Error(
+      `${catalogType} Attribute catalog is required before selecting workflow attributes on this master prompt.`,
+    );
   }
-  selectedWorkflowAttributeText(catalog, selection);
-  return selection;
+  const normalizedSelection = normalizeSelectionForAttributes(
+    selection,
+    catalog.attributes,
+  );
+  const hasSelectedOptions = normalizedSelection.attributes.some(
+    (attribute) => attribute.optionIds.length > 0,
+  );
+  if (!hasSelectedOptions) {
+    return normalizedSelection;
+  }
+  selectedWorkflowAttributeText(catalog, normalizedSelection);
+  return normalizedSelection;
 }
 
 export async function renderMasterPromptAttributes(
   content: string,
-  rawSelection?: MasterPromptAttributeSelection | null
+  rawSelection?: MasterPromptAttributeSelection | null,
 ) {
   if (!content.includes(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER)) {
     return content;
@@ -592,16 +766,26 @@ export async function renderMasterPromptAttributes(
 
   const config = await getMasterPromptAttributeConfig();
   if (config.attributes.length === 0) {
-    throw new Error("Master Prompt Config is required before using {masterPromptAttributes}.");
+    throw new Error(
+      "Master Prompt Config is required before using {masterPromptAttributes}.",
+    );
   }
-  const selection = MasterPromptAttributeSelectionSchema.parse(rawSelection ?? { attributes: [] });
-  const renderedAttributes = selectedMasterPromptAttributeText(config.attributes, selection);
-  return content.replaceAll(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER, renderedAttributes);
+  const selection = MasterPromptAttributeSelectionSchema.parse(
+    rawSelection ?? { attributes: [] },
+  );
+  const renderedAttributes = selectedMasterPromptAttributeText(
+    config.attributes,
+    selection,
+  );
+  return content.replaceAll(
+    MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+    renderedAttributes,
+  );
 }
 
 export function renderMasterPromptOutputFormat(
   content: string,
-  outputFormat: string | null | undefined
+  outputFormat: string | null | undefined,
 ) {
   if (!content.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER)) {
     return content;
@@ -612,53 +796,76 @@ export function renderMasterPromptOutputFormat(
     throw new Error("Output Format is required before using {outputFormat}.");
   }
 
-  return content.replaceAll(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER, trimmedOutputFormat);
+  return content.replaceAll(
+    MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
+    trimmedOutputFormat,
+  );
 }
 
 export async function renderMasterPromptText(prompt: MasterPrompt) {
   const withMasterPromptAttributes = await renderMasterPromptAttributes(
     prompt.content,
-    prompt.attributeSelection
+    prompt.attributeSelection,
   );
-  return renderMasterPromptOutputFormat(withMasterPromptAttributes, prompt.outputFormat);
+  return renderMasterPromptOutputFormat(
+    withMasterPromptAttributes,
+    prompt.outputFormat,
+  );
 }
 
 export async function validateMasterPromptAttributeSelection(
   content: string,
-  rawSelection?: MasterPromptAttributeSelection | null
+  rawSelection?: MasterPromptAttributeSelection | null,
 ) {
-  const selection = MasterPromptAttributeSelectionSchema.parse(rawSelection ?? { attributes: [] });
-  const hasSelectedOptions = selection.attributes.some((attribute) => attribute.optionIds.length > 0);
-  if (!content.includes(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER)) {
-    if (!hasSelectedOptions) {
-      return selection;
-    }
-    const config = await getMasterPromptAttributeConfig();
-    selectedMasterPromptAttributeText(config.attributes, selection);
+  const selection = MasterPromptAttributeSelectionSchema.parse(
+    rawSelection ?? { attributes: [] },
+  );
+  const rawHasSelectedOptions = selection.attributes.some(
+    (attribute) => attribute.optionIds.length > 0,
+  );
+  if (!rawHasSelectedOptions) {
     return selection;
   }
-  await renderMasterPromptAttributes(content, selection);
-  return selection;
+  const config = await getMasterPromptAttributeConfig();
+  const normalizedSelection = normalizeSelectionForAttributes(
+    selection,
+    config.attributes,
+  );
+  const hasSelectedOptions = normalizedSelection.attributes.some(
+    (attribute) => attribute.optionIds.length > 0,
+  );
+  if (!content.includes(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER)) {
+    if (!hasSelectedOptions) {
+      return normalizedSelection;
+    }
+    selectedMasterPromptAttributeText(config.attributes, normalizedSelection);
+    return normalizedSelection;
+  }
+  await renderMasterPromptAttributes(content, normalizedSelection);
+  return normalizedSelection;
 }
 
-export function validateMasterPromptOutputFormat(content: string, outputFormat: string | null | undefined) {
+export function validateMasterPromptOutputFormat(
+  content: string,
+  outputFormat: string | null | undefined,
+) {
   renderMasterPromptOutputFormat(content, outputFormat);
 }
 
-export function assertNoMasterPromptAttributePlaceholder(value: string | null | undefined) {
+export function assertNoMasterPromptAttributePlaceholder(
+  value: string | null | undefined,
+) {
   if (value?.includes(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER)) {
-    throw new Error("{masterPromptAttributes} is admin-only and cannot be used in temporary user prompt overrides.");
+    throw new Error(
+      "{masterPromptAttributes} is admin-only and cannot be used in temporary user prompt overrides.",
+    );
   }
 }
 
 export async function getMasterPromptConfig(): Promise<MasterPromptConfig> {
   const rows = await prisma.masterPrompt.findMany({
     where: { status: "active" },
-    orderBy: [
-      { type: "asc" },
-      { isDefault: "desc" },
-      { updatedAt: "desc" }
-    ]
+    orderBy: [{ type: "asc" }, { isDefault: "desc" }, { updatedAt: "desc" }],
   });
   const prompts = rows.map(mapMasterPrompt);
   const now = new Date().toISOString();
@@ -674,11 +881,11 @@ export async function getMasterPromptConfig(): Promise<MasterPromptConfig> {
         return {
           type,
           prompts: typePrompts.length > 0 ? typePrompts : [defaultPrompt],
-          defaultPrompt
+          defaultPrompt,
         };
-      })
+      }),
     ),
-    updatedAt: rows[0]?.updatedAt.toISOString() ?? now
+    updatedAt: rows[0]?.updatedAt.toISOString() ?? now,
   };
 }
 
@@ -695,16 +902,17 @@ export async function createMasterPrompt(input: {
   const outputFormat = input.outputFormat?.trim() ?? "";
   const attributeSelection = await validateMasterPromptAttributeSelection(
     content,
-    input.attributeSelection
+    input.attributeSelection,
   );
-  const workflowAttributeSelection = await validateMasterPromptWorkflowAttributeSelection(
-    type,
-    input.workflowAttributeSelection
-  );
+  const workflowAttributeSelection =
+    await validateMasterPromptWorkflowAttributeSelection(
+      type,
+      input.workflowAttributeSelection,
+    );
   validateMasterPromptOutputFormat(content, outputFormat);
   return prisma.$transaction(async (tx) => {
     const activeCount = await tx.masterPrompt.count({
-      where: { type, status: "active" }
+      where: { type, status: "active" },
     });
     const shouldBeDefault = activeCount === 0;
     const prompt = await tx.masterPrompt.create({
@@ -713,12 +921,14 @@ export async function createMasterPrompt(input: {
         name: input.name.trim(),
         content,
         outputFormat,
-        attributeSelection: attributeSelection as unknown as Prisma.InputJsonValue,
-        workflowAttributeSelection: workflowAttributeSelection as unknown as Prisma.InputJsonValue,
+        attributeSelection:
+          attributeSelection as unknown as Prisma.InputJsonValue,
+        workflowAttributeSelection:
+          workflowAttributeSelection as unknown as Prisma.InputJsonValue,
         status: "active",
         isDefault: shouldBeDefault,
-        createdByAdminId: defaultAdminId
-      }
+        createdByAdminId: defaultAdminId,
+      },
     });
     return mapMasterPrompt(prompt);
   });
@@ -732,25 +942,36 @@ export async function updateMasterPrompt(
     outputFormat?: string;
     attributeSelection?: MasterPromptAttributeSelection;
     workflowAttributeSelection?: MasterPromptAttributeSelection;
-  }
+  },
 ) {
   const existing = await prisma.masterPrompt.findFirstOrThrow({
-    where: { id, status: "active" }
+    where: { id, status: "active" },
   });
   const type = MasterPromptTypeSchema.parse(existing.type);
   const nextContent = input.content?.trim() ?? existing.content;
-  const nextOutputFormat = input.outputFormat?.trim() ?? existing.outputFormat ?? "";
+  const nextOutputFormat =
+    input.outputFormat?.trim() ?? existing.outputFormat ?? "";
   const nextSelection = input.attributeSelection
-    ? await validateMasterPromptAttributeSelection(nextContent, input.attributeSelection)
+    ? await validateMasterPromptAttributeSelection(
+        nextContent,
+        input.attributeSelection,
+      )
     : await validateMasterPromptAttributeSelection(
         nextContent,
-        MasterPromptAttributeSelectionSchema.parse(existing.attributeSelection ?? { attributes: [] })
+        MasterPromptAttributeSelectionSchema.parse(
+          existing.attributeSelection ?? { attributes: [] },
+        ),
       );
   const nextWorkflowSelection = input.workflowAttributeSelection
-    ? await validateMasterPromptWorkflowAttributeSelection(type, input.workflowAttributeSelection)
+    ? await validateMasterPromptWorkflowAttributeSelection(
+        type,
+        input.workflowAttributeSelection,
+      )
     : await validateMasterPromptWorkflowAttributeSelection(
         type,
-        MasterPromptAttributeSelectionSchema.parse(existing.workflowAttributeSelection ?? { attributes: [] })
+        MasterPromptAttributeSelectionSchema.parse(
+          existing.workflowAttributeSelection ?? { attributes: [] },
+        ),
       );
   validateMasterPromptOutputFormat(nextContent, nextOutputFormat);
   const prompt = await prisma.masterPrompt.update({
@@ -758,50 +979,53 @@ export async function updateMasterPrompt(
     data: {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
       ...(input.content !== undefined ? { content: input.content.trim() } : {}),
-      ...(input.outputFormat !== undefined ? { outputFormat: input.outputFormat.trim() } : {}),
+      ...(input.outputFormat !== undefined
+        ? { outputFormat: input.outputFormat.trim() }
+        : {}),
       attributeSelection: nextSelection as unknown as Prisma.InputJsonValue,
-      workflowAttributeSelection: nextWorkflowSelection as unknown as Prisma.InputJsonValue
-    }
+      workflowAttributeSelection:
+        nextWorkflowSelection as unknown as Prisma.InputJsonValue,
+    },
   });
   return mapMasterPrompt(prompt);
 }
 
 export async function archiveMasterPrompt(id: string) {
   const existing = await prisma.masterPrompt.findFirstOrThrow({
-    where: { id, status: "active" }
+    where: { id, status: "active" },
   });
   if (existing.isDefault) {
     return {
       archived: false,
       reason: "DEFAULT_PROMPT_DELETE_BLOCKED" as const,
-      prompt: mapMasterPrompt(existing)
+      prompt: mapMasterPrompt(existing),
     };
   }
   const prompt = await prisma.masterPrompt.update({
     where: { id: existing.id },
-    data: { status: "archived" }
+    data: { status: "archived" },
   });
   return {
     archived: true,
-    prompt: mapMasterPrompt(prompt)
+    prompt: mapMasterPrompt(prompt),
   };
 }
 
 export async function setDefaultMasterPrompt(id: string) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.masterPrompt.findFirstOrThrow({
-      where: { id, status: "active" }
+      where: { id, status: "active" },
     });
     await tx.masterPrompt.updateMany({
       where: {
         type: existing.type,
-        status: "active"
+        status: "active",
       },
-      data: { isDefault: false }
+      data: { isDefault: false },
     });
     const prompt = await tx.masterPrompt.update({
       where: { id: existing.id },
-      data: { isDefault: true }
+      data: { isDefault: true },
     });
     return mapMasterPrompt(prompt);
   });
@@ -810,7 +1034,7 @@ export async function setDefaultMasterPrompt(id: string) {
 export async function getStoredProviderKey(provider: string) {
   const normalizedProvider = normalizeProvider(provider);
   const providerKey = await prisma.aiProviderKey.findUnique({
-    where: { provider: normalizedProvider }
+    where: { provider: normalizedProvider },
   });
   if (providerKey?.keyStatus !== "configured") {
     return null;
@@ -818,13 +1042,16 @@ export async function getStoredProviderKey(provider: string) {
   return decryptProviderKey(providerKey.encryptedKey)?.trim() || null;
 }
 
-export async function resolveProviderApiKey(provider: string, overrideKey?: string) {
+export async function resolveProviderApiKey(
+  provider: string,
+  overrideKey?: string,
+) {
   const normalizedProvider = normalizeProvider(provider);
   const trimmedOverrideKey = overrideKey?.trim();
   if (trimmedOverrideKey) {
     return {
       apiKey: trimmedOverrideKey,
-      source: "input" as ProviderKeySource
+      source: "input" as ProviderKeySource,
     };
   }
 
@@ -832,17 +1059,19 @@ export async function resolveProviderApiKey(provider: string, overrideKey?: stri
   if (storedApiKey) {
     return {
       apiKey: storedApiKey,
-      source: "stored" as ProviderKeySource
+      source: "stored" as ProviderKeySource,
     };
   }
 
   return {
     apiKey: null,
-    source: "missing" as ProviderKeySource
+    source: "missing" as ProviderKeySource,
   };
 }
 
-export async function getProviderKeyStatus(provider: string): Promise<ProviderKeyStatus> {
+export async function getProviderKeyStatus(
+  provider: string,
+): Promise<ProviderKeyStatus> {
   const resolved = await resolveProviderApiKey(provider);
   if (resolved.source === "stored") {
     return "configured";
@@ -853,39 +1082,43 @@ export async function getProviderKeyStatus(provider: string): Promise<ProviderKe
 export async function getActiveAiConfig(): Promise<AiConfig> {
   const config = await prisma.aiSiteConfig.findFirstOrThrow({
     where: { isActive: true },
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
   const [
     promptKeyStatus,
     videoKeyStatus,
     scenarioPrompt,
     shotsPrompt,
-    scriptsPrompt
+    scriptsPrompt,
   ] = await Promise.all([
     getProviderKeyStatus(config.promptProvider),
     getProviderKeyStatus(config.videoProvider),
     getDefaultMasterPrompt("scenario"),
     getDefaultMasterPrompt("shots"),
-    getDefaultMasterPrompt("scripts")
+    getDefaultMasterPrompt("scripts"),
   ]);
-  const [scenarioPromptContent, shotsPromptContent, scriptsPromptContent] = await Promise.all([
-    renderMasterPromptText(scenarioPrompt),
-    renderMasterPromptText(shotsPrompt),
-    renderMasterPromptText(scriptsPrompt)
-  ]);
+  const [scenarioPromptContent, shotsPromptContent, scriptsPromptContent] =
+    await Promise.all([
+      renderMasterPromptText(scenarioPrompt),
+      renderMasterPromptText(shotsPrompt),
+      renderMasterPromptText(scriptsPrompt),
+    ]);
   return mapAiConfig(config, promptKeyStatus, videoKeyStatus, {
     scenarioPrompt: scenarioPromptContent,
     scenarioOutputFormat: scenarioPrompt.outputFormat,
     shotsPrompt: shotsPromptContent,
     shotsOutputFormat: shotsPrompt.outputFormat,
     scriptsPrompt: scriptsPromptContent,
-    scriptsOutputFormat: scriptsPrompt.outputFormat
+    scriptsOutputFormat: scriptsPrompt.outputFormat,
   });
 }
 
 export async function replaceActiveAiConfig(input: {
   contentMode: "script" | "video";
   showUserMasterPrompts?: boolean | undefined;
+  aiHandoffProvider?: Provider | undefined;
+  aiHandoffTargetUrl?: string | null | undefined;
+  aiHandoffPromptSelector?: string | null | undefined;
   promptProvider: Provider;
   promptModel: string;
   videoProvider: Provider;
@@ -895,18 +1128,38 @@ export async function replaceActiveAiConfig(input: {
   const videoProvider = normalizeProvider(input.videoProvider);
   const activeConfig = await prisma.aiSiteConfig.findFirst({
     where: { isActive: true },
-    orderBy: { updatedAt: "desc" }
+    orderBy: { updatedAt: "desc" },
   });
+  const nextAiHandoffProvider = normalizeProvider(
+    input.aiHandoffProvider ??
+      activeConfig?.aiHandoffProvider ??
+      defaultAiHandoffProvider,
+  );
+  const nextAiHandoffTargetUrl =
+    input.aiHandoffTargetUrl !== undefined
+      ? normalizeOptionalUrl(input.aiHandoffTargetUrl)
+      : activeConfig
+        ? normalizeOptionalUrl(activeConfig.aiHandoffTargetUrl)
+        : normalizeOptionalUrl(defaultAiHandoffTargetUrl);
+  const nextAiHandoffPromptSelector =
+    input.aiHandoffPromptSelector !== undefined
+      ? input.aiHandoffPromptSelector?.trim() || null
+      : activeConfig?.aiHandoffPromptSelector?.trim() || null;
   await prisma.$transaction([
     prisma.aiSiteConfig.updateMany({
       where: { isActive: true },
-      data: { isActive: false }
+      data: { isActive: false },
     }),
     prisma.aiSiteConfig.create({
       data: {
         contentMode: input.contentMode,
         showUserMasterPrompts:
-          input.showUserMasterPrompts ?? activeConfig?.showUserMasterPrompts ?? false,
+          input.showUserMasterPrompts ??
+          activeConfig?.showUserMasterPrompts ??
+          false,
+        aiHandoffProvider: nextAiHandoffProvider,
+        aiHandoffTargetUrl: nextAiHandoffTargetUrl,
+        aiHandoffPromptSelector: nextAiHandoffPromptSelector,
         promptProvider,
         promptModel: input.promptModel,
         shotGenerationPrompt: activeConfig?.shotGenerationPrompt ?? null,
@@ -915,14 +1168,17 @@ export async function replaceActiveAiConfig(input: {
         videoProvider,
         videoModel: input.videoModel,
         isActive: true,
-        createdByAdminId: defaultAdminId
-      }
-    })
+        createdByAdminId: defaultAdminId,
+      },
+    }),
   ]);
   return getActiveAiConfig();
 }
 
-export async function markProviderKeyConfigured(provider: string, apiKey: string) {
+export async function markProviderKeyConfigured(
+  provider: string,
+  apiKey: string,
+) {
   const normalizedProvider = normalizeProvider(provider);
   const encryptedKey = encryptProviderKey(apiKey.trim());
   await prisma.aiProviderKey.upsert({
@@ -931,19 +1187,19 @@ export async function markProviderKeyConfigured(provider: string, apiKey: string
       encryptedKey,
       keyStatus: "configured",
       rotatedAt: new Date(),
-      createdByAdminId: defaultAdminId
+      createdByAdminId: defaultAdminId,
     },
     create: {
       provider: normalizedProvider,
       encryptedKey,
       keyStatus: "configured",
       rotatedAt: new Date(),
-      createdByAdminId: defaultAdminId
-    }
+      createdByAdminId: defaultAdminId,
+    },
   });
   return {
     provider: normalizedProvider,
-    keyStatus: await getProviderKeyStatus(normalizedProvider)
+    keyStatus: await getProviderKeyStatus(normalizedProvider),
   };
 }
 
@@ -954,7 +1210,7 @@ export function mapJob(row: DbJob): Job {
     status: JobStatusSchema.parse(row.status),
     progress: row.progress,
     result: row.result ?? null,
-    error: row.error ? (row.error as ApiError) : null
+    error: row.error ? (row.error as ApiError) : null,
   };
 }
 
@@ -968,7 +1224,12 @@ export function mapAiLog(row: DbAiLog): AiLog {
     flowType: FlowTypeSchema.parse(row.flowType),
     provider: ProviderSchema.parse(row.provider),
     model: row.model,
-    status: row.status === "failed" ? "failed" : row.status === "success" ? "success" : "pending"
+    status:
+      row.status === "failed"
+        ? "failed"
+        : row.status === "success"
+          ? "success"
+          : "pending",
   };
 
   const latencyMs = row.responses?.[0]?.latencyMs;
@@ -984,7 +1245,7 @@ export function mapAiLogDetail(row: DbAiLog): AiLogDetail {
   const response = row.responses?.[0];
   const detail: AiLogDetail = {
     ...base,
-    requestPayload: asRecord(row.requestPayload)
+    requestPayload: asRecord(row.requestPayload),
   };
 
   if (response?.responsePayload) {

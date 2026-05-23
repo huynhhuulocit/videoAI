@@ -3,6 +3,7 @@ import { LinkButton } from "../../components/ui/button";
 import { BackButton } from "../../components/ui/back-button";
 import { Card } from "../../components/ui/card";
 import { I18nText } from "../../components/i18n/i18n-text";
+import { AiHandoffInstallCard } from "../../components/home/ai-handoff-install-card";
 
 export default function HomePage() {
   return (
@@ -79,6 +80,7 @@ export default function HomePage() {
               </div>
             </div>
           </Card>
+          <AiHandoffInstallCard />
         </div>
       </section>
     </main>

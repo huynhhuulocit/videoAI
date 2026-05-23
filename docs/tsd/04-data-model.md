@@ -349,6 +349,9 @@ Fields:
 - `id`
 - `content_mode`: `script` or `video`
 - `show_user_master_prompts`: boolean, default `false`; controls whether user Project/One Click workspaces show editable Story Content, Scenario, Shots and Shot master prompt fields
+- `ai_handoff_provider`: adapter key such as `google-flow-veo`; seeded from `AI_HANDOFF_PROVIDER`
+- `ai_handoff_target_url`: nullable target URL opened by the extension; seeded from `AI_HANDOFF_TARGET_URL`
+- `ai_handoff_prompt_selector`: nullable CSS selector captured by the extension `Check DOM` flow and used to fill the target prompt input
 - `prompt_provider`
 - `prompt_model`
 - `shot_generation_prompt`: nullable legacy admin-managed prompt for `shot_generation`; new CRUD uses `config.master_prompts`
@@ -367,6 +370,7 @@ Rules:
 - `shot_generation_prompt` and `template_selection_prompt` remain read-compatibility columns during migration to `config.master_prompts`; runtime AI requests do not use them as fallback.
 - Runtime master prompts keep a recommended placeholder format, but placeholder replacement is optional compatibility; backend does not append hidden runtime context to the selected prompt.
 - When `show_user_master_prompts` is `false`, user-facing generation requests must not accept temporary `masterPrompt` overrides. Runtime uses the active admin default prompt while prompt preview buttons may still show the rendered prompt.
+- AI Handoff target config is saved here by Admin > AI Config. Runtime uses the saved provider, target URL, and prompt selector only; if `ai_handoff_target_url` or `ai_handoff_prompt_selector` is blank, Step 4 handoff fails clearly instead of opening a fallback target or using fallback selectors.
 - Config updates should create audit records.
 
 ### 3.7. `config.master_prompts`
@@ -584,6 +588,7 @@ Recommended defaults:
 - Cross-schema foreign keys may be used in early phase only when they do not block future separation.
 - Prefer application-level references across service boundaries for future database-per-service migration.
 - Migration names should describe the feature, not only the table name.
+
 ## 9. Admin Attribute Catalogs
 
 - Scenario management is now admin-only. User-owned `content.video_templates` remains only as a legacy compatibility table for older links and saved data.
@@ -595,3 +600,38 @@ Recommended defaults:
 - Catalog JSON uses `id`, `name`, `description`, `required`, and `options[]` with the same `id`, `name`, and `description` fields.
 - `config.attribute_generation_prompts` stores one Attribute Generation Prompt per type (`story`, `scenario`, `shots`, `shot`). This prompt is not a Master Prompt and is used only to generate catalog JSON.
 - `projects.projects.attribute_selections` stores selected options keyed by `story`, `scenario`, and `shots`. Per-shot Step 4 selections use each shot JSON object's `attributeSelection`. Required attributes default to the first option but remain user-changeable as multi-select, as long as at least one option stays selected.
+
+## 10. AI Handoff Records
+
+Table: `projects.ai_handoffs`
+
+Purpose: persist one user-initiated browser-extension handoff for a project shot.
+
+Fields:
+
+- `id`
+- `project_id`
+- `shot_id`
+- `owner_user_id`
+- `provider`: generic adapter key such as `google-flow-veo`
+- `target_url`: the saved Admin-configured allowlisted AI target URL opened by the extension
+- `prompt_text`: exact rendered prompt text sent to the extension
+- `status`: `created`, `sent_to_extension`, `target_opened`, `prompt_filled`, `generate_clicked`, `failed`, or `completed_manually`
+- `error_message`
+- `created_at`
+- `updated_at`
+
+Indexes:
+
+- Index on `project_id`.
+- Index on `(project_id, shot_id)`.
+- Index on `(owner_user_id, updated_at)`.
+- Index on `status`.
+
+Rules:
+
+- AI Handoff records are owned by the project owner and must not expose another user's shot prompts.
+- Handoff creation must match the active Admin `ai_handoff_provider` and `ai_handoff_target_url` values.
+- Handoff status represents extension/browser progress only; it is separate from provider API video-generation records.
+- The extension never stores provider credentials, cookies, or API keys in the database.
+- Media upload automation is out of scope for v1; reference media remains stored through normal media tables and is handled manually on the target AI site.

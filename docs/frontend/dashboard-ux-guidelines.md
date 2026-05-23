@@ -373,6 +373,7 @@ Before completing UI work, verify:
 - Admin tables remain usable with realistic log data.
 - Keyboard focus is visible.
 - Dialogs and drawers can be closed with keyboard.
+
 ## 12. Attribute Catalog UX
 
 - Admin sidebar groups Story, Scenario, Shots, and Shot as section labels, not links. Active child pages need visible selected styling.
@@ -383,3 +384,14 @@ Before completing UI work, verify:
 - Required attributes use a clear checkbox in admin and a clear `Required` badge in user selection panels.
 - In user workflows, required attributes should auto-select the first option on load and should not visually allow clearing every option.
 - Scenario creation/editing is admin-only; user workflows should show the active admin Scenario catalog, not a user scenario dropdown.
+
+## 13. AI Handoff UX
+
+- Public Home should present AI Handoff as an optional extension-assisted workflow, not as a replacement for provider APIs.
+- Copy must say `Install from Chrome Web Store` or equivalent; do not imply a website can directly install the extension.
+- The safety copy must explain that the extension only runs after user click, transfers prompt text, and keeps media upload manual in v1.
+- Step 4 shot cards place `AI Handoff` beside `Prompt` and `Create video` so users can choose between manual prompt copy, API video generation, and browser handoff.
+- The target URL and prompt selector used by the extension come from Admin > AI Config. If either value is blank or invalid, the shot card should show a clear missing/invalid configuration message and must not open a hardcoded fallback or use a fallback selector.
+- Extension popup `Check DOM` captures the live Flow prompt input selector, and `Test fill` inserts hardcoded text without clicking Generate so admins can validate selector changes safely.
+- Handoff failures should be specific: extension missing, target not logged in, selector missing/layout changed, generate disabled, or target origin not allowlisted.
+- Handoff progress is per shot and should not block editing other shots.

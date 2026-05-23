@@ -210,6 +210,7 @@
 - Các thao tác upload media, tạo script, phân tích sản phẩm, gọi AI và tạo video cần có trạng thái loading.
 - Các lỗi đăng nhập, phân quyền, upload media, phân tích URL, generate AI, tạo script và tạo video phải được hiển thị rõ ràng cho người dùng.
 - Các page trong app phải có hành động quay lại rõ ràng; public, user và admin page dùng nút `Quay lại` ở vị trí dễ thấy.
+
 ## 11. Admin Attribute Catalog Requirements
 
 - User sidebar must not show Scenario management.
@@ -218,6 +219,21 @@
 - Scenario catalogs are admin-only. User Project and One Click flows load the active Admin Scenario catalog.
 - Project and One Click Step 1, Step 2, and Step 3 load Story, Scenario, and Shots catalogs respectively.
 - Required attributes default to the first option when no saved selection exists, remain multi-select, and cannot be cleared to zero selected options.
+
+## 12. AI Handoff Chrome Extension
+
+- Public Home must show an AI Handoff install/status card with `Install extension`, `Check installed`, and safety copy.
+- `Install extension` opens the configured Chrome Web Store listing from `NEXT_PUBLIC_AI_HANDOFF_EXTENSION_URL`; normal websites cannot directly install Chrome extensions.
+- `Check installed` uses `NEXT_PUBLIC_AI_HANDOFF_EXTENSION_ID` and Chrome external messaging to detect the installed extension.
+- AI Handoff is enabled only when `NEXT_PUBLIC_AI_HANDOFF_ENABLED=true` and a configured extension id exists.
+- Project and One Click Step 4 shot cards must show an `AI Handoff` action beside `Prompt` and `Create video`.
+- Clicking `AI Handoff` uses the active Admin AI Config `aiHandoffProvider`, `aiHandoffTargetUrl`, and `aiHandoffPromptSelector`, creates a project-owned handoff record, sends `{handoffId, provider, targetUrl, promptText, promptSelector, shotId}` to the extension, persists status updates, and shows success/error feedback in the shot card.
+- `AI_HANDOFF_PROVIDER` and `AI_HANDOFF_TARGET_URL` seed local/bootstrap config only. The saved Admin target URL is runtime source of truth; if it is blank or invalid, the UI/API fail clearly and do not use a hardcoded fallback.
+- Handoff statuses are `created`, `sent_to_extension`, `target_opened`, `prompt_filled`, `generate_clicked`, `failed`, and `completed_manually`.
+- The first target adapter is `google-flow-veo`, but UI, API, and database names must remain generic as `AI Handoff`.
+- The extension runs content scripts only on allowlisted AI target origins and must fail clearly when the target page is not logged in, the configured selector is missing, or the generate button is disabled. The popup provides `Check DOM` to recapture the prompt selector and `Test fill` to insert hardcoded test text without clicking Generate.
+- AI Handoff v1 automates prompt text only. Reference media remains visible in VideoAI and must be uploaded manually to the target AI site.
+- The extension must not store provider cookies, passwords, API keys, or bypass login, quota, CAPTCHA, safety dialogs, or provider restrictions.
 - Project selections are persisted as JSON keyed by `story`, `scenario`, and `shots`.
 - Runtime data enters AI prompts only through explicit placeholders present in the selected prompt.
 - `Master Prompt Config` is separate from Story/Scenario/Shots user workflow attributes. It is admin-only, uses the admin-saved selection on each master prompt, and never exposes `{masterPromptAttributes}` to user screens or user-facing placeholder autocomplete.

@@ -625,6 +625,10 @@ async function main() {
     data: {
       contentMode: "script",
       showUserMasterPrompts: false,
+      aiHandoffProvider: process.env.AI_HANDOFF_PROVIDER?.trim() || "google-flow-veo",
+      aiHandoffTargetUrl:
+        process.env.AI_HANDOFF_TARGET_URL?.trim() ||
+        "https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4",
       promptProvider: "gemini",
       promptModel: "gemini-2.5-flash",
       videoProvider: "veo",
