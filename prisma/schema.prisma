@@ -123,6 +123,7 @@ model ScenarioAttributeCatalog {
 
 model ShotAttributeCatalog {
   id               String   @id
+  type             String   @default("shots")
   name             String
   description      String?
   attributes       Json
@@ -132,8 +133,8 @@ model ShotAttributeCatalog {
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
-  @@index([status])
-  @@index([isDefault])
+  @@index([type, status])
+  @@index([type, isDefault])
   @@map("shot_attribute_catalogs")
   @@schema("content")
 }
@@ -231,6 +232,7 @@ model VideoGenerationRecord {
 model AiSiteConfig {
   id                   String   @id @default(cuid())
   contentMode          String   @map("content_mode")
+  showUserMasterPrompts Boolean @default(false) @map("show_user_master_prompts")
   promptProvider       String   @map("prompt_provider")
   promptModel          String   @map("prompt_model")
   shotGenerationPrompt String?  @map("shot_generation_prompt")
@@ -267,7 +269,9 @@ model MasterPrompt {
   type             String
   name             String
   content          String   @db.Text
+  outputFormat     String?  @map("output_format") @db.Text
   attributeSelection Json?  @map("attribute_selection")
+  workflowAttributeSelection Json? @map("workflow_attribute_selection")
   isDefault        Boolean  @default(false) @map("is_default")
   status           String   @default("active")
   createdByAdminId String?  @map("created_by_admin_id")

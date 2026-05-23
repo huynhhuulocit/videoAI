@@ -64,6 +64,14 @@ const adminNav: NavItem[] = [
       { href: "/admin/shots/attributes", label: "shell.shotsAttribute" },
     ],
   },
+  {
+    label: "shell.shotGroup",
+    icon: Film,
+    children: [
+      { href: "/admin/shot/master-prompt", label: "shell.shotMasterPrompt" },
+      { href: "/admin/shot/attributes", label: "shell.shotAttribute" },
+    ],
+  },
   { href: "/admin/ai-logs", label: "shell.aiLogs", icon: Logs },
 ];
 
@@ -71,7 +79,7 @@ function isActive(pathname: string, href: string, children?: NavItem["children"]
   if (pathname === href || pathname.startsWith(`${href}/`)) {
     return true;
   }
-  return children?.some((child) => pathname === child.href) ?? false;
+  return children?.some((child) => pathname === child.href || pathname.startsWith(`${child.href}/`)) ?? false;
 }
 
 export function DashboardNav({ role }: { role: "user" | "admin" }) {
@@ -82,7 +90,7 @@ export function DashboardNav({ role }: { role: "user" | "admin" }) {
     <nav className="space-y-1">
       {nav.map((item) => {
         const itemKey = item.href ?? item.label;
-        const active = item.href ? isActive(pathname, item.href, item.children) : item.children?.some((child) => pathname === child.href) ?? false;
+        const active = item.href ? isActive(pathname, item.href, item.children) : item.children?.some((child) => pathname === child.href || pathname.startsWith(`${child.href}/`)) ?? false;
         return (
           <div key={itemKey}>
             {item.href ? (
@@ -110,7 +118,7 @@ export function DashboardNav({ role }: { role: "user" | "admin" }) {
             {item.children ? (
               <div className="ml-7 mt-1 space-y-1 border-l border-border pl-3">
                 {item.children.map((child) => {
-                  const childActive = pathname === child.href;
+                  const childActive = pathname === child.href || pathname.startsWith(`${child.href}/`);
                   return (
                     <Link
                       key={child.href}

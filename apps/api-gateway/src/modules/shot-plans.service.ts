@@ -3,8 +3,10 @@ import { prisma, type Prisma } from "@videoai/database";
 import { z } from "zod";
 import {
   VideoShotAttributeSchema,
+  MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   type ApiError,
   type ApiErrorCode,
+  type AiConfig,
   type GenerateShotsJobResult,
   type GenerateShotsRequest,
   type Provider,
@@ -132,8 +134,6 @@ class AiJobError extends Error {
 @Injectable()
 export class ShotPlansService {
   async createShotGenerationJob(projectId: string | null, input: GenerateShotsRequest) {
-    this.assertUserPromptOverrideAllowed(input.masterPrompt);
-
     if (projectId) {
       const project = await prisma.projectRecord.findFirst({
         where: {
@@ -150,6 +150,7 @@ export class ShotPlansService {
 
     const startedAt = Date.now();
     const config = await getActiveAiConfig();
+    this.assertUserPromptOverrideAllowed(input.masterPrompt, config);
     const provider = config.promptProvider;
     const model = config.promptModel;
     const sourceText = input.sourceText;
@@ -163,7 +164,8 @@ export class ShotPlansService {
       sourceText,
       attributes,
       scenarioAttributes,
-      shotsAttributes
+      shotsAttributes,
+      config.shotGenerationOutputFormat
     );
     const rawRequest = this.buildProviderRequest(provider, model, prompt);
     const jobId = `job_shot_generation_${Date.now()}`;
@@ -368,7 +370,8 @@ export class ShotPlansService {
     sourceText: string,
     attributes: VideoShotAttribute[],
     scenarioAttributes: VideoShotAttribute[],
-    shotsAttributes: VideoShotAttribute[]
+    shotsAttributes: VideoShotAttribute[],
+    outputFormat: string | null | undefined
   ) {
     const template = this.requirePrompt(configuredPrompt, "Shots master prompt");
     const attributeText = this.formatPlanAttributes(attributes);
@@ -378,13 +381,17 @@ export class ShotPlansService {
       story: sourceText,
       attributes: attributeText,
       scenarioAttributes: scenarioAttributeText,
-      shotsAttributes: shotsAttributeText
+      shotsAttributes: shotsAttributeText,
+      outputFormat: outputFormat ?? ""
     });
 
     return renderedPrompt;
   }
 
   private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {
+    if (template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) && !values.outputFormat?.trim()) {
+      throw new AiJobError("VALIDATION_ERROR", "Output Format is required before using {outputFormat}.");
+    }
     return Object.entries(values).reduce(
       (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
       template
@@ -568,11 +575,16 @@ export class ShotPlansService {
     return provider === "chatgpt" || provider === "openai";
   }
 
-  private assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined) {
+  private assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined, config: AiConfig) {
     try {
       assertNoMasterPromptAttributePlaceholder(masterPrompt);
     } catch (error) {
       throw new BadRequestException(error instanceof Error ? error.message : "Invalid master prompt override.");
+    }
+    if (masterPrompt?.trim() && !config.showUserMasterPrompts) {
+      throw new BadRequestException(
+        "Temporary master prompt overrides are disabled by Admin Site Config."
+      );
     }
   }
 

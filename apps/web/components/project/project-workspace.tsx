@@ -1,6 +1,6 @@
 "use client";
 
-import type { ChangeEvent, DragEvent } from "react";
+import type { ChangeEvent, DragEvent, TextareaHTMLAttributes } from "react";
 import { useEffect, useRef, useState } from "react";
 import type {
   ApiError,
@@ -21,10 +21,14 @@ import type {
 } from "@videoai/contracts";
 import {
   DEFAULT_SCRIPT_GENERATION_PROMPT,
+  DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_SHOT_GENERATION_PROMPT,
-  DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
+  DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
+  DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
+  MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   MASTER_PROMPT_PLACEHOLDERS,
+  AttributeSelectionSchema,
   TemplateAttributeSchema,
 } from "@videoai/contracts";
 import {
@@ -790,6 +794,12 @@ function clampShotDuration(value: number) {
   return Math.min(8, Math.max(1, Math.round(value)));
 }
 
+const draftShotPlanIdPrefix = "shot_plan_draft_";
+
+function isDraftShotPlan(shotPlan: VideoShotPlan) {
+  return shotPlan.id.startsWith(draftShotPlanIdPrefix);
+}
+
 function createLocalShot(durationSeconds: number): VideoShot {
   const id = `shot_local_${Date.now()}`;
   return {
@@ -831,6 +841,39 @@ function createLocalShotAttribute(): VideoShotAttribute {
   };
 }
 
+function resizeTextareaToContent(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
+function AutoResizeTextarea({
+  onInput,
+  value,
+  rows = 1,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      resizeTextareaToContent(textareaRef.current);
+    }
+  }, [value]);
+
+  return (
+    <textarea
+      {...props}
+      ref={textareaRef}
+      rows={rows}
+      value={value}
+      onInput={(event) => {
+        resizeTextareaToContent(event.currentTarget);
+        onInput?.(event);
+      }}
+    />
+  );
+}
+
 function toPlainRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -844,16 +887,13 @@ function readPlainString(value: unknown) {
 function formatShotPlanResultText(shotPlan: VideoShotPlan) {
   return JSON.stringify(
     {
-      name: shotPlan.name,
-      ...(shotPlan.description ? { description: shotPlan.description } : {}),
-      durationSeconds: shotPlan.durationSeconds,
-      attributes: shotPlan.attributes,
       shots: shotPlan.shots.map((shot) => ({
         id: shot.id,
         title: shot.title,
         description: shot.description,
         durationSeconds: shot.durationSeconds,
         attributes: shot.attributes,
+        attributeSelection: shot.attributeSelection ?? null,
         mediaIds: shot.mediaIds ?? [],
       })),
     },
@@ -889,37 +929,54 @@ function parseShotResultAttributes(value: unknown): VideoShotAttribute[] {
     );
 }
 
-function parseShotResultShots(value: unknown, fallbackDurationSeconds: number) {
+function parseShotResultAttributeSelection(value: unknown) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = AttributeSelectionSchema.nullable().safeParse(value);
+  if (!parsed.success) {
+    throw new Error("Shot attributeSelection must match the AttributeSelection JSON shape.");
+  }
+  return parsed.data;
+}
+
+function parseShotResultShots(value: unknown) {
   if (!Array.isArray(value)) {
     throw new Error("Shots result JSON must include a shots array.");
   }
 
-  const shots = value
-    .map((item, index) => {
-      const record = toPlainRecord(item);
-      const title = readPlainString(record.title);
-      const description = readPlainString(record.description);
-      if (!title || !description) {
-        return null;
-      }
+  const shots: VideoShot[] = [];
+  value.forEach((item, index) => {
+    const record = toPlainRecord(item);
+    const title = readPlainString(record.title);
+    const description = readPlainString(record.description);
+    if (!title || !description) {
+      return;
+    }
 
-      const rawMediaIds = Array.isArray(record.mediaIds) ? record.mediaIds : [];
-      return {
-        id:
-          readPlainString(record.id) ||
-          `shot_json_${Date.now()}_${index + 1}`,
-        title,
-        description,
-        durationSeconds: clampShotDuration(
-          Number(record.durationSeconds ?? fallbackDurationSeconds),
-        ),
-        attributes: parseShotResultAttributes(record.attributes),
-        mediaIds: rawMediaIds
-          .map((mediaId) => readPlainString(mediaId))
-          .filter(Boolean),
-      };
-    })
-    .filter((shot): shot is VideoShot => Boolean(shot));
+    const rawMediaIds = Array.isArray(record.mediaIds) ? record.mediaIds : [];
+    const parsedDurationSeconds = Number(record.durationSeconds);
+    if (!Number.isFinite(parsedDurationSeconds)) {
+      throw new Error(
+        "Each shot in Shots result JSON must include durationSeconds.",
+      );
+    }
+
+    shots.push({
+      id:
+        readPlainString(record.id) ||
+        `shot_json_${Date.now()}_${index + 1}`,
+      title,
+      description,
+      durationSeconds: clampShotDuration(parsedDurationSeconds),
+      attributes: parseShotResultAttributes(record.attributes),
+      attributeSelection:
+        parseShotResultAttributeSelection(record.attributeSelection) ?? null,
+      mediaIds: rawMediaIds
+        .map((mediaId) => readPlainString(mediaId))
+        .filter(Boolean),
+    });
+  });
 
   if (shots.length === 0) {
     throw new Error(
@@ -932,33 +989,65 @@ function parseShotResultShots(value: unknown, fallbackDurationSeconds: number) {
 
 function parseShotPlanResultText(
   value: string,
-  currentShotPlan: VideoShotPlan,
+  currentShotPlan: VideoShotPlan | null,
+  context: {
+    projectId: string;
+    name: string;
+    description?: string;
+    sourceText: string;
+  },
 ): VideoShotPlan {
   const parsed = JSON.parse(value) as unknown;
   const root = Array.isArray(parsed) ? { shots: parsed } : toPlainRecord(parsed);
   const shotPlanRoot = toPlainRecord(root.shotPlan);
   const resultRoot = Object.keys(shotPlanRoot).length > 0 ? shotPlanRoot : root;
-  const durationSeconds = clampShotDuration(
-    Number(resultRoot.durationSeconds ?? currentShotPlan.durationSeconds),
-  );
   const shots =
     resultRoot.shots === undefined
-      ? currentShotPlan.shots
-      : parseShotResultShots(resultRoot.shots, durationSeconds);
+      ? currentShotPlan?.shots
+      : parseShotResultShots(resultRoot.shots);
+  if (!shots || shots.length === 0) {
+    throw new Error("Shots result JSON must include a shots array.");
+  }
+
+  const durationSeconds =
+    resultRoot.shots === undefined && currentShotPlan?.durationSeconds
+      ? currentShotPlan.durationSeconds
+      : Math.max(...shots.map((shot) => shot.durationSeconds));
+  const name =
+    readPlainString(resultRoot.name) ||
+    currentShotPlan?.name ||
+    context.name.trim();
+  if (!name) {
+    throw new Error("Project name is required before syncing Shots result JSON.");
+  }
+
+  const sourceText = currentShotPlan?.sourceText || context.sourceText.trim();
+  if (!sourceText) {
+    throw new Error("Enter Story Content before syncing Shots result JSON.");
+  }
+
+  const now = new Date().toISOString();
 
   return {
-    ...currentShotPlan,
-    name: readPlainString(resultRoot.name) || currentShotPlan.name,
+    id: currentShotPlan?.id ?? `${draftShotPlanIdPrefix}${Date.now()}`,
+    ownerUserId: currentShotPlan?.ownerUserId ?? "draft",
+    projectId: currentShotPlan?.projectId ?? context.projectId,
+    name,
     description:
       resultRoot.description === undefined
-        ? currentShotPlan.description
+        ? currentShotPlan?.description || context.description?.trim() || undefined
         : readPlainString(resultRoot.description) || undefined,
+    sourceText,
     durationSeconds,
     attributes:
       resultRoot.attributes === undefined
-        ? currentShotPlan.attributes
+        ? currentShotPlan?.attributes ?? []
         : parseShotResultAttributes(resultRoot.attributes),
     shots,
+    isDefault: currentShotPlan?.isDefault ?? false,
+    status: currentShotPlan?.status ?? "active",
+    createdAt: currentShotPlan?.createdAt ?? now,
+    updatedAt: now,
   };
 }
 
@@ -999,6 +1088,9 @@ function renderPromptTemplate(
   template: string,
   values: Record<string, string>,
 ) {
+  if (template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) && !values.outputFormat?.trim()) {
+    return "Cannot render prompt: Output Format is required before using {outputFormat}.";
+  }
   return Object.entries(values).reduce(
     (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
     template,
@@ -1498,6 +1590,11 @@ export function ProjectWorkspace({
   const oneClickRecordName = projectName?.trim() || t("oneClick.namePlaceholder");
   const oneClickRecordDescription =
     projectDescription?.trim() || t("oneClick.wizardDescription");
+  const projectHeaderTitle =
+    projectName?.trim() || t("projectDetail.fallbackTitle");
+  const projectHeaderDescription =
+    projectDescription?.trim() ||
+    (isOneClickMode ? t("oneClick.wizardDescription") : t("projectDetail.description"));
   const [promptText, setPromptText] = useState(
     defaultPrompt || (isOneClickMode ? "" : t("projectDetail.defaultPrompt")),
   );
@@ -1507,8 +1604,6 @@ export function ProjectWorkspace({
   const [selectedShotPlanId, setSelectedShotPlanId] = useState("");
   const [selectedShotIds, setSelectedShotIds] = useState<string[]>([]);
   const [shotsResultText, setShotsResultText] = useState("");
-  const [isEditingShotsResultJson, setIsEditingShotsResultJson] =
-    useState(false);
   const [shotsResultJsonError, setShotsResultJsonError] = useState("");
   const [rawShotRequest, setRawShotRequest] = useState<unknown>(null);
   const [rawShotResponse, setRawShotResponse] = useState<unknown>(null);
@@ -1539,6 +1634,8 @@ export function ProjectWorkspace({
     useState<AttributeCatalog | null>(null);
   const [shotsAttributeCatalog, setShotsAttributeCatalog] =
     useState<AttributeCatalog | null>(null);
+  const [shotAttributeCatalog, setShotAttributeCatalog] =
+    useState<AttributeCatalog | null>(null);
   const [storyOptionIds, setStoryOptionIds] = useState<Record<string, string[]>>({});
   const [shotsOptionIds, setShotsOptionIds] = useState<Record<string, string[]>>({});
   const [templateAnalysisCompact, setTemplateAnalysisCompact] = useState("");
@@ -1560,18 +1657,25 @@ export function ProjectWorkspace({
   const [rawShotVideoResponses, setRawShotVideoResponses] = useState<
     Record<string, unknown>
   >({});
-  const [shotComposerPromptTemplate, setShotComposerPromptTemplate] = useState(
-    DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
-  );
+  const [shotPromptTemplate, setShotPromptTemplate] = useState("");
+  const [shotPromptOutputFormat, setShotPromptOutputFormat] = useState("");
   const [shotGenerationPrompt, setShotGenerationPrompt] = useState(
     DEFAULT_SHOT_GENERATION_PROMPT,
+  );
+  const [shotGenerationOutputFormat, setShotGenerationOutputFormat] = useState(
+    DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
   );
   const [scenarioAnalysisPrompt, setScenarioAnalysisPrompt] = useState(
     DEFAULT_TEMPLATE_SELECTION_PROMPT,
   );
+  const [scenarioAnalysisOutputFormat, setScenarioAnalysisOutputFormat] =
+    useState(DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT);
   const [scriptGenerationPrompt, setScriptGenerationPrompt] = useState(
     DEFAULT_SCRIPT_GENERATION_PROMPT,
   );
+  const [scriptGenerationOutputFormat, setScriptGenerationOutputFormat] =
+    useState(DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT);
+  const [showUserMasterPrompts, setShowUserMasterPrompts] = useState(false);
   const [isStoryStepOpen, setIsStoryStepOpen] = useState(true);
   const [isTemplateStepOpen, setIsTemplateStepOpen] = useState(true);
   const [isTemplateAttributesOpen, setIsTemplateAttributesOpen] =
@@ -1579,6 +1683,7 @@ export function ProjectWorkspace({
   const [isStoryAttributesOpen, setIsStoryAttributesOpen] = useState(false);
   const [isShotsAttributesOpen, setIsShotsAttributesOpen] = useState(false);
   const [isShotsStepOpen, setIsShotsStepOpen] = useState(true);
+  const [isShotCardsStepOpen, setIsShotCardsStepOpen] = useState(true);
   const [collapsedTemplateAttributeIds, setCollapsedTemplateAttributeIds] =
     useState<Record<string, boolean>>({});
   const [collapsedCatalogAttributeIds, setCollapsedCatalogAttributeIds] =
@@ -1587,6 +1692,8 @@ export function ProjectWorkspace({
   const [openShotAttributePanelIds, setOpenShotAttributePanelIds] = useState<
     Record<string, boolean>
   >({});
+  const [openAdminShotAttributePanelIds, setOpenAdminShotAttributePanelIds] =
+    useState<Record<string, boolean>>({});
   const [finalPrompt, setFinalPrompt] = useState("");
   const [productAnalysis, setProductAnalysis] =
     useState<ProductAnalysisResult | null>(null);
@@ -1616,6 +1723,7 @@ export function ProjectWorkspace({
   const [isSavingTemplateSelection, setIsSavingTemplateSelection] =
     useState(false);
   const [isSavingStoryContent, setIsSavingStoryContent] = useState(false);
+  const [isSavingProject, setIsSavingProject] = useState(false);
   const [isSavingOneClickScenario, setIsSavingOneClickScenario] =
     useState(false);
   const [isCreatingScript, setIsCreatingScript] = useState(false);
@@ -1625,6 +1733,7 @@ export function ProjectWorkspace({
   const previewUrlsRef = useRef<string[]>([]);
   const hasUserEditedStoryContentRef = useRef(false);
   const lastSyncedOneClickScenarioIdRef = useRef("");
+  const isSyncingShotsFromJsonRef = useRef(false);
 
   const validMediaItems = mediaItems.filter(
     (item) => item.status === "validated",
@@ -1652,8 +1761,51 @@ export function ProjectWorkspace({
     shotPlans.find((shotPlan) => shotPlan.id === selectedShotPlanId) ?? null;
   const shotSelection = buildShotSelection(selectedShotPlan, selectedShotIds);
 
+  function buildShotAttributeSelectionForShot(shot: VideoShot) {
+    if (!shotAttributeCatalog) {
+      return shot.attributeSelection ?? null;
+    }
+    const selectedIds = mergeWithRequiredCatalogOptionIds(
+      shotAttributeCatalog,
+      attributeSelectionToOptionIds(shot.attributeSelection),
+    );
+    return buildAttributeSelection(shotAttributeCatalog, selectedIds);
+  }
+
   useEffect(() => {
-    if (isEditingShotsResultJson) {
+    if (!shotAttributeCatalog || !selectedShotPlanId) {
+      return;
+    }
+
+    setShotPlans((current) => {
+      let changed = false;
+      const nextPlans = current.map((shotPlan) => {
+        if (shotPlan.id !== selectedShotPlanId) {
+          return shotPlan;
+        }
+        const nextShots = shotPlan.shots.map((shot) => {
+          const nextSelection = buildShotAttributeSelectionForShot(shot);
+          if (
+            JSON.stringify(shot.attributeSelection ?? null) ===
+            JSON.stringify(nextSelection ?? null)
+          ) {
+            return shot;
+          }
+          changed = true;
+          return {
+            ...shot,
+            attributeSelection: nextSelection,
+          };
+        });
+        return changed ? { ...shotPlan, shots: nextShots } : shotPlan;
+      });
+      return changed ? nextPlans : current;
+    });
+  }, [selectedShotPlanId, shotAttributeCatalog]);
+
+  useEffect(() => {
+    if (isSyncingShotsFromJsonRef.current) {
+      isSyncingShotsFromJsonRef.current = false;
       return;
     }
 
@@ -1661,7 +1813,7 @@ export function ProjectWorkspace({
       selectedShotPlan ? formatShotPlanResultText(selectedShotPlan) : "",
     );
     setShotsResultJsonError("");
-  }, [isEditingShotsResultJson, selectedShotPlan]);
+  }, [selectedShotPlan]);
 
   useEffect(() => {
     if (!isOneClickMode || !selectedTemplate) {
@@ -1884,9 +2036,10 @@ export function ProjectWorkspace({
 
     async function loadStepAttributeCatalogs() {
       try {
-        const [storyCatalog, shotsCatalog] = await Promise.all([
+        const [storyCatalog, shotsCatalog, shotCatalog] = await Promise.all([
           apiGet<AttributeCatalog | null>("/attribute-catalogs/story/default"),
           apiGet<AttributeCatalog | null>("/attribute-catalogs/shots/default"),
+          apiGet<AttributeCatalog | null>("/attribute-catalogs/shot/default"),
         ]);
         if (cancelled) {
           return;
@@ -1905,12 +2058,14 @@ export function ProjectWorkspace({
             attributeSelectionToOptionIds(savedAttributeSelections?.shots),
           ),
         );
+        setShotAttributeCatalog(shotCatalog);
       } catch {
         if (!cancelled) {
           setStoryAttributeCatalog(null);
           setStoryOptionIds({});
           setShotsAttributeCatalog(null);
           setShotsOptionIds({});
+          setShotAttributeCatalog(null);
         }
       }
     }
@@ -1929,29 +2084,48 @@ export function ProjectWorkspace({
       try {
         const config = await apiGet<ShotPromptConfig>("/admin/shot-prompt");
         if (!cancelled) {
-          setShotComposerPromptTemplate(
-            config.composerPrompt || DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
-          );
+          setShotPromptTemplate(config.shotPrompt);
+          setShotPromptOutputFormat(config.shotOutputFormat);
           setShotGenerationPrompt(
             config.prompt || config.defaultPrompt || DEFAULT_SHOT_GENERATION_PROMPT,
+          );
+          setShotGenerationOutputFormat(
+            config.outputFormat ??
+              config.defaultOutputFormat ??
+              DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
           );
           setScenarioAnalysisPrompt(
             config.scenarioAnalysisPrompt ||
               config.defaultScenarioAnalysisPrompt ||
               DEFAULT_TEMPLATE_SELECTION_PROMPT,
           );
+          setScenarioAnalysisOutputFormat(
+            config.scenarioAnalysisOutputFormat ??
+              config.defaultScenarioAnalysisOutputFormat ??
+              DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
+          );
           setScriptGenerationPrompt(
             config.scriptGenerationPrompt ||
               config.defaultScriptGenerationPrompt ||
               DEFAULT_SCRIPT_GENERATION_PROMPT,
           );
+          setScriptGenerationOutputFormat(
+            config.scriptGenerationOutputFormat ??
+              config.defaultScriptGenerationOutputFormat ??
+              DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
+          );
+          setShowUserMasterPrompts(config.showUserMasterPrompts);
         }
       } catch {
         if (!cancelled) {
-          setShotComposerPromptTemplate(DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT);
+          setShotPromptTemplate("");
+          setShotPromptOutputFormat("");
           setShotGenerationPrompt(DEFAULT_SHOT_GENERATION_PROMPT);
+          setShotGenerationOutputFormat(DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT);
           setScenarioAnalysisPrompt(DEFAULT_TEMPLATE_SELECTION_PROMPT);
+          setScenarioAnalysisOutputFormat(DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT);
           setScriptGenerationPrompt(DEFAULT_SCRIPT_GENERATION_PROMPT);
+          setScriptGenerationOutputFormat(DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT);
         }
       }
     }
@@ -2253,6 +2427,7 @@ export function ProjectWorkspace({
       ),
       shots: shotPlan.shots.map((shot) => ({
         ...shot,
+        attributeSelection: buildShotAttributeSelectionForShot(shot),
         durationSeconds: clampShotDuration(shot.durationSeconds),
         mediaIds: (shot.mediaIds ?? []).filter((mediaId) =>
           allowedMediaIds.includes(mediaId),
@@ -2268,6 +2443,11 @@ export function ProjectWorkspace({
     shotPlan: VideoShotPlan,
     allowedMediaIds = validMediaIds,
   ) {
+    if (isDraftShotPlan(shotPlan)) {
+      setShotsResultText(formatShotPlanResultText(shotPlan));
+      return;
+    }
+
     try {
       const saved = await apiPatch<VideoShotPlan>(
         `/projects/${projectId}/shots/${shotPlan.id}`,
@@ -2284,6 +2464,38 @@ export function ProjectWorkspace({
       );
       setStatus({ label: t("workspace.shotMediaSaveFailed"), tone: "danger" });
     }
+  }
+
+  async function persistShotPlanToDatabase(shotPlan: VideoShotPlan) {
+    const saveBody = buildShotPlanSaveBody(shotPlan);
+    return isDraftShotPlan(shotPlan)
+      ? await apiPost<VideoShotPlan>(`/projects/${projectId}/shots`, {
+          ...saveBody,
+          sourceText: shotPlan.sourceText,
+        })
+      : await apiPatch<VideoShotPlan>(
+          `/projects/${projectId}/shots/${shotPlan.id}`,
+          saveBody,
+        );
+  }
+
+  function commitSavedShotPlan(saved: VideoShotPlan, previousId: string) {
+    setShotPlans((current) => {
+      const remaining = current.filter(
+        (shotPlan) => shotPlan.id !== previousId && shotPlan.id !== saved.id,
+      );
+      return [saved, ...remaining];
+    });
+    setSelectedShotPlanId(saved.id);
+    setSelectedShotIds((current) => {
+      const selectedIds = current.filter((shotId) =>
+        saved.shots.some((shot) => shot.id === shotId),
+      );
+      return selectedIds.length > 0
+        ? selectedIds
+        : saved.shots.map((shot) => shot.id);
+    });
+    setShotsResultText(formatShotPlanResultText(saved));
   }
 
   async function removeMedia(mediaId: string) {
@@ -2405,6 +2617,10 @@ export function ProjectWorkspace({
       const { [shotId]: _removedPanel, ...nextPanels } = current;
       return nextPanels;
     });
+    setOpenAdminShotAttributePanelIds((current) => {
+      const { [shotId]: _removedPanel, ...nextPanels } = current;
+      return nextPanels;
+    });
     setGeneratedShotPrompts((current) => {
       const { [shotId]: _removedPrompt, ...nextPrompts } = current;
       return nextPrompts;
@@ -2489,7 +2705,7 @@ export function ProjectWorkspace({
       setShotGenerationSuccessMessage("");
       return;
     }
-    if (!masterPrompt) {
+    if (showUserMasterPrompts && !masterPrompt) {
       setErrorMessage(t("workspace.shotsMasterPromptMissing"));
       setShotGenerationErrorMessage(t("workspace.shotsMasterPromptMissing"));
       setShotGenerationSuccessMessage("");
@@ -2515,7 +2731,7 @@ export function ProjectWorkspace({
             attributeSelectionToShotAttributes(scenarioAttributeSelection),
           shotsAttributes:
             attributeSelectionToShotAttributes(shotsAttributeSelection),
-          masterPrompt,
+          ...(showUserMasterPrompts ? { masterPrompt } : {}),
           ...(isOneClickMode
             ? {
                 name: oneClickRecordName,
@@ -2536,12 +2752,10 @@ export function ProjectWorkspace({
       setSelectedShotPlanId(shotPlan.id);
       setSelectedShotIds(shotPlan.shots.map((shot) => shot.id));
       setShotsResultText(formatShotPlanResultText(shotPlan));
-      setIsEditingShotsResultJson(false);
       setShotsResultJsonError("");
       setShotGenerationSuccessMessage(
         t("workspace.shotsGeneratedDetail", {
           count: shotPlan.shots.length,
-          name: shotPlan.name,
         }),
       );
       setStatus({ label: t("workspace.shotsGenerated"), tone: "success" });
@@ -2556,33 +2770,48 @@ export function ProjectWorkspace({
     }
   }
 
-  function applyShotsResultJson() {
-    if (!selectedShotPlan) {
-      setShotsResultJsonError(t("workspace.shotsNone"));
-      return;
+  function syncShotsResultJson(nextText: string) {
+    setShotsResultText(nextText);
+    if (!nextText.trim()) {
+      setShotsResultJsonError(t("workspace.shotsResultInvalid"));
+      return null;
     }
 
     try {
       const nextShotPlan = parseShotPlanResultText(
-        shotsResultText,
+        nextText,
         selectedShotPlan,
+        {
+          projectId,
+          name: projectHeaderTitle,
+          description: projectHeaderDescription,
+          sourceText: promptText,
+        },
       );
-      setShotPlans((current) =>
-        current.map((shotPlan) =>
-          shotPlan.id === selectedShotPlan.id ? nextShotPlan : shotPlan,
-        ),
-      );
+      setShotPlans((current) => {
+        const existingIndex = current.findIndex(
+          (shotPlan) => shotPlan.id === nextShotPlan.id,
+        );
+        if (existingIndex < 0) {
+          return [nextShotPlan, ...current];
+        }
+        return current.map((shotPlan) =>
+          shotPlan.id === nextShotPlan.id ? nextShotPlan : shotPlan,
+        );
+      });
+      setSelectedShotPlanId(nextShotPlan.id);
       setSelectedShotIds(nextShotPlan.shots.map((shot) => shot.id));
       setOpenShotAttributePanelIds({});
+      setOpenAdminShotAttributePanelIds({});
       setGeneratedShotPrompts({});
-      setShotsResultText(formatShotPlanResultText(nextShotPlan));
-      setIsEditingShotsResultJson(false);
+      isSyncingShotsFromJsonRef.current = true;
       setShotsResultJsonError("");
-      setStatus({ label: t("workspace.shotsResultApplied"), tone: "success" });
+      return nextShotPlan;
     } catch (error) {
       setShotsResultJsonError(
         error instanceof Error ? error.message : t("workspace.shotsResultInvalid"),
       );
+      return null;
     }
   }
 
@@ -2595,41 +2824,19 @@ export function ProjectWorkspace({
       setErrorMessage(t("workspace.shotsNeedOne"));
       return;
     }
+    if (shotsResultJsonError) {
+      setErrorMessage(shotsResultJsonError);
+      setStatus({ label: t("workspace.shotsResultInvalid"), tone: "danger" });
+      return;
+    }
 
     setIsSavingShots(true);
     setErrorMessage("");
     setStatus({ label: t("workspace.shotsSaving"), tone: "info" });
 
     try {
-      const saved = await apiPatch<VideoShotPlan>(
-        `/projects/${projectId}/shots/${selectedShotPlan.id}`,
-        {
-          name: selectedShotPlan.name,
-          description: selectedShotPlan.description,
-          durationSeconds: selectedShotPlan.durationSeconds,
-          attributes: selectedShotPlan.attributes.filter(
-            (attribute) => attribute.name.trim() && attribute.value.trim(),
-          ),
-          shots: selectedShotPlan.shots.map((shot) => ({
-            ...shot,
-            durationSeconds: clampShotDuration(shot.durationSeconds),
-            mediaIds: (shot.mediaIds ?? []).filter((mediaId) =>
-              validMediaIds.includes(mediaId),
-            ),
-            attributes: shot.attributes.filter(
-              (attribute) => attribute.name.trim() && attribute.value.trim(),
-            ),
-          })),
-        },
-      );
-      setShotPlans((current) =>
-        current.map((shotPlan) => (shotPlan.id === saved.id ? saved : shotPlan)),
-      );
-      setSelectedShotIds((current) =>
-        current.filter((shotId) =>
-          saved.shots.some((shot) => shot.id === shotId),
-        ),
-      );
+      const saved = await persistShotPlanToDatabase(selectedShotPlan);
+      commitSavedShotPlan(saved, selectedShotPlan.id);
       setStatus({ label: t("workspace.shotsSaved"), tone: "success" });
     } catch (error) {
       setErrorMessage(
@@ -2638,6 +2845,92 @@ export function ProjectWorkspace({
       setStatus({ label: t("workspace.shotsSaveFailed"), tone: "danger" });
     } finally {
       setIsSavingShots(false);
+    }
+  }
+
+  async function saveProject() {
+    setIsSavingProject(true);
+    setErrorMessage("");
+    setStoryGenerationErrorMessage("");
+    setTemplateAnalysisErrorMessage("");
+    setShotGenerationErrorMessage("");
+    setStatus({ label: t("workspace.projectSaving"), tone: "info" });
+
+    try {
+      if (flowType === "script") {
+        const storyContent = promptText.trim();
+        if (storyContent) {
+          const savedStory = await apiPatch<SaveProjectStoryContentResponse>(
+            `/projects/${projectId}/story-content`,
+            { storyContent },
+          );
+          if (!savedStory.saved) {
+            throw new Error(t("oneClick.storySaveFailed"));
+          }
+        }
+
+        if (templateSelection) {
+          const savedTemplateSelection = await apiPatch<{
+            saved: boolean;
+            templateSelection: TemplateSelection | null;
+          }>(`/projects/${projectId}/template-selection`, {
+            templateSelection,
+          });
+          if (!savedTemplateSelection.saved) {
+            throw new Error(t("workspace.templateSelectionSaveFailed"));
+          }
+        }
+      }
+
+      await saveProjectAttributeSelections();
+
+      let shotPlanToSave = selectedShotPlan;
+      if (shotsResultJsonError) {
+        throw new Error(shotsResultJsonError);
+      }
+      if (shotsResultText.trim() && !shotPlanToSave) {
+        shotPlanToSave = parseShotPlanResultText(
+          shotsResultText,
+          selectedShotPlan,
+          {
+            projectId,
+            name: projectHeaderTitle,
+            description: projectHeaderDescription,
+            sourceText: promptText,
+          },
+        );
+        setShotPlans((current) => {
+          const existingIndex = current.findIndex(
+            (shotPlan) => shotPlan.id === shotPlanToSave?.id,
+          );
+          if (existingIndex < 0 && shotPlanToSave) {
+            return [shotPlanToSave, ...current];
+          }
+          return current.map((shotPlan) =>
+            shotPlan.id === shotPlanToSave?.id && shotPlanToSave
+              ? shotPlanToSave
+              : shotPlan,
+          );
+        });
+      }
+
+      if (shotPlanToSave) {
+        if (shotPlanToSave.shots.length === 0) {
+          throw new Error(t("workspace.shotsNeedOne"));
+        }
+        const savedShotPlan = await persistShotPlanToDatabase(shotPlanToSave);
+        commitSavedShotPlan(savedShotPlan, shotPlanToSave.id);
+      }
+
+      setShotsResultJsonError("");
+      setStatus({ label: t("workspace.projectSaved"), tone: "success" });
+    } catch (error) {
+      const nextError =
+        error instanceof Error ? error.message : t("workspace.projectSaveFailed");
+      setErrorMessage(nextError);
+      setStatus({ label: t("workspace.projectSaveFailed"), tone: "danger" });
+    } finally {
+      setIsSavingProject(false);
     }
   }
 
@@ -2685,7 +2978,7 @@ export function ProjectWorkspace({
       setStoryGenerationErrorMessage(t("workspace.missingPrompt"));
       return;
     }
-    if (!masterPrompt) {
+    if (showUserMasterPrompts && !masterPrompt) {
       setErrorMessage(t("workspace.storyMasterPromptMissing"));
       setStoryGenerationErrorMessage(t("workspace.storyMasterPromptMissing"));
       return;
@@ -2709,7 +3002,7 @@ export function ProjectWorkspace({
         {
           inputText,
           mediaIds: requestMediaIds,
-          masterPrompt,
+          ...(showUserMasterPrompts ? { masterPrompt } : {}),
           attributeSelections: {
             story: storyAttributeSelection,
             scenario: scenarioAttributeSelection,
@@ -2788,7 +3081,7 @@ export function ProjectWorkspace({
       setTemplateAnalysisErrorMessage(t("workspace.missingPrompt"));
       return;
     }
-    if (!masterPrompt) {
+    if (showUserMasterPrompts && !masterPrompt) {
       setErrorMessage(t("workspace.templateMasterPromptMissing"));
       setTemplateAnalysisErrorMessage(t("workspace.templateMasterPromptMissing"));
       return;
@@ -2815,7 +3108,7 @@ export function ProjectWorkspace({
         {
           inputText,
           catalogId: selectedTemplate.id,
-          masterPrompt,
+          ...(showUserMasterPrompts ? { masterPrompt } : {}),
         },
       );
       const completedJob = await pollJob(queuedJob.jobId);
@@ -2955,56 +3248,6 @@ export function ProjectWorkspace({
     });
   }
 
-  function buildTemplateGuidance() {
-    if (!templateSelection || templateSelection.attributes.length === 0) {
-      return "";
-    }
-
-    const selections = templateSelection.attributes
-      .filter((attribute) => attribute.options.length > 0)
-      .map(
-        (attribute) =>
-          `${attribute.name}: ${attribute.options.map((option) => option.label).join(", ")}`,
-      );
-
-    if (selections.length === 0) {
-      return "";
-    }
-
-    return [
-      `Template attributes: ${templateSelection.templateName}`,
-      ...selections.map((selection) => `- ${selection}`),
-    ].join("\n");
-  }
-
-  function buildShotGuidance() {
-    if (!shotSelection || shotSelection.shots.length === 0) {
-      return "";
-    }
-
-    const planAttributes = shotSelection.attributes
-      .filter((attribute) => attribute.name && attribute.value)
-      .map((attribute) => `- ${attribute.name}: ${attribute.value}`);
-    const shots = shotSelection.shots.map((shot, index) => {
-      const attributes = shot.attributes
-        .filter((attribute) => attribute.name && attribute.value)
-        .map((attribute) => `   - ${attribute.name}: ${attribute.value}`);
-      return [
-        `${index + 1}. ${shot.title} (${shot.durationSeconds}s)`,
-        `   - Description: ${shot.description}`,
-        ...attributes,
-      ].join("\n");
-    });
-
-    return [
-      `Selected shot plan: ${shotSelection.shotPlanName}`,
-      ...(planAttributes.length > 0
-        ? ["Plan-level attributes:", ...planAttributes]
-        : []),
-      ...shots,
-    ].join("\n");
-  }
-
   function formatPlanAttributesForPrompt(attributes: VideoShotAttribute[]) {
     const lines = attributes
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
@@ -3021,21 +3264,10 @@ export function ProjectWorkspace({
       return null;
     }
 
-    const mediaSummary =
-      requestMediaItems.length > 0
-        ? [
-            "Use the reference media below to keep visual style, lighting, composition, and pacing consistent.",
-            formatMediaPromptSummary(requestMediaItems, ""),
-          ].join("\n")
-        : "No reference media. Use a clean modern style, soft lighting, and stable camera movement.";
-    const shotSelectionText = buildShotGuidance() || "No selected shot plan.";
-    const scenarioSelection = buildTemplateGuidance() || "No selected scenario options.";
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
-      inputText,
-      mediaSummary,
-      shotSelection: shotSelectionText,
-      scenarioSelection,
+      storyContent: inputText,
       storyAttributes: formatAttributeSelectionCompact(storyAttributeSelection),
+      outputFormat: scriptGenerationOutputFormat,
     });
     return renderedPrompt;
   }
@@ -3069,6 +3301,7 @@ export function ProjectWorkspace({
       story: inputText,
       attributes: attributeCatalogText,
       scenarioAttributes: attributeCatalogText,
+      outputFormat: scenarioAnalysisOutputFormat,
     });
 
     return renderedPrompt;
@@ -3096,6 +3329,7 @@ export function ProjectWorkspace({
       story: inputText,
       attributes: attributeContext,
       scenarioAttributes: attributeContext,
+      outputFormat: scenarioAnalysisOutputFormat,
     });
 
     return renderedPrompt;
@@ -3122,6 +3356,7 @@ export function ProjectWorkspace({
       attributes: attributeText,
       scenarioAttributes: scenarioAttributesText,
       shotsAttributes: shotsAttributesText,
+      outputFormat: shotGenerationOutputFormat,
     });
 
     return renderedPrompt;
@@ -3964,21 +4199,23 @@ export function ProjectWorkspace({
         {isStoryStepOpen ? (
           <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
             <div className="min-w-0 space-y-4">
-              <MasterPromptField
-                id="storyMasterPrompt"
-                label={t("workspace.storyMasterPromptLabel")}
-                help={t("workspace.storyMasterPromptHelp")}
-                rows={7}
-                value={scriptGenerationPrompt}
-                onChange={(event) => {
-                  setScriptGenerationPrompt(event.target.value);
-                  setStoryGenerationErrorMessage("");
-                  setRawStoryRequest(null);
-                  setRawStoryResponse(null);
-                  setRawDataModal(null);
-                }}
-                placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scripts}
-              />
+              {showUserMasterPrompts ? (
+                <MasterPromptField
+                  id="storyMasterPrompt"
+                  label={t("workspace.storyMasterPromptLabel")}
+                  help={t("workspace.storyMasterPromptHelp")}
+                  rows={7}
+                  value={scriptGenerationPrompt}
+                  onChange={(event) => {
+                    setScriptGenerationPrompt(event.target.value);
+                    setStoryGenerationErrorMessage("");
+                    setRawStoryRequest(null);
+                    setRawStoryResponse(null);
+                    setRawDataModal(null);
+                  }}
+                  placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scripts}
+                />
+              ) : null}
 
               <div>
                 <div className="flex items-center justify-between gap-3">
@@ -4517,22 +4754,24 @@ export function ProjectWorkspace({
         </div>
 
         <div className="mt-4 grid gap-4">
-          <MasterPromptField
-            id="oneClickScenarioMasterPrompt"
-            label={t("oneClick.step2PromptLabel")}
-            help={t("oneClick.step2PromptHelp")}
-            rows={7}
-            value={scenarioAnalysisPrompt}
-            onChange={(event) => {
-              setScenarioAnalysisPrompt(event.target.value);
-              setTemplateAnalysisCompact("");
-              setTemplateAnalysisErrorMessage("");
-              setRawTemplateRequest(null);
-              setRawTemplateResponse(null);
-              setRawDataModal(null);
-            }}
-            placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
-          />
+          {showUserMasterPrompts ? (
+            <MasterPromptField
+              id="oneClickScenarioMasterPrompt"
+              label={t("oneClick.step2PromptLabel")}
+              help={t("oneClick.step2PromptHelp")}
+              rows={7}
+              value={scenarioAnalysisPrompt}
+              onChange={(event) => {
+                setScenarioAnalysisPrompt(event.target.value);
+                setTemplateAnalysisCompact("");
+                setTemplateAnalysisErrorMessage("");
+                setRawTemplateRequest(null);
+                setRawTemplateResponse(null);
+                setRawDataModal(null);
+              }}
+              placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
+            />
+          ) : null}
 
           <div>
             <label className="text-sm font-medium" htmlFor="oneClickStoryReview">
@@ -4680,102 +4919,73 @@ export function ProjectWorkspace({
   }
 
   function composeShotPrompt(shot: VideoShot) {
-    const sourceText = promptText.trim() || t("workspace.promptPreviewEmptyInput");
+    const masterPrompt = shotPromptTemplate.trim();
+    if (!masterPrompt) {
+      throw new Error(t("workspace.shotMasterPromptMissing"));
+    }
+    if (masterPrompt.includes("{masterPromptAttributes}")) {
+      throw new Error(t("workspace.masterPromptAttributesUserBlocked"));
+    }
+    if (masterPrompt.includes("{shotAttributes}") && !shotAttributeCatalog) {
+      throw new Error(t("workspace.shotAttributeCatalogMissing"));
+    }
+
+    const sourceText = promptText.trim();
     const shotMediaItems = getValidShotMediaItems(shot);
     const shotDialogue = getShotDialogue(shot).trim();
-    const shotAttributes = shot.attributes.filter(
+    const generatedAttributes = shot.attributes.filter(
       (attribute) =>
         attribute.name.trim() &&
         attribute.value.trim() &&
         !isDialogueAttribute(attribute),
     );
-    const planAttributes =
-      selectedShotPlan?.attributes.filter(
-        (attribute) => attribute.name.trim() && attribute.value.trim(),
-      ) ?? [];
-    const templateAttributes =
-      templateSelection?.attributes.filter(
-        (attribute) => attribute.options.length > 0,
-      ) ?? [];
 
-    const templateLines =
-      templateAttributes.length > 0
-        ? [
-            `- ${templateSelection?.templateName ?? selectedTemplate?.name}`,
-            ...templateAttributes.flatMap((attribute) => [
-              `- ${attribute.name}`,
-              ...attribute.options.map((option) => `  - ${option.label}`),
-            ]),
-          ]
-        : [`- ${t("workspace.shotPromptNoTemplateOptions")}`];
-
-    const shotAttributeText =
-      shotDialogue || shotAttributes.length > 0
-        ? [
-            ...(shotDialogue
-              ? [formatPromptAttributeLine("Voiceover Script", shotDialogue)]
-              : []),
-            ...shotAttributes.map((attribute) =>
-              formatPromptAttributeLine(attribute.name, attribute.value),
-            ),
-          ].join("\n")
-        : `- ${t("workspace.shotPromptNoAttributes")}`;
-    const planAttributeText =
-      planAttributes.length > 0
-        ? planAttributes
+    const generatedAttributeText =
+      generatedAttributes.length > 0
+        ? generatedAttributes
             .map((attribute) =>
               formatPromptAttributeLine(attribute.name, attribute.value),
             )
             .join("\n")
-        : `- ${t("workspace.shotPromptNoPlanAttributes")}`;
-    const templateSelectionText = templateLines.join("\n");
+        : "";
+    const shotAttributeText = formatAttributeSelectionCompact(
+      buildShotAttributeSelectionForShot(shot),
+    );
     const mediaSummary =
       shotMediaItems.length > 0
         ? formatMediaPromptSummary(shotMediaItems, "")
-        : `- ${t("workspace.shotPromptNoMedia")}`;
-    const renderedPrompt = renderPromptTemplate(shotComposerPromptTemplate, {
-      source: `- ${sourceText}`,
-      shotTitle: shot.title,
-      shotDuration: `${shot.durationSeconds}s`,
-      shotDescription: shot.description,
-      shotDialogue: shotDialogue || t("workspace.shotDialogueEmpty"),
-      shotAttributes: shotAttributeText,
-      planAttributes: planAttributeText,
-      templateSelection: templateSelectionText,
-      mediaSummary,
-    });
+        : "";
 
-    return [
-      renderedPrompt,
-      "",
-      "Runtime context:",
-      "",
-      `${t("workspace.shotPromptSource")}:`,
-      `- ${sourceText}`,
-      "",
-      `${t("workspace.shotPromptShot")}:`,
-      `${t("workspace.shotPromptTitleField")}: ${shot.title}`,
-      `${t("workspace.shotPromptDuration")}: ${shot.durationSeconds}s`,
-      `${t("workspace.shotPromptDescription")}: ${shot.description}`,
-      `${t("workspace.shotPromptDialogue")}: ${shotDialogue || t("workspace.shotDialogueEmpty")}`,
-      "",
-      `${t("workspace.shotPromptAttributes")}:`,
-      shotAttributeText,
-      "",
-      `${t("workspace.shotPromptPlanAttributes")}:`,
-      planAttributeText,
-      "",
-      `${t("workspace.shotPromptTemplate")}:`,
-      templateSelectionText,
-      "",
-      `${t("workspace.shotPromptMedia")}:`,
-      mediaSummary,
-    ].join("\n");
+    return renderPromptTemplate(masterPrompt, {
+      storyContent: sourceText,
+      shotTitle: shot.title,
+      shotDescription: shot.description,
+      shotDialogue,
+      shotDuration: `${shot.durationSeconds}s`,
+      shotGeneratedAttributes: generatedAttributeText,
+      shotAttributes: shotAttributeText,
+      referenceMedia: mediaSummary,
+      outputFormat: shotPromptOutputFormat,
+    });
   }
 
   function openShotPrompt(shot: VideoShot) {
+    let prompt = "";
+    try {
+      prompt = composeShotPrompt(shot);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : t("workspace.shotMasterPromptMissing");
+      setShotVideoErrors((current) => ({
+        ...current,
+        [shot.id]: message,
+      }));
+      setStatus({ label: message, tone: "danger" });
+      return;
+    }
     const shotMediaItems = getValidShotMediaItems(shot);
-    const prompt = composeShotPrompt(shot);
     setGeneratedShotPrompts((current) => ({
       ...current,
       [shot.id]: prompt,
@@ -4791,7 +5001,21 @@ export function ProjectWorkspace({
   }
 
   async function createShotVideo(shot: VideoShot) {
-    const finalPrompt = (generatedShotPrompts[shot.id] ?? composeShotPrompt(shot)).trim();
+    let finalPrompt = "";
+    try {
+      finalPrompt = (generatedShotPrompts[shot.id] ?? composeShotPrompt(shot)).trim();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : t("workspace.shotVideoMissingPrompt");
+      setShotVideoErrors((current) => ({
+        ...current,
+        [shot.id]: message,
+      }));
+      setStatus({ label: t("workspace.shotVideoFailed"), tone: "danger" });
+      return;
+    }
     if (!finalPrompt) {
       setShotVideoErrors((current) => ({
         ...current,
@@ -4920,7 +5144,8 @@ export function ProjectWorkspace({
       .join("; ");
 
     return (
-      <div className="mt-4 rounded-lg border border-border bg-white p-4">
+      <>
+        <div className="mt-4 rounded-lg border border-border bg-white p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <button
             type="button"
@@ -4957,22 +5182,24 @@ export function ProjectWorkspace({
           <>
             <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
               <div className="min-w-0">
-                <MasterPromptField
-                  id="shotsMasterPrompt"
-                  label={t("workspace.shotsMasterPromptLabel")}
-                  help={t("workspace.shotsMasterPromptHelp")}
-                  rows={7}
-                  value={shotGenerationPrompt}
-                  onChange={(event) => {
-                    setShotGenerationPrompt(event.target.value);
-                    setRawShotRequest(null);
-                    setRawShotResponse(null);
-                    setShotGenerationErrorMessage("");
-                    setShotGenerationSuccessMessage("");
-                    setRawDataModal(null);
-                  }}
-                  placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shots}
-                />
+                {showUserMasterPrompts ? (
+                  <MasterPromptField
+                    id="shotsMasterPrompt"
+                    label={t("workspace.shotsMasterPromptLabel")}
+                    help={t("workspace.shotsMasterPromptHelp")}
+                    rows={7}
+                    value={shotGenerationPrompt}
+                    onChange={(event) => {
+                      setShotGenerationPrompt(event.target.value);
+                      setRawShotRequest(null);
+                      setRawShotResponse(null);
+                      setShotGenerationErrorMessage("");
+                      setShotGenerationSuccessMessage("");
+                      setRawDataModal(null);
+                    }}
+                    placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shots}
+                  />
+                ) : null}
 
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <Button
@@ -5009,33 +5236,18 @@ export function ProjectWorkspace({
                 </div>
 
                 <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-semibold text-foreground">
-                        {t("workspace.shotsResultTitle")}
-                      </h4>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        {t("workspace.shotsResultHelp")}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="gap-2"
-                      onClick={applyShotsResultJson}
-                    >
-                      <Save size={15} />
-                      {t("workspace.shotsResultApply")}
-                    </Button>
+                  <div>
+                    <h4 className="text-sm font-semibold text-foreground">
+                      {t("workspace.shotsResultTitle")}
+                    </h4>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {t("workspace.shotsResultHelp")}
+                    </p>
                   </div>
                   <TextareaWithCounter
                     rows={10}
                     value={shotsResultText}
-                    onChange={(event) => {
-                      setShotsResultText(event.target.value);
-                      setIsEditingShotsResultJson(true);
-                      setShotsResultJsonError("");
-                    }}
+                    onChange={(event) => syncShotsResultJson(event.target.value)}
                     placeholder={t("workspace.shotsResultPlaceholder")}
                     spellCheck={false}
                     className="mt-3 min-h-72 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
@@ -5080,91 +5292,92 @@ export function ProjectWorkspace({
             <div className="mt-4 rounded-md bg-muted p-3 text-sm text-muted-foreground">
               {t("workspace.shotsSourceFromScenario")}
             </div>
+          </>
+        ) : null}
+      </div>
 
-        {shotPlans.length === 0 ? (
-          <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
-            {t("workspace.shotsNone")}
-          </div>
-        ) : (
-          <>
-            {isOneClickMode ? (
-              selectedShotPlan ? (
-                <div className="mt-3 rounded-md border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
-                  {t("oneClick.step3SavedShotPlan", {
-                    name: selectedShotPlan.name,
-                  })}
+      <div className="mt-4 rounded-lg border border-border bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <button
+            type="button"
+            className="min-w-0 flex-1 text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+            onClick={() => setIsShotCardsStepOpen((current) => !current)}
+            aria-expanded={isShotCardsStepOpen}
+          >
+            <div className="flex items-center gap-2 font-medium">
+              {isShotCardsStepOpen ? (
+                <ChevronDown size={18} className="text-muted-foreground" />
+              ) : (
+                <ChevronRight size={18} className="text-muted-foreground" />
+              )}
+              <Clapperboard size={18} className="text-sky-600" />
+              {t("workspace.shotsCardsTitle")}
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("workspace.shotsCardsHelp")}
+            </p>
+          </button>
+        </div>
+
+        {isShotCardsStepOpen ? (
+          !selectedShotPlan ? (
+            <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+              {t("workspace.shotsNone")}
+            </div>
+          ) : (
+            <>
+              {showUserMasterPrompts ? (
+                <div className="mt-4">
+                  <MasterPromptField
+                    id="shotMasterPrompt"
+                    label={t("workspace.shotMasterPromptLabel")}
+                    help={t("workspace.shotMasterPromptHelp")}
+                    rows={7}
+                    value={shotPromptTemplate}
+                    onChange={(event) => {
+                      setShotPromptTemplate(event.target.value);
+                      setGeneratedShotPrompts({});
+                      setRawDataModal(null);
+                    }}
+                    placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.shot}
+                  />
                 </div>
-              ) : null
-            ) : (
-              <>
-                <label className="mt-3 block text-sm font-medium" htmlFor="shotPlan">
-                  {t("workspace.shotsSelect")}
-                </label>
-                <select
-                  id="shotPlan"
-                  value={selectedShotPlanId}
-                  onChange={(event) => {
-                    const nextShotPlanId = event.target.value;
-                    const nextShotPlan =
-                      shotPlans.find((shotPlan) => shotPlan.id === nextShotPlanId) ??
-                      null;
-                    setSelectedShotPlanId(nextShotPlanId);
-                    setSelectedShotIds(
-                      nextShotPlan?.shots.map((shot) => shot.id) ?? [],
-                    );
-                    setRawStoryRequest(null);
-                    setRawStoryResponse(null);
-                    setOpenShotAttributePanelIds({});
-                    setIsEditingShotsResultJson(false);
-                    setShotsResultJsonError("");
-                  }}
-                  className="mt-2 h-10 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
-                >
-                  {shotPlans.map((shotPlan) => (
-                    <option key={shotPlan.id} value={shotPlan.id}>
-                      {shotPlan.name}
-                    </option>
-                  ))}
-                </select>
-              </>
-            )}
+              ) : null}
 
-            {selectedShotPlan ? (
               <div className="mt-4 grid gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <input
-                    value={selectedShotPlan.name}
-                    onChange={(event) =>
-                      updateSelectedShotPlan((shotPlan) => ({
-                        ...shotPlan,
-                        name: event.target.value,
-                      }))
-                    }
-                    aria-label={t("workspace.shotsName")}
-                    className="h-10 min-w-0 flex-1 rounded-md border border-border px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-sky-200"
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="gap-2"
-                    onClick={addShot}
-                  >
-                    <Plus size={16} />
-                    {t("workspace.shotsAdd")}
-                  </Button>
-                  <Button
-                    type="button"
-                    className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={isSavingShots}
-                    onClick={() => void saveShotPlan()}
-                  >
-                    {isSavingShots ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Save size={16} />
-                    )}
-                    {t("workspace.shotsSave")}
-                  </Button>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-foreground">
+                      {t("workspace.shotsEditorTitle")}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t("workspace.shotsEditorHelp")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="gap-2"
+                      onClick={addShot}
+                    >
+                      <Plus size={16} />
+                      {t("workspace.shotsAdd")}
+                    </Button>
+                    <Button
+                      type="button"
+                      className="gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isSavingShots}
+                      onClick={() => void saveShotPlan()}
+                    >
+                      {isSavingShots ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Save size={16} />
+                      )}
+                      {t("workspace.shotsSave")}
+                    </Button>
+                  </div>
                 </div>
 
                 {selectedShotPlan.shots.map((shot, shotIndex) => {
@@ -5172,8 +5385,13 @@ export function ProjectWorkspace({
                   const shotAttributes = shot.attributes.filter(
                     (attribute) => !isDialogueAttribute(attribute),
                   );
+                  const adminShotSelectedIds = attributeSelectionToOptionIds(
+                    buildShotAttributeSelectionForShot(shot),
+                  );
                   const isShotAttributesOpen =
                     openShotAttributePanelIds[shot.id] ?? false;
+                  const isAdminShotAttributesOpen =
+                    openAdminShotAttributePanelIds[shot.id] ?? false;
                   const isCreatingShotVideo =
                     creatingVideoShotIds[shot.id] ?? false;
                   const shotVideoMessage = shotVideoMessages[shot.id];
@@ -5240,7 +5458,46 @@ export function ProjectWorkspace({
                         </button>
                       </div>
                       <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-                        <aside className="order-2 min-w-0 xl:col-start-2 xl:row-start-1 xl:order-none">
+                        <aside className="order-2 min-w-0 space-y-3 xl:col-start-2 xl:row-start-1 xl:order-none">
+                          {renderAttributeCatalogSelection({
+                            catalog: shotAttributeCatalog,
+                            selectedIds: adminShotSelectedIds,
+                            setSelectedIds: (updater) => {
+                              updateShot(shot.id, (currentShot) => {
+                                const currentIds = shotAttributeCatalog
+                                  ? mergeWithRequiredCatalogOptionIds(
+                                      shotAttributeCatalog,
+                                      attributeSelectionToOptionIds(
+                                        currentShot.attributeSelection,
+                                      ),
+                                    )
+                                  : attributeSelectionToOptionIds(
+                                      currentShot.attributeSelection,
+                                    );
+                                const nextIds = updater(
+                                  currentIds,
+                                );
+                                return {
+                                  ...currentShot,
+                                  attributeSelection: shotAttributeCatalog
+                                    ? buildAttributeSelection(
+                                        shotAttributeCatalog,
+                                        nextIds,
+                                      )
+                                    : null,
+                                };
+                              });
+                            },
+                            title: t("workspace.adminShotAttributesTitle"),
+                            help: t("workspace.adminShotAttributesHelp"),
+                            helperPrefix: `admin-shot-${shot.id}`,
+                            panelOpen: isAdminShotAttributesOpen,
+                            onPanelToggle: () =>
+                              setOpenAdminShotAttributePanelIds((current) => ({
+                                ...current,
+                                [shot.id]: !isAdminShotAttributesOpen,
+                              })),
+                          })}
                           <div className="rounded-md border border-border bg-white">
                             <button
                               type="button"
@@ -5267,7 +5524,7 @@ export function ProjectWorkspace({
                                     />
                                   )}
                                   <span className="truncate">
-                                    {t("workspace.templateAttributesTitle")}
+                                    {t("workspace.shotGeneratedAttributesTitle")}
                                   </span>
                                 </span>
                                 <span className="mt-1 block text-xs text-muted-foreground">
@@ -5335,7 +5592,7 @@ export function ProjectWorkspace({
                                             <Trash2 size={15} />
                                           </button>
                                         </div>
-                                        <input
+                                        <AutoResizeTextarea
                                           value={attribute.value}
                                           onChange={(event) =>
                                             updateShotAttribute(
@@ -5350,7 +5607,7 @@ export function ProjectWorkspace({
                                           aria-label={t(
                                             "workspace.shotsAttributeValue",
                                           )}
-                                          className="mt-2 h-9 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                                          className="mt-2 min-h-9 w-full resize-none overflow-hidden rounded-md border border-border bg-white px-3 py-2 text-sm leading-5 outline-none focus:ring-2 focus:ring-sky-200"
                                         />
                                       </div>
                                     ),
@@ -5448,12 +5705,11 @@ export function ProjectWorkspace({
                   );
                 })}
               </div>
-            ) : null}
-          </>
-        )}
-          </>
+            </>
+          )
         ) : null}
       </div>
+      </>
     );
   }
 
@@ -5519,22 +5775,24 @@ export function ProjectWorkspace({
 
               {flowType === "script" ? (
                 <div className="mt-4 grid gap-4">
-                  <MasterPromptField
-                    id="scenarioMasterPrompt"
-                    label={t("workspace.templateMasterPromptLabel")}
-                    help={t("workspace.templateMasterPromptHelp")}
-                    rows={7}
-                    value={scenarioAnalysisPrompt}
-                    onChange={(event) => {
-                      setScenarioAnalysisPrompt(event.target.value);
-                      setTemplateAnalysisCompact("");
-                      setTemplateAnalysisErrorMessage("");
-                      setRawTemplateRequest(null);
-                      setRawTemplateResponse(null);
-                      setRawDataModal(null);
-                    }}
-                    placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
-                  />
+                  {showUserMasterPrompts ? (
+                    <MasterPromptField
+                      id="scenarioMasterPrompt"
+                      label={t("workspace.templateMasterPromptLabel")}
+                      help={t("workspace.templateMasterPromptHelp")}
+                      rows={7}
+                      value={scenarioAnalysisPrompt}
+                      onChange={(event) => {
+                        setScenarioAnalysisPrompt(event.target.value);
+                        setTemplateAnalysisCompact("");
+                        setTemplateAnalysisErrorMessage("");
+                        setRawTemplateRequest(null);
+                        setRawTemplateResponse(null);
+                        setRawDataModal(null);
+                      }}
+                      placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
+                    />
+                  ) : null}
                 </div>
               ) : null}
 
@@ -5920,8 +6178,47 @@ export function ProjectWorkspace({
     );
   }
 
+  function renderProjectSaveBar() {
+    return (
+      <div className="sticky top-0 z-20 mb-5 rounded-lg border border-border bg-white/95 p-3 shadow-sm backdrop-blur">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h2
+              className="truncate text-base font-semibold text-foreground"
+              title={projectHeaderTitle}
+            >
+              {projectHeaderTitle}
+            </h2>
+            <p
+              className="mt-1 truncate text-sm text-muted-foreground"
+              title={projectHeaderDescription}
+            >
+              {projectHeaderDescription}
+            </p>
+          </div>
+          <Button
+            type="button"
+            className="shrink-0 gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isSavingProject}
+            onClick={() => void saveProject()}
+          >
+            {isSavingProject ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Save size={16} />
+            )}
+            {isSavingProject
+              ? t("workspace.projectSaving")
+              : t("workspace.projectSave")}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
+      {renderProjectSaveBar()}
       <div
         className={
           flowType === "script"

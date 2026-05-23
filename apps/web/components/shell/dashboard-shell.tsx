@@ -42,17 +42,17 @@ export function DashboardShell({ role, title, description, backHref, children }:
       <main className="md:pl-64">
         <header className="border-b border-border bg-white px-5 py-4">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-            <div>
+            <div className="min-w-0 flex-1">
               <div className="mb-2 flex flex-wrap items-center gap-3">
                 <BackButton fallbackHref={fallbackHref} />
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   <I18nText id={role === "admin" ? "common.adminDashboard" : "common.userDashboard"} />
                 </p>
               </div>
-              <h1 className="mt-1 text-2xl font-semibold text-foreground">{title}</h1>
-              <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+              <h1 className="mt-1 truncate text-2xl font-semibold text-foreground">{title}</h1>
+              <p className="mt-1 truncate text-sm text-muted-foreground">{description}</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <form
                 action={logoutAction}
                 className="hidden items-center gap-2 rounded-md border border-border bg-white px-2 py-2 text-sm text-muted-foreground shadow-sm sm:flex"

@@ -3,9 +3,14 @@ import { prisma } from "@videoai/database";
 import {
   CreateMasterPromptRequestSchema,
   DEFAULT_SHOT_GENERATION_PROMPT,
+  DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
+  DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+  DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
   DEFAULT_SCRIPT_GENERATION_PROMPT,
+  DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
+  DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
   RotateProviderKeyRequestSchema,
   SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS,
   SHOT_PROMPT_REQUIRED_PLACEHOLDERS,
@@ -20,6 +25,7 @@ import {
   createMasterPrompt,
   getDefaultMasterPrompt,
   getDefaultMasterPromptContent,
+  getConfiguredDefaultMasterPrompt,
   getActiveAiConfig,
   getMasterPromptConfig,
   getMasterPromptAttributeConfig,
@@ -28,6 +34,7 @@ import {
   markProviderKeyConfigured,
   replaceMasterPromptAttributeConfig,
   replaceActiveAiConfig,
+  renderMasterPromptText,
   resolveProviderApiKey,
   setDefaultMasterPrompt,
   updateMasterPrompt
@@ -44,7 +51,17 @@ export class AdminController {
   @Put("ai-config")
   async putAiConfig(@Body() rawBody: unknown) {
     const body = UpdateAiConfigRequestSchema.parse(rawBody);
-    return ok(await replaceActiveAiConfig(body));
+    let config = await replaceActiveAiConfig(body);
+    if (body.promptApiKey) {
+      await markProviderKeyConfigured(body.promptProvider, body.promptApiKey);
+    }
+    if (body.videoApiKey) {
+      await markProviderKeyConfigured(body.videoProvider, body.videoApiKey);
+    }
+    if (body.promptApiKey || body.videoApiKey) {
+      config = await getActiveAiConfig();
+    }
+    return ok(config);
   }
 
   @Put("ai-config/provider-keys/:provider")
@@ -108,20 +125,34 @@ export class AdminController {
       type: body.type,
       name: body.name,
       content: body.content,
-      ...(body.attributeSelection !== undefined ? { attributeSelection: body.attributeSelection } : {})
+      ...(body.outputFormat !== undefined ? { outputFormat: body.outputFormat } : {}),
+      ...(body.attributeSelection !== undefined ? { attributeSelection: body.attributeSelection } : {}),
+      ...(body.workflowAttributeSelection !== undefined
+        ? { workflowAttributeSelection: body.workflowAttributeSelection }
+        : {})
     })));
   }
 
   @Patch("master-prompts/:promptId")
   async patchMasterPrompt(@Param("promptId") promptId: string, @Body() rawBody: unknown) {
     const body = UpdateMasterPromptRequestSchema.parse(rawBody);
-    if (body.name === undefined && body.content === undefined && body.attributeSelection === undefined) {
+    if (
+      body.name === undefined &&
+      body.content === undefined &&
+      body.outputFormat === undefined &&
+      body.attributeSelection === undefined &&
+      body.workflowAttributeSelection === undefined
+    ) {
       throw new BadRequestException("At least one master prompt field is required.");
     }
     return ok(await this.runAdminMutation(() => updateMasterPrompt(promptId, {
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.content !== undefined ? { content: body.content } : {}),
-      ...(body.attributeSelection !== undefined ? { attributeSelection: body.attributeSelection } : {})
+      ...(body.outputFormat !== undefined ? { outputFormat: body.outputFormat } : {}),
+      ...(body.attributeSelection !== undefined ? { attributeSelection: body.attributeSelection } : {}),
+      ...(body.workflowAttributeSelection !== undefined
+        ? { workflowAttributeSelection: body.workflowAttributeSelection }
+        : {})
     })));
   }
 
@@ -149,25 +180,42 @@ export class AdminController {
     const shotsPrompt = await getDefaultMasterPrompt("shots", config.shotGenerationPrompt);
     const scenarioPrompt = await getDefaultMasterPrompt("scenario", config.templateSelectionPrompt);
     const scriptsPrompt = await getDefaultMasterPrompt("scripts");
+    const shotPrompt = await getConfiguredDefaultMasterPrompt("shot");
+    if (!shotPrompt) {
+      throw new BadRequestException("Active Shot master prompt is required before using Step 4 shot prompts.");
+    }
     const renderedShotsPrompt = await getDefaultMasterPromptContent("shots", config.shotGenerationPrompt);
     const renderedScenarioPrompt = await getDefaultMasterPromptContent("scenario", config.templateSelectionPrompt);
     const renderedScriptsPrompt = await getDefaultMasterPromptContent("scripts");
+    const renderedShotPrompt = await renderMasterPromptText(shotPrompt);
 
     return ok({
       prompt: renderedShotsPrompt,
       defaultPrompt: DEFAULT_SHOT_GENERATION_PROMPT,
+      outputFormat: shotsPrompt.outputFormat,
+      defaultOutputFormat: DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
       requiredPlaceholders: [...SHOT_PROMPT_REQUIRED_PLACEHOLDERS],
       isDefault: shotsPrompt.isBuiltIn,
+      shotPrompt: renderedShotPrompt,
+      defaultShotPrompt: DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+      shotOutputFormat: shotPrompt.outputFormat,
+      defaultShotOutputFormat: DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
+      shotPromptIsDefault: false,
       composerPrompt: config.shotComposerPrompt ?? DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       defaultComposerPrompt: DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       composerRequiredPlaceholders: [...SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS],
       composerIsDefault: !config.shotComposerPrompt,
       scenarioAnalysisPrompt: renderedScenarioPrompt,
+      scenarioAnalysisOutputFormat: scenarioPrompt.outputFormat,
       defaultScenarioAnalysisPrompt: DEFAULT_TEMPLATE_SELECTION_PROMPT,
+      defaultScenarioAnalysisOutputFormat: DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
       scenarioAnalysisIsDefault: scenarioPrompt.isBuiltIn,
       scriptGenerationPrompt: renderedScriptsPrompt,
+      scriptGenerationOutputFormat: scriptsPrompt.outputFormat,
       defaultScriptGenerationPrompt: DEFAULT_SCRIPT_GENERATION_PROMPT,
+      defaultScriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
       scriptGenerationIsDefault: scriptsPrompt.isBuiltIn,
+      showUserMasterPrompts: config.showUserMasterPrompts,
       updatedAt: config.updatedAt.toISOString()
     });
   }
@@ -188,21 +236,38 @@ export class AdminController {
       }
     });
 
+    const shotPrompt = await getConfiguredDefaultMasterPrompt("shot");
+    if (!shotPrompt) {
+      throw new BadRequestException("Active Shot master prompt is required before using Step 4 shot prompts.");
+    }
+
     return ok({
       prompt: config.shotGenerationPrompt ?? DEFAULT_SHOT_GENERATION_PROMPT,
       defaultPrompt: DEFAULT_SHOT_GENERATION_PROMPT,
+      outputFormat: DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
+      defaultOutputFormat: DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
       requiredPlaceholders: [...SHOT_PROMPT_REQUIRED_PLACEHOLDERS],
       isDefault: false,
+      shotPrompt: await renderMasterPromptText(shotPrompt),
+      defaultShotPrompt: DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+      shotOutputFormat: shotPrompt.outputFormat,
+      defaultShotOutputFormat: DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
+      shotPromptIsDefault: false,
       composerPrompt: config.shotComposerPrompt ?? DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       defaultComposerPrompt: DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       composerRequiredPlaceholders: [...SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS],
       composerIsDefault: false,
       scenarioAnalysisPrompt: config.templateSelectionPrompt ?? DEFAULT_TEMPLATE_SELECTION_PROMPT,
+      scenarioAnalysisOutputFormat: DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
       defaultScenarioAnalysisPrompt: DEFAULT_TEMPLATE_SELECTION_PROMPT,
+      defaultScenarioAnalysisOutputFormat: DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
       scenarioAnalysisIsDefault: !config.templateSelectionPrompt?.trim(),
       scriptGenerationPrompt: await getDefaultMasterPromptContent("scripts"),
+      scriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
       defaultScriptGenerationPrompt: DEFAULT_SCRIPT_GENERATION_PROMPT,
+      defaultScriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
       scriptGenerationIsDefault: false,
+      showUserMasterPrompts: config.showUserMasterPrompts,
       updatedAt: config.updatedAt.toISOString()
     });
   }

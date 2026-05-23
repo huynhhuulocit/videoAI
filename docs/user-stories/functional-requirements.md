@@ -6,6 +6,7 @@
 - Khi click `Login`, hệ thống điều hướng đến trang đăng nhập.
 - Nếu user đã đăng nhập, hệ thống có thể điều hướng trực tiếp đến dashboard phù hợp với role.
 - Product UI is English-only across public page, user dashboard, project workspace and admin dashboard.
+- Project workspace has a top save bar with truncated project title/description and a primary `Save Project` action. `Save Project` persists Story Content, Story/Scenario/Shots attribute selections, Scenario selection when available, and the current shot plan when available.
 - Website không hiển thị nút chuyển đổi ngôn ngữ và không lưu lựa chọn locale trong browser.
 
 ## 2. Xác thực và phân quyền
@@ -43,10 +44,10 @@
 - Route `/one-click/{projectId}` phải mở wizard cho project script đã tạo; nếu project không tồn tại thì quay lại `/one-click`, nếu project không phải script thì quay về workspace project thường.
 - One Click phải là shortcut UI của `Scenario`, không thêm enum flow type, bảng database hay endpoint backend mới nếu API hiện có đã đủ.
 - Wizard chỉ hiển thị một step tại một thời điểm và có `Back` / `Next`.
-- Step 1 dùng UI/API Story Content hiện có: `Story Content` master prompt, Story Content textarea, Generate Story Content và các nút `Prompt`, `Request`, `Response`; `Next` bị disable khi Story Content rỗng và khi đi tiếp hệ thống lưu Story Content vào database.
-- Step 2 là `Scenario` step: hiển thị `Scenario` master prompt, Story Content và scenario catalog đang dùng; không hiển thị dropdown `Choose scenario`.
-- Step 2 phải có `Analyze scenario`, `Prompt`, `Request`, `Response`. Khi user bấm `Analyze scenario`, hệ thống dùng Story Content, master prompt và catalog attributes/options để AI chọn attributes phù hợp, lưu template selection vào project, đồng thời lưu Scenario mới với name/description lấy từ One Click setup.
-- Step 3 dùng `Shots` master prompt và Story Content để gọi AI tạo shot plan mới cho project, hiển thị success/error chi tiết, raw Prompt/Request/Response và shot plan editable giống Project Step 3. One Click không hiển thị selector `Choose shot plan`; shot plan tạo ra được lưu vào database, gắn với project và dùng name/description lấy từ One Click setup.
+- Step 1 dùng UI/API Story Content hiện có: Story Content textarea, Generate Story Content và các nút `Prompt`, `Request`, `Response`; `Story Content` master prompt chỉ hiển thị khi Admin Site Config `showUserMasterPrompts=true`. `Next` bị disable khi Story Content rỗng và khi đi tiếp hệ thống lưu Story Content vào database.
+- Step 2 là `Scenario` step: hiển thị Story Content và scenario catalog đang dùng; `Scenario` master prompt chỉ hiển thị khi Admin Site Config `showUserMasterPrompts=true`; không hiển thị dropdown `Choose scenario`.
+- Step 2 phải có `Analyze scenario`, `Prompt`, `Request`, `Response`. Khi user bấm `Analyze scenario`, hệ thống dùng Story Content, active Scenario master prompt và catalog attributes/options để AI chọn attributes phù hợp, lưu template selection vào project, đồng thời lưu Scenario mới với name/description lấy từ One Click setup.
+- Step 3 dùng active `Shots` master prompt và Story Content để gọi AI tạo shot plan mới cho project; textarea `Shots` master prompt chỉ hiển thị khi Admin Site Config `showUserMasterPrompts=true`. Step 3 hiển thị success/error chi tiết, raw Prompt/Request/Response và shot plan editable giống Project Step 3. One Click không hiển thị selector `Choose shot plan`; shot plan tạo ra được lưu vào database, gắn với project và dùng name/description lấy từ One Click setup.
 - Shot plan tạo từ One Click phải được lưu như shot plan hiện có và gắn được với project script khi gọi endpoint project-scoped.
 
 ## 4. Tạo dự án
@@ -68,17 +69,17 @@
 - Trong `Scenario`, `Story Content` là `Bước 1`; `Kịch bản tạo prompt` là `Bước 2`; `Shots tạo prompt` là `Bước 3` và các bước phải nằm theo đúng thứ tự này.
 - Container chính của `Scenario` phải dùng toàn bộ bề rộng workspace khả dụng để `Bước 1`, `Bước 2` và `Bước 3` không bị bó trong một cột hẹp.
 - Section `Bước 1`, `Bước 2` và `Bước 3` phải có thể thu gọn/mở rộng; từng nhóm attribute trong `Bước 2` cũng có thể thu gọn/mở rộng và vẫn hiển thị số option đã chọn.
-- `Bước 1` phải hiển thị textarea `Story Content` master prompt do admin quản lý và có thể sửa tạm thời. `Story Attributes` phải nằm trong panel cột phải trên desktop, mặc định thu gọn và giữ selected-count visible. Khi user bấm tạo bằng AI, response trả về được ghi lại vào textarea `Story Content`.
+- `Bước 1` chỉ hiển thị textarea `Story Content` master prompt do admin quản lý khi Admin Site Config `showUserMasterPrompts=true`; nếu setting là `false`, workspace ẩn textarea này và dùng active admin default. `Story Attributes` phải nằm trong panel cột phải trên desktop, mặc định thu gọn và giữ selected-count visible. Khi user bấm tạo bằng AI, response trả về được ghi lại vào textarea `Story Content`.
 - Nút tạo AI trong `Bước 1` phải gọi provider/model đang active. Nếu provider lỗi, thiếu key, hết quota hoặc trả text rỗng, job phải failed với lỗi chi tiết dễ hiểu ngay dưới nút `Generate Story Content`; hệ thống không được dùng fallback/sample content.
 - Các action AI dùng master prompt có placeholder trong project workspace phải có button `Prompt` nằm trước `Request`. Button này mở popup read-only hiển thị đúng prompt sau khi thay placeholder optional; hệ thống không tự nối runtime context ẩn vào prompt text.
 - Mỗi action AI trong project workspace (`Generate Story Content`, `Analyze scenario`, `Generate shots`, và Product Flow `Analyze`) phải có button `Request` và `Response` nằm cạnh action chính. Button chỉ bật khi có raw data của lần chạy mới nhất và khi click phải mở popup read-only hiển thị đầy đủ request/response đã redact secret.
 - Textarea `Story Content` ở `Bước 1` là source chung cho các bước sau: AI phân tích scenario ở `Bước 2`, tạo shot plan ở `Bước 3`, compose prompt từng shot và tạo script.
 - Trong `Bước 2`, catalog attribute/option phải được gom vào panel `Attributes` ở cột phải trên desktop; panel này mặc định thu gọn, đủ rộng để đọc label/count trên desktop, còn khu vực master prompt Scenario, action, lỗi và kết quả AI nằm ở cột nội dung bên trái.
 - Trong panel `Attributes` của workspace, attribute/option có mô tả từ Scenario phải có icon helper; hover hoặc click icon sẽ hiển thị mô tả mà không làm đổi trạng thái chọn/collapse.
-- Trong `Bước 3`, workspace phải hiển thị textarea `Shots` master prompt do admin quản lý; user có thể sửa tạm thời prompt này cho lần tạo shots hiện tại mà không lưu đè default admin.
+- Trong `Bước 3`, workspace chỉ hiển thị textarea `Shots` master prompt do admin quản lý khi Admin Site Config `showUserMasterPrompts=true`; user có thể sửa tạm thời prompt này cho lần tạo shots hiện tại mà không lưu đè default admin. Khi setting là `false`, frontend không gửi `masterPrompt` override và backend dùng active admin default.
 - Trong `Bước 3`, workspace chỉ hiển thị panel `Shots Attributes` trong cột phải bên cạnh `Shots` master prompt/generate controls. Panel này mặc định thu gọn, giữ selected-count visible, và cho user xem/chỉnh các option được đưa vào `{shotsAttributes}`. Scenario options được chỉnh ở `Bước 2` và vẫn có thể đi vào `{scenarioAttributes}` nếu prompt có placeholder đó.
 - Khi user tạo shots trong `Bước 3`, hệ thống phải gửi các attribute/option đã chọn ở `Bước 2` vào workflow `shot_generation` dưới dạng attribute cấp shot plan.
-- Request tạo shots trong `Bước 3` phải gửi `Shots` master prompt tạm thời nếu user đã chỉnh, còn backend fallback về default admin khi không có override.
+- Request tạo shots trong `Bước 3` chỉ được gửi `Shots` master prompt tạm thời khi Admin Site Config `showUserMasterPrompts=true`; khi setting là `false`, backend phải reject mọi request user vẫn gửi `masterPrompt` override.
 - Sau khi user bấm `Generate shots`, UI phải hiển thị thông báo thành công ngay dưới action nếu tạo shot plan thành công; nếu lỗi AI/provider/config/schema thì hiển thị lỗi nhiều dòng dễ hiểu, gồm mã lỗi ổn định, provider/model/status/env/job ID khi có.
 - Ở `Bước 3`, UI luôn hiển thị textarea `Shots result` ngay dưới action generate. Textarea này trống khi chưa có shot plan, và chứa JSON normalized dùng để build shot cards khi đã generate/chọn/paste JSON; user có thể sửa JSON và bấm `Apply JSON` để đồng bộ lại shot cards trước khi `Save shots`.
 - Shot plan phải được lưu trong database theo user để mọi project của cùng user đều có thể chọn lại.
@@ -95,10 +96,10 @@
 - Prompt được tạo trong từng shot phải dùng prompt composer tương thích legacy, nối thêm context của shot và chỉ render cục bộ, không gọi AI.
 - `Scenario` không hiển thị panel `AI suggested content` trong luồng compose prompt cục bộ theo từng shot.
 - User có thể bấm `Phân tích kịch bản` trong workspace để AI đọc story/prompt đang nhập, đối chiếu với attribute/option của Kịch bản đang chọn, tự chọn các option phù hợp và lưu selection đó vào project.
-- Trong workspace, `Phân tích kịch bản` phải có textarea `Scenario` master prompt do admin quản lý làm default; user có thể sửa tạm thời master prompt này cho lần phân tích hiện tại.
+- Trong workspace, `Phân tích kịch bản` chỉ hiển thị textarea `Scenario` master prompt do admin quản lý khi Admin Site Config `showUserMasterPrompts=true`; user có thể sửa tạm thời master prompt này cho lần phân tích hiện tại trong mode đó. Khi setting là `false`, workspace ẩn textarea và backend dùng active admin default.
 - Request `Phân tích kịch bản` phải gửi master prompt sau khi thay placeholder có trong prompt. Placeholder `{story}` và `{attributes}` được hỗ trợ nhưng không bắt buộc; nếu prompt thiếu placeholder nào thì runtime data tương ứng không được đưa vào request.
 - Nếu `Phân tích kịch bản` thất bại, UI phải hiển thị lỗi chi tiết và dễ hiểu ngay dưới action, gồm mã lỗi ổn định, provider/model nếu có, gợi ý env/status/job ID để admin tra cứu, và hướng xử lý tiếp theo. UI user không hiển thị API key hoặc raw payload của provider.
-- Các action `Phân tích kịch bản` và `Lưu lựa chọn` phải nằm ngay sau master prompt textarea và textarea nội dung kịch bản, trước danh sách attribute/option.
+- Các action `Phân tích kịch bản` và `Lưu lựa chọn` phải nằm sau khu vực prompt/content hiện hành, trước danh sách attribute/option. Nếu master prompt textarea bị ẩn bởi Site Config, action row vẫn hiển thị cùng `Prompt`, `Request`, `Response`.
 - User có thể chỉnh sửa checkbox option sau khi AI phân tích và bấm `Lưu lựa chọn` để lưu selection hiện tại vào project.
 - User có thể chỉnh sửa nội dung AI gợi ý trước khi tạo script hoặc video.
 - Hệ thống phải hiển thị nút `Tạo script` hoặc `Tạo video` theo cấu hình admin.
@@ -128,11 +129,13 @@
 - Menu bên trái phải có nhóm cấu hình dành cho site.
 - Admin có thể cấu hình chế độ tạo nội dung của user.
 - Admin có thể cấu hình provider/model mặc định cho tạo prompt.
-- Menu admin hiển thị các nhóm `Story`, `Scenario`, `Shots`; mỗi nhóm có child `Master Prompt`. Route tương thích `/admin/shot-prompt` vẫn redirect về nhóm phù hợp.
-- Admin có thể quản lý 3 nhóm master prompt tại các list-only route `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`. `New prompt` mở `/new`, `Edit` mở `/{promptId}`, và built-in row mở `/new?source=built-in`. Nhóm `Story Content` vẫn dùng type key `scripts` trong API để tương thích dữ liệu hiện tại.
+- Admin AI Config phải có Site Config `Show master prompts in user workspace` dạng Yes/No, mặc định `No`. Khi `No`, Project và One Click ẩn textarea Story/Scenario/Shots/Shot master prompt, vẫn giữ nút `Prompt` preview, frontend không gửi temporary `masterPrompt`, và backend reject override nếu user gửi thủ công.
+- Menu admin hiển thị các nhóm `Story`, `Scenario`, `Shots`, `Shot`; mỗi nhóm có child `Master Prompt`. Route tương thích `/admin/shot-prompt` vẫn redirect về nhóm phù hợp.
+- Admin có thể quản lý 4 nhóm master prompt tại các list-only route `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, `/admin/shot/master-prompt`. `New prompt` mở `/new`, `Edit` mở `/{promptId}`, và built-in row mở `/new?source=built-in`. Nhóm `Story Content` vẫn dùng type key `scripts`; `Shots` dùng cho Step 3 và `Shot` dùng cho Step 4.
 - Mỗi nhóm master prompt phải hỗ trợ tạo, sửa, xóa/archive và `Set default`; mỗi nhóm có đúng một default active.
 - Admin không thể xóa prompt đang là default nếu chưa chọn prompt khác làm default trước.
 - Master prompt giữ format placeholder khuyến nghị theo từng nhóm, nhưng không bắt buộc placeholder khi lưu; backend replace nếu có và không tự nối runtime field mà prompt được chọn chưa chứa placeholder.
+- Mỗi `Story Content`, `Scenario` và `Shots` master prompt phải có field textarea `Output Format placeholder`. Placeholder `{outputFormat}` chỉ render từ field này khi prompt content có token đó; nếu prompt dùng token nhưng field rỗng, hệ thống báo lỗi rõ ràng và không dùng fallback output instruction.
 - Admin có thể mở `Master Prompt Config` trong nhóm `AI` để tạo một bộ attribute/option dùng riêng cho quá trình author master prompt. Bộ này là global, admin-only, và không xuất hiện trong màn hình user.
 - Trong từng editor `Story Content`, `Scenario`, `Shots` master prompt, admin có thể chọn option từ `Master Prompt Config`; selection này được lưu cùng master prompt và chỉ được đưa vào runtime nếu prompt admin chứa `{masterPromptAttributes}`.
 - UI chỉ hiển thị tên attribute/option trong phần chọn `Master Prompt Attribute`; mô tả nằm sau helper icon và không được render vào `{masterPromptAttributes}`.
@@ -210,11 +213,20 @@
 ## 11. Admin Attribute Catalog Requirements
 
 - User sidebar must not show Scenario management.
-- Admin sidebar must show Story, Scenario, and Shots as non-clickable parent groups. Each parent has Master Prompt and Attribute child pages.
-- Story, Scenario, and Shots Attribute pages must support CRUD, default selection, JSON editing, visual editing, required checkbox per attribute, and AI generation through a separate Attribute Generation Prompt.
+- Admin sidebar must show Story, Scenario, Shots, and Shot as non-clickable parent groups. Each parent has Master Prompt and Attribute child pages.
+- Story, Scenario, Shots, and Shot Attribute pages must support CRUD, default selection, JSON editing, visual editing, required checkbox per attribute, and AI generation through a separate Attribute Generation Prompt.
 - Scenario catalogs are admin-only. User Project and One Click flows load the active Admin Scenario catalog.
 - Project and One Click Step 1, Step 2, and Step 3 load Story, Scenario, and Shots catalogs respectively.
 - Required attributes default to the first option when no saved selection exists, remain multi-select, and cannot be cleared to zero selected options.
 - Project selections are persisted as JSON keyed by `story`, `scenario`, and `shots`.
 - Runtime data enters AI prompts only through explicit placeholders present in the selected prompt.
 - `Master Prompt Config` is separate from Story/Scenario/Shots user workflow attributes. It is admin-only, uses the admin-saved selection on each master prompt, and never exposes `{masterPromptAttributes}` to user screens or user-facing placeholder autocomplete.
+
+## 12. Admin Shot Step 4 Requirements
+
+- Admin sidebar must also show a non-clickable `Shot` parent group after `Shots`.
+- `Shots` remains the Step 3 batch shot-list JSON feature. `Shot` is singular and is used only for Step 4 per-shot final prompt creation.
+- Admin can manage `Shot Master Prompt` and `Shot Attribute` with the same list-only and dedicated new/edit route model as Story, Scenario, and Shots.
+- Project and One Click Step 4 must load the active `Shot` master prompt and active `Shot Attribute` catalog.
+- Required Shot attributes auto-select the first option and cannot be cleared to zero selections. Selections are saved on the individual shot JSON object.
+- Step 4 prompt rendering must replace only placeholders present in the selected `Shot` master prompt. It must not append hidden runtime context, provider output contract text, or fallback prompt content.

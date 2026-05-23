@@ -40,10 +40,10 @@ export const FlowTypeSchema = z.enum([
 ]);
 export type FlowType = z.infer<typeof FlowTypeSchema>;
 
-export const MasterPromptTypeSchema = z.enum(["scenario", "shots", "scripts"]);
+export const MasterPromptTypeSchema = z.enum(["scenario", "shots", "scripts", "shot"]);
 export type MasterPromptType = z.infer<typeof MasterPromptTypeSchema>;
 
-export const AttributeCatalogTypeSchema = z.enum(["story", "scenario", "shots"]);
+export const AttributeCatalogTypeSchema = z.enum(["story", "scenario", "shots", "shot"]);
 export type AttributeCatalogType = z.infer<typeof AttributeCatalogTypeSchema>;
 
 export type PromptPlaceholderDefinition = {
@@ -52,28 +52,21 @@ export type PromptPlaceholderDefinition = {
 };
 
 export const MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER = "{masterPromptAttributes}";
+export const MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER = "{outputFormat}";
 
 export const MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPlaceholderDefinition[]> = {
   scripts: [
     {
-      token: "{inputText}",
-      description: "The user's source idea, notes, or draft script."
-    },
-    {
-      token: "{mediaSummary}",
-      description: "Reference media metadata selected for this generation."
-    },
-    {
-      token: "{shotSelection}",
-      description: "The selected shot plan summary when one is available."
-    },
-    {
-      token: "{scenarioSelection}",
-      description: "The selected Scenario attributes/options when available."
+      token: "{storyContent}",
+      description: "The user's source idea, notes, or draft story content."
     },
     {
       token: "{storyAttributes}",
       description: "The selected Story attributes/options in compact form."
+    },
+    {
+      token: MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
+      description: "The output format instructions saved on this master prompt."
     }
   ],
   scenario: [
@@ -88,6 +81,10 @@ export const MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPlacehol
     {
       token: "{scenarioAttributes}",
       description: "The active Scenario attribute catalog and selected options."
+    },
+    {
+      token: MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
+      description: "The output format instructions saved on this master prompt."
     }
   ],
   shots: [
@@ -106,6 +103,48 @@ export const MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPlacehol
     {
       token: "{shotsAttributes}",
       description: "Selected Shots attributes/options in compact form."
+    },
+    {
+      token: MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
+      description: "The output format instructions saved on this master prompt."
+    }
+  ],
+  shot: [
+    {
+      token: "{storyContent}",
+      description: "Story Content used as context for this single shot."
+    },
+    {
+      token: "{shotTitle}",
+      description: "The title of the current shot."
+    },
+    {
+      token: "{shotDescription}",
+      description: "The editable description of the current shot."
+    },
+    {
+      token: "{shotDialogue}",
+      description: "Dialogue, voiceover, or narration saved on the current shot."
+    },
+    {
+      token: "{shotDuration}",
+      description: "Duration of the current shot."
+    },
+    {
+      token: "{shotGeneratedAttributes}",
+      description: "Attributes generated with the Step 3 shot JSON for this shot."
+    },
+    {
+      token: "{shotAttributes}",
+      description: "Admin-defined Shot attributes selected for this individual shot."
+    },
+    {
+      token: "{referenceMedia}",
+      description: "Reference media metadata attached to this shot."
+    },
+    {
+      token: MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
+      description: "The output format instructions saved on this master prompt."
     }
   ]
 };
@@ -127,6 +166,13 @@ export const ADMIN_MASTER_PROMPT_PLACEHOLDERS: Record<MasterPromptType, PromptPl
   ],
   shots: [
     ...MASTER_PROMPT_PLACEHOLDERS.shots,
+    {
+      token: MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+      description: "Admin-only Master Prompt Attribute options selected for this master prompt."
+    }
+  ],
+  shot: [
+    ...MASTER_PROMPT_PLACEHOLDERS.shot,
     {
       token: MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
       description: "Admin-only Master Prompt Attribute options selected for this master prompt."
@@ -447,6 +493,7 @@ export const VideoShotSchema = z.object({
   description: z.string().min(1),
   durationSeconds: z.number().int().min(1).max(8),
   attributes: z.array(VideoShotAttributeSchema).default([]),
+  attributeSelection: AttributeSelectionSchema.nullable().optional(),
   mediaIds: z.array(z.string()).default([])
 });
 export type VideoShot = z.infer<typeof VideoShotSchema>;
@@ -523,6 +570,16 @@ export const GenerateShotsJobResultSchema = z.object({
 });
 export type GenerateShotsJobResult = z.infer<typeof GenerateShotsJobResultSchema>;
 
+export const CreateShotPlanRequestSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(500).optional(),
+  sourceText: z.string().min(1).max(12000),
+  durationSeconds: z.number().int().min(1).max(8),
+  attributes: z.array(VideoShotAttributeSchema).default([]),
+  shots: z.array(VideoShotSchema).min(1)
+});
+export type CreateShotPlanRequest = z.infer<typeof CreateShotPlanRequestSchema>;
+
 export const UpdateShotPlanRequestSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(500).optional(),
@@ -584,11 +641,15 @@ export type Job = z.infer<typeof JobSchema>;
 
 export const AiConfigSchema = z.object({
   contentMode: ContentModeSchema,
+  showUserMasterPrompts: z.boolean().default(false),
   promptProvider: ProviderSchema,
   promptModel: z.string(),
   shotGenerationPrompt: z.string().nullable().optional(),
+  shotGenerationOutputFormat: z.string().nullable().optional(),
   scriptGenerationPrompt: z.string().nullable().optional(),
+  scriptGenerationOutputFormat: z.string().nullable().optional(),
   templateSelectionPrompt: z.string().nullable().optional(),
+  templateSelectionOutputFormat: z.string().nullable().optional(),
   promptKeyStatus: ProviderKeyStatusSchema,
   videoProvider: ProviderSchema,
   videoModel: z.string(),
@@ -599,10 +660,13 @@ export type AiConfig = z.infer<typeof AiConfigSchema>;
 
 export const UpdateAiConfigRequestSchema = z.object({
   contentMode: ContentModeSchema,
+  showUserMasterPrompts: z.boolean().optional(),
   promptProvider: ProviderSchema,
   promptModel: z.string().min(1),
+  promptApiKey: z.string().trim().min(1).optional(),
   videoProvider: ProviderSchema,
-  videoModel: z.string().min(1)
+  videoModel: z.string().min(1),
+  videoApiKey: z.string().trim().min(1).optional()
 });
 export type UpdateAiConfigRequest = z.infer<typeof UpdateAiConfigRequestSchema>;
 
@@ -657,7 +721,15 @@ export const DEFAULT_SHOT_GENERATION_PROMPT = [
   "Shots attributes in compact format attribute=option1,option2;:",
   "{shotsAttributes}",
   "",
-  "Use last-state / end-state continuity. Every shot must include Start state, End state and Dialogue attributes. The next shot's Start state must continue from the previous shot's End state. Dialogue should be natural, short and useful for generating voice or captions."
+  "{outputFormat}"
+].join("\n");
+
+export const DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT = [
+  "Use last-state / end-state continuity.",
+  "Every shot must include Start state, End state and Dialogue attributes.",
+  "The next shot's Start state must continue from the previous shot's End state.",
+  "Dialogue should be natural, short and useful for generating voice or captions.",
+  "Return the generated shots in the provider JSON schema."
 ].join("\n");
 
 export const DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT = [
@@ -685,6 +757,37 @@ export const DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT = [
   "{mediaSummary}"
 ].join("\n");
 
+export const DEFAULT_SINGLE_SHOT_MASTER_PROMPT = [
+  "Create the final video generation prompt for one shot.",
+  "Use only the data included by placeholders below.",
+  "",
+  "Story Content:",
+  "{storyContent}",
+  "",
+  "Shot:",
+  "- Title: {shotTitle}",
+  "- Duration: {shotDuration}",
+  "- Description: {shotDescription}",
+  "- Dialogue: {shotDialogue}",
+  "",
+  "Generated shot attributes:",
+  "{shotGeneratedAttributes}",
+  "",
+  "Selected Shot attributes:",
+  "{shotAttributes}",
+  "",
+  "Reference media:",
+  "{referenceMedia}",
+  "",
+  "{outputFormat}"
+].join("\n");
+
+export const DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT = [
+  "Return one polished video prompt for this shot.",
+  "Keep the prompt concise, visually specific, and ready for the configured video provider.",
+  "Do not include JSON unless the user explicitly asks for JSON in this prompt."
+].join("\n");
+
 export const DEFAULT_TEMPLATE_SELECTION_PROMPT = [
   "You are a video script analyst.",
   "Read the user's story/script and choose the best matching scenario options from the provided attributes.",
@@ -699,7 +802,12 @@ export const DEFAULT_TEMPLATE_SELECTION_PROMPT = [
   "- Use only optionId values from the provided scenario catalog.",
   "- Select 1 to 3 useful options per attribute when the story clearly supports them.",
   "- If no option fits an attribute, return an empty selectedOptionIds array for that attribute.",
-  "- Return strict JSON only. No markdown, no prose outside JSON.",
+  "",
+  "{outputFormat}"
+].join("\n");
+
+export const DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT = [
+  "Return strict JSON only. No markdown, no prose outside JSON.",
   "",
   "Required JSON shape:",
   JSON.stringify(
@@ -727,23 +835,18 @@ export const DEFAULT_SCRIPT_GENERATION_PROMPT = [
   "Preserve the source language unless the user explicitly asks for another language.",
   "Make the content lively, specific, emotionally clear, and production-ready. Expand thin ideas with concrete setting, characters, actions, beginning/middle/end, visual moments, dialogue or voiceover cues, and transitions.",
   "Do not add unrelated facts, brands, claims, or copyrighted lyrics.",
-  "Use the runtime data below only when it is present.",
+  "Use the Story Content and Story attributes below when those placeholders are present.",
   "",
-  "User source text:",
-  "{inputText}",
-  "",
-  "Reference media:",
-  "{mediaSummary}",
-  "",
-  "Selected shot plan:",
-  "{shotSelection}",
-  "",
-  "Selected scenario/options:",
-  "{scenarioSelection}",
+  "Story Content:",
+  "{storyContent}",
   "",
   "Story attributes/options:",
   "{storyAttributes}",
   "",
+  "{outputFormat}"
+].join("\n");
+
+export const DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT = [
   "Return a polished Story Content draft with:",
   "1. Title",
   "2. Full story content",
@@ -768,16 +871,28 @@ export const ShotPromptConfigSchema = z.object({
   defaultPrompt: z.string(),
   requiredPlaceholders: z.array(z.string()),
   isDefault: z.boolean(),
+  shotPrompt: z.string(),
+  defaultShotPrompt: z.string(),
+  shotOutputFormat: z.string().default(""),
+  defaultShotOutputFormat: z.string().default(""),
+  shotPromptIsDefault: z.boolean(),
   composerPrompt: z.string(),
   defaultComposerPrompt: z.string(),
   composerRequiredPlaceholders: z.array(z.string()),
   composerIsDefault: z.boolean(),
   scenarioAnalysisPrompt: z.string(),
+  scenarioAnalysisOutputFormat: z.string().default(""),
   defaultScenarioAnalysisPrompt: z.string(),
+  defaultScenarioAnalysisOutputFormat: z.string().default(""),
   scenarioAnalysisIsDefault: z.boolean(),
   scriptGenerationPrompt: z.string(),
+  scriptGenerationOutputFormat: z.string().default(""),
   defaultScriptGenerationPrompt: z.string(),
+  defaultScriptGenerationOutputFormat: z.string().default(""),
   scriptGenerationIsDefault: z.boolean(),
+  outputFormat: z.string().default(""),
+  defaultOutputFormat: z.string().default(""),
+  showUserMasterPrompts: z.boolean().default(false),
   updatedAt: z.string()
 });
 export type ShotPromptConfig = z.infer<typeof ShotPromptConfigSchema>;
@@ -794,7 +909,9 @@ export const MasterPromptSchema = z.object({
   type: MasterPromptTypeSchema,
   name: z.string(),
   content: z.string(),
+  outputFormat: z.string().default(""),
   attributeSelection: MasterPromptAttributeSelectionSchema.default({ attributes: [] }),
+  workflowAttributeSelection: MasterPromptAttributeSelectionSchema.default({ attributes: [] }),
   isDefault: z.boolean(),
   status: MasterPromptStatusSchema,
   isBuiltIn: z.boolean().default(false),
@@ -820,14 +937,18 @@ export const CreateMasterPromptRequestSchema = z.object({
   type: MasterPromptTypeSchema,
   name: z.string().trim().min(1).max(120),
   content: z.string().trim().min(1).max(20000),
-  attributeSelection: MasterPromptAttributeSelectionSchema.optional()
+  outputFormat: z.string().trim().max(12000).optional(),
+  attributeSelection: MasterPromptAttributeSelectionSchema.optional(),
+  workflowAttributeSelection: MasterPromptAttributeSelectionSchema.optional()
 });
 export type CreateMasterPromptRequest = z.infer<typeof CreateMasterPromptRequestSchema>;
 
 export const UpdateMasterPromptRequestSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   content: z.string().trim().min(1).max(20000).optional(),
-  attributeSelection: MasterPromptAttributeSelectionSchema.optional()
+  outputFormat: z.string().trim().max(12000).optional(),
+  attributeSelection: MasterPromptAttributeSelectionSchema.optional(),
+  workflowAttributeSelection: MasterPromptAttributeSelectionSchema.optional()
 });
 export type UpdateMasterPromptRequest = z.infer<typeof UpdateMasterPromptRequestSchema>;
 

@@ -259,7 +259,7 @@ async function listCatalogs(type: AttributeCatalogType) {
     })).map((row) => mapAttributeCatalog(type, row));
   }
   return (await prisma.shotAttributeCatalog.findMany({
-    where: { status: "active" },
+    where: { type, status: "active" },
     orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }]
   })).map((row) => mapAttributeCatalog(type, row));
 }
@@ -273,7 +273,7 @@ async function findCatalog(type: AttributeCatalogType, id: string) {
     const row = await prisma.scenarioAttributeCatalog.findFirst({ where: { id, status: "active" } });
     return row ? mapAttributeCatalog(type, row) : null;
   }
-  const row = await prisma.shotAttributeCatalog.findFirst({ where: { id, status: "active" } });
+  const row = await prisma.shotAttributeCatalog.findFirst({ where: { id, type, status: "active" } });
   return row ? mapAttributeCatalog(type, row) : null;
 }
 
@@ -319,10 +319,11 @@ async function createCatalog(input: {
     });
   }
   return prisma.$transaction(async (tx) => {
-    const count = await tx.shotAttributeCatalog.count({ where: { status: "active" } });
+    const count = await tx.shotAttributeCatalog.count({ where: { type, status: "active" } });
     const row = await tx.shotAttributeCatalog.create({
       data: {
-        id: `shots_attr_${Date.now()}`,
+        id: `${type}_attr_${Date.now()}`,
+        type,
         name: input.name,
         description: input.description ?? null,
         attributes: toJson(input.attributes),
@@ -411,7 +412,7 @@ async function setDefaultCatalog(type: AttributeCatalogType, id: string) {
     });
   }
   return prisma.$transaction(async (tx) => {
-    await tx.shotAttributeCatalog.updateMany({ where: { status: "active" }, data: { isDefault: false } });
+    await tx.shotAttributeCatalog.updateMany({ where: { type, status: "active" }, data: { isDefault: false } });
     const row = await tx.shotAttributeCatalog.update({ where: { id }, data: { isDefault: true } });
     return mapAttributeCatalog(type, row);
   });

@@ -14,7 +14,7 @@ Khong mo port public truc tiep tu router/firewall:
 - Khong port-forward `3000`.
 - Khong port-forward `4000`.
 - Khong expose PostgreSQL `55432`.
-- Khong expose Redis `56379`.
+- Khong expose Redis `57379`.
 
 Cloudflare Tunnel chi can may cua ban ket noi outbound toi Cloudflare. Khach hang chi nen truy cap qua URL Cloudflare.
 

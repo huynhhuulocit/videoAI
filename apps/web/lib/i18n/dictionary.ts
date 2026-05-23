@@ -8,6 +8,7 @@ const messages = {
   "common.failed": "Failed",
   "common.login": "Login",
   "common.logout": "Logout",
+  "common.no": "No",
   "common.default": "Default",
   "common.delete": "Delete",
   "common.edit": "Edit",
@@ -19,6 +20,7 @@ const messages = {
   "common.statusActive": "active",
   "common.user": "User",
   "common.userDashboard": "User Dashboard",
+  "common.yes": "Yes",
   "shell.aiConfig": "AI Config",
   "shell.aiLogs": "AI Logs",
   "shell.ai": "AI",
@@ -36,6 +38,9 @@ const messages = {
   "shell.scenarioAttribute": "Scenario Attribute",
   "shell.scenarioMasterPrompt": "Scenario Master Prompt",
   "shell.shotPrompt": "Master Prompt",
+  "shell.shotAttribute": "Shot Attribute",
+  "shell.shotGroup": "Shot",
+  "shell.shotMasterPrompt": "Shot Master Prompt",
   "shell.shotsAttribute": "Shots Attribute",
   "shell.shotsGroup": "Shots",
   "shell.shotsMasterPrompt": "Shots Master Prompt",
@@ -189,6 +194,10 @@ const messages = {
   "workspace.productTemplateHelp":
     "Select the options AI should use as structure when generating the prompt.",
   "workspace.productTemplateTitle": "Prompt scenario",
+  "workspace.projectSave": "Save Project",
+  "workspace.projectSaved": "Project saved",
+  "workspace.projectSaveFailed": "Project save failed",
+  "workspace.projectSaving": "Saving Project...",
   "workspace.referenceReady": "Media is ready",
   "workspace.rejectedFiles": "Some files are invalid",
   "workspace.removeMedia": "Remove {name}",
@@ -206,12 +215,18 @@ const messages = {
   "workspace.shotDialoguePlaceholder":
     "Enter dialogue, voiceover, or narration for this shot.",
   "workspace.shotsDurationInput": "Shot {index} duration",
+  "workspace.shotsCardsHelp":
+    "Edit generated shots, attach reference media, create shot prompts, and submit video generation per shot.",
+  "workspace.shotsCardsTitle": "Step 4 · Shots",
   "workspace.shotsGenerate": "Generate shots",
   "workspace.shotsGenerateFailed": "Shot generation failed",
-  "workspace.shotsGenerated": "Shot plan generated",
+  "workspace.shotsEditorHelp":
+    "These cards are rebuilt from the Shots result JSON and stay synchronized while the JSON is valid.",
+  "workspace.shotsEditorTitle": "Shot cards",
+  "workspace.shotsGenerated": "Shots generated",
   "workspace.shotsGeneratedDetail":
-    "Shot plan \"{name}\" generated with {count} shot(s). Review and edit the shots below.",
-  "workspace.shotsGenerating": "Generating shot plan",
+    "{count} shot(s) generated. Review and edit the shots below.",
+  "workspace.shotsGenerating": "Generating shots",
   "workspace.shotsHelp":
     "AI breaks the current content into video shots up to 8 seconds each for prompt generation.",
   "workspace.shotsMasterPromptHelp":
@@ -221,18 +236,16 @@ const messages = {
     "Enter a shots master prompt before generating shots.",
   "workspace.shotsMissingSource":
     "Enter a script or generate final content before generating shots.",
-  "workspace.shotsName": "Shot plan name",
-  "workspace.shotsNeedOne": "A shot plan needs at least one shot.",
-  "workspace.shotsNone": "No shot plan exists for this project yet.",
+  "workspace.shotsName": "Shot group name",
+  "workspace.shotsNeedOne": "Add at least one shot before saving.",
+  "workspace.shotsNone": "No shots exist for this project yet. Generate shots or paste valid Shots result JSON.",
   "workspace.shotsRemove": "Remove {title}",
   "workspace.shotsRemoveAttribute": "Remove attribute",
-  "workspace.shotsResultApplied": "Shots result applied",
-  "workspace.shotsResultApply": "Apply JSON",
   "workspace.shotsResultHelp":
-    "Edit the normalized JSON returned from shot generation, then apply it to rebuild the shot cards below. Save shots persists the applied result.",
+    "Edit the normalized JSON returned from shot generation. When the JSON is valid, the shot cards below update immediately. Save shots persists the synced shots.",
   "workspace.shotsResultInvalid": "Shots result JSON is invalid.",
   "workspace.shotsResultPlaceholder":
-    "Generate shots to fill this JSON, or paste a normalized shot plan JSON and apply it.",
+    "Generate shots to fill this JSON, or paste normalized shots JSON to sync the shot cards.",
   "workspace.shotsResultTitle": "Shots result",
   "workspace.shotsSave": "Save shots",
   "workspace.shotsSaveFailed": "Shot save failed",
@@ -246,10 +259,23 @@ const messages = {
     "No Step 2 attributes are selected for this shot generation yet.",
   "workspace.shotsSourceFromScenario":
     "Shot generation uses the story content entered in Step 1.",
-  "workspace.shotsSelect": "Choose shot plan",
+  "workspace.shotsSelect": "Select shots",
   "workspace.shotsTitle": "Step 3 · Prompt shots",
   "workspace.shotsTitleInput": "Shot {index} title",
   "workspace.shotsUse": "Use shot",
+  "workspace.adminShotAttributesHelp":
+    "Open Shot Attributes to edit reusable admin-defined values for this individual shot. Required attributes always keep at least one option selected.",
+  "workspace.adminShotAttributesTitle": "Shot Attributes",
+  "workspace.masterPromptAttributesUserBlocked":
+    "{masterPromptAttributes} is admin-only and cannot be used in user workspace prompt overrides.",
+  "workspace.shotGeneratedAttributesTitle": "Generated shot attributes",
+  "workspace.shotMasterPromptHelp":
+    "This admin-managed Shot master prompt creates the final prompt for one shot. Use placeholders to include shot fields, Shot Attributes, and reference media.",
+  "workspace.shotMasterPromptLabel": "Shot master prompt",
+  "workspace.shotMasterPromptMissing":
+    "Active Shot master prompt is required before creating a shot prompt.",
+  "workspace.shotAttributeCatalogMissing":
+    "Active Shot Attribute catalog is required because this Shot master prompt contains {shotAttributes}.",
   "workspace.shotPromptAttributes": "Shot attributes",
   "workspace.shotPromptCopied": "Prompt copied",
   "workspace.shotPromptCopy": "Copy prompt",
@@ -366,7 +392,7 @@ const messages = {
     "This content is the shared source for scenario analysis, shot generation, and script creation in the following steps. You can enter it directly or use AI to normalize it into story content.",
   "workspace.storyInputLabel": "Story Content",
   "workspace.storyMasterPromptHelp":
-    "The admin-managed Story Content master prompt turns your source text into a richer story for later Scenario and Shots steps. Use {inputText} and {storyAttributes} to include runtime data.",
+    "The admin-managed Story Content master prompt turns your source text into a richer story for later Scenario and Shots steps. Use {storyContent} and {storyAttributes} to include runtime data.",
   "workspace.storyMasterPromptLabel": "Story Content master prompt",
   "workspace.storyMasterPromptMissing":
     "Enter a Story Content master prompt before generating content.",
@@ -427,7 +453,7 @@ const messages = {
   "workspace.promptPreviewRequest": "Request JSON",
   "workspace.promptPreviewScriptBase":
     "Create short, friendly, easy-to-understand product introduction content.",
-  "workspace.promptPreviewShots": "Use shot plan {shotPlanName}: {shots}.",
+  "workspace.promptPreviewShots": "Use selected shots: {shots}.",
   "workspace.promptPreviewTemplate":
     "Apply scenario {templateName}: {selections}.",
   "workspace.promptPreviewTitle": "Prompt sent to AI",
@@ -541,7 +567,7 @@ const messages = {
   "template.title": "Scenario",
   "template.attributeCount": "{count} attributes",
   "adminConfig.apiKey": "API key",
-  "adminConfig.apiKeyPlaceholder": "Enter a new key or leave blank to use the saved key",
+  "adminConfig.apiKeyPlaceholder": "Enter a new key, then use Save configuration",
   "adminConfig.chatGptApiNote":
     "ChatGPT Plus is for the ChatGPT app. This app still needs an OpenAI API key saved in Admin > AI Config for the ChatGPT/OpenAI provider.",
   "adminConfig.contentMode": "Content mode",
@@ -558,7 +584,7 @@ const messages = {
   "adminConfig.provider": "Provider",
   "adminConfig.providerModelRequired": "Enter provider and model before testing.",
   "adminConfig.keyRequired": "Enter an API key before saving.",
-  "adminConfig.keySaved": "Key saved",
+  "adminConfig.keySaved": "Key saved with configuration",
   "adminConfig.keySaveFailed": "Cannot save key",
   "adminConfig.keyStatusConfigured": "configured",
   "adminConfig.keyStatusEnv": "missing",
@@ -569,6 +595,11 @@ const messages = {
   "adminConfig.saved": "Configuration saved",
   "adminConfig.saveFailed": "Cannot save configuration",
   "adminConfig.saveKey": "Save key",
+  "adminConfig.showUserMasterPrompts":
+    "Show master prompts in user workspace",
+  "adminConfig.showUserMasterPromptsHelp":
+    "No hides the editable Story, Scenario, and Shots master prompt fields in Project and One Click. Prompt preview buttons remain visible, and AI uses the active admin defaults.",
+  "adminConfig.siteConfig": "Site Config",
   "adminConfig.testConnect": "Test connect",
   "adminConfig.testFailed": "Test failed",
   "adminConfig.testSuccess": "Test OK",
@@ -612,6 +643,9 @@ const messages = {
   "adminMasterPrompt.builtInReadOnly": "Built-in default prompt is read-only. Create a new prompt to edit.",
   "adminMasterPrompt.builtInBadge": "Built-in",
   "adminMasterPrompt.content": "Prompt content",
+  "adminMasterPrompt.outputFormat": "Output Format placeholder",
+  "adminMasterPrompt.outputFormatHelp":
+    "Optional instructions inserted only where this master prompt contains {outputFormat}. Leave it blank only when the prompt does not use that placeholder.",
   "adminMasterPrompt.defaultBadge": "Default",
   "adminMasterPrompt.defaultFailed": "Cannot set default",
   "adminMasterPrompt.defaultSaved": "Default saved",

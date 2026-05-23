@@ -8,6 +8,7 @@ import type {
   MasterPromptAttributeOption,
 } from "@videoai/contracts";
 import { Button } from "../ui/button";
+import { FeedbackToast, useFeedbackToast } from "../ui/feedback-toast";
 import { TextareaWithCounter } from "../ui/textarea-with-counter";
 
 type ApiSuccess<T> = {
@@ -150,6 +151,7 @@ async function saveConfig(attributes: MasterPromptAttribute[]) {
 }
 
 export function MasterPromptConfigManager() {
+  const { clearToast, showToast, toast } = useFeedbackToast();
   const [attributes, setAttributes] = useState<MasterPromptAttribute[]>(createInitialAttributes);
   const [jsonText, setJsonText] = useState(formatConfigJson(createInitialAttributes()));
   const [isEditingJson, setIsEditingJson] = useState(false);
@@ -187,7 +189,8 @@ export function MasterPromptConfigManager() {
         syncAttributes(nextAttributes);
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "Cannot load Master Prompt Config.");
+          const message = loadError instanceof Error ? loadError.message : "Cannot load Master Prompt Config.";
+          setError(message);
         }
       } finally {
         if (!cancelled) {
@@ -279,11 +282,15 @@ export function MasterPromptConfigManager() {
     try {
       const parsed = parseConfigJson(jsonText);
       syncAttributes(parsed);
-      setMessage("JSON applied.");
+      const message = "JSON applied.";
+      setMessage(message);
       setError("");
+      showToast({ type: "success", message });
     } catch (jsonError) {
+      const message = jsonError instanceof Error ? jsonError.message : "Invalid JSON.";
       setMessage("");
-      setError(jsonError instanceof Error ? jsonError.message : "Invalid JSON.");
+      setError(message);
+      showToast({ type: "error", message });
     }
   }
 
@@ -295,16 +302,30 @@ export function MasterPromptConfigManager() {
       const attributesToSave = isEditingJson ? parseConfigJson(jsonText) : parseConfigJson(formatConfigJson(attributes));
       const saved = await saveConfig(attributesToSave);
       syncAttributes(saved.attributes.length > 0 ? saved.attributes : createInitialAttributes());
-      setMessage("Master Prompt Config saved.");
+      const message = "Master Prompt Config saved.";
+      setMessage(message);
+      showToast({ type: "success", message });
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Cannot save Master Prompt Config.");
+      const message = saveError instanceof Error ? saveError.message : "Cannot save Master Prompt Config.";
+      setError(message);
+      showToast({ type: "error", message });
     } finally {
       setIsSaving(false);
     }
   }
 
+  function renderSaveButton() {
+    return (
+      <Button type="button" className="gap-2" disabled={isSaving || isLoading} onClick={() => void handleSave()}>
+        {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+        Save config
+      </Button>
+    );
+  }
+
   return (
     <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
+      <FeedbackToast toast={toast} onClose={clearToast} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-foreground">Master Prompt Config</h2>
@@ -313,10 +334,7 @@ export function MasterPromptConfigManager() {
             can select these options and include them only through {"{masterPromptAttributes}"}.
           </p>
         </div>
-        <Button type="button" className="gap-2" disabled={isSaving || isLoading} onClick={() => void handleSave()}>
-          {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-          Save config
-        </Button>
+        {renderSaveButton()}
       </div>
 
       {updatedLabel ? (
@@ -445,6 +463,10 @@ export function MasterPromptConfigManager() {
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="mt-6 flex justify-end border-t border-border pt-4">
+            {renderSaveButton()}
           </div>
         </>
       )}

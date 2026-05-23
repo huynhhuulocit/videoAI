@@ -20,6 +20,10 @@ const copy = {
     title: "Shots Attribute",
     description: "Manage Shots attribute catalogs used by Step 3 shot generation.",
   },
+  shot: {
+    title: "Shot Attribute",
+    description: "Manage Shot attribute catalogs used by Step 4 per-shot prompt creation.",
+  },
 } satisfies Record<AttributeCatalogType, { title: string; description: string }>;
 
 async function requireAdmin() {

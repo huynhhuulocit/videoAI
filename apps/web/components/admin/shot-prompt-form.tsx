@@ -4,10 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ADMIN_MASTER_PROMPT_PLACEHOLDERS,
+  type AttributeCatalog,
+  type AttributeCatalogConfig,
+  DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_SCRIPT_GENERATION_PROMPT,
+  DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_SHOT_GENERATION_PROMPT,
+  DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+  DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
+  DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
   MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+  MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   type MasterPrompt,
   type MasterPromptAttributeConfig,
   type MasterPromptAttributeSelection,
@@ -20,6 +28,7 @@ import { AiDebugDialog, type AiDebugDialogData } from "../ui/ai-debug-dialog";
 import { Badge } from "../ui/badge";
 import { Button, LinkButton } from "../ui/button";
 import { Card } from "../ui/card";
+import { FeedbackToast, useFeedbackToast } from "../ui/feedback-toast";
 import { MasterPromptField } from "../ui/master-prompt-field";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
@@ -44,6 +53,9 @@ function typeTitle(type: MasterPromptType) {
   }
   if (type === "shots") {
     return "Shots";
+  }
+  if (type === "shot") {
+    return "Shot";
   }
   return "Story Content";
 }
@@ -74,7 +86,23 @@ function defaultPromptTemplate(type: MasterPromptType) {
   if (type === "shots") {
     return DEFAULT_SHOT_GENERATION_PROMPT;
   }
+  if (type === "shot") {
+    return DEFAULT_SINGLE_SHOT_MASTER_PROMPT;
+  }
   return DEFAULT_SCRIPT_GENERATION_PROMPT;
+}
+
+function defaultOutputFormatTemplate(type: MasterPromptType) {
+  if (type === "scenario") {
+    return DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT;
+  }
+  if (type === "shots") {
+    return DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT;
+  }
+  if (type === "shot") {
+    return DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT;
+  }
+  return DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT;
 }
 
 function emptyAttributeSelection(): MasterPromptAttributeSelection {
@@ -83,6 +111,40 @@ function emptyAttributeSelection(): MasterPromptAttributeSelection {
 
 function getPromptAttributeSelection(prompt: MasterPrompt | null | undefined): MasterPromptAttributeSelection {
   return prompt?.attributeSelection ?? emptyAttributeSelection();
+}
+
+function getPromptWorkflowAttributeSelection(prompt: MasterPrompt | null | undefined): MasterPromptAttributeSelection {
+  return prompt?.workflowAttributeSelection ?? emptyAttributeSelection();
+}
+
+function workflowCatalogType(type: MasterPromptType) {
+  return type === "scripts" ? "story" : type;
+}
+
+function workflowAttributeTitle(type: MasterPromptType) {
+  if (type === "scenario") {
+    return "Scenario Attribute";
+  }
+  if (type === "shots") {
+    return "Shots Attribute";
+  }
+  if (type === "shot") {
+    return "Shot Attribute";
+  }
+  return "Story Attribute";
+}
+
+function workflowAttributePlaceholder(type: MasterPromptType) {
+  if (type === "scenario") {
+    return "{scenarioAttributes}";
+  }
+  if (type === "shots") {
+    return "{shotsAttributes}";
+  }
+  if (type === "shot") {
+    return "{shotAttributes}";
+  }
+  return "{storyAttributes}";
 }
 
 function getGroup(config: MasterPromptConfig, type: MasterPromptType) {
@@ -167,12 +229,64 @@ function renderMasterPromptAttributePreview(
   return content.replaceAll(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER, lines.join("\n"));
 }
 
+function renderWorkflowAttributePreview(
+  content: string,
+  type: MasterPromptType,
+  selection: MasterPromptAttributeSelection,
+  catalog: AttributeCatalog | null,
+) {
+  const hasSelectedOptions = selection.attributes.some((attribute) => attribute.optionIds.length > 0);
+  if (!hasSelectedOptions) {
+    return content;
+  }
+  const placeholder = workflowAttributePlaceholder(type);
+  if (!content.includes(placeholder)) {
+    return content;
+  }
+  if (!catalog) {
+    throw new Error(`${workflowAttributeTitle(type)} catalog is required before using ${placeholder}.`);
+  }
+  const lines = selection.attributes.flatMap((selectedAttribute) => {
+    const attribute = catalog.attributes.find((candidate) => candidate.id === selectedAttribute.attributeId);
+    if (!attribute) {
+      throw new Error(`${workflowAttributeTitle(type)} "${selectedAttribute.attributeId}" is not configured.`);
+    }
+    const selectedOptions = selectedAttribute.optionIds.map((optionId) => {
+      const option = attribute.options.find((candidate) => candidate.id === optionId);
+      if (!option) {
+        throw new Error(`${workflowAttributeTitle(type)} option "${optionId}" is not configured.`);
+      }
+      return option.name;
+    });
+    return selectedOptions.length > 0
+      ? [`${attribute.name}: ${selectedOptions.join(", ")}`]
+      : [];
+  });
+  if (lines.length === 0) {
+    return content;
+  }
+  return content.replaceAll(placeholder, lines.join("\n"));
+}
+
+function renderOutputFormatPreview(content: string, outputFormat: string) {
+  if (!content.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER)) {
+    return content;
+  }
+  const trimmedOutputFormat = outputFormat.trim();
+  if (!trimmedOutputFormat) {
+    throw new Error("Output Format is required before using {outputFormat}.");
+  }
+  return content.replaceAll(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER, trimmedOutputFormat);
+}
+
 export function MasterPromptList({ config: initialConfig, type }: MasterPromptListProps) {
   const { t } = useI18n();
+  const { clearToast, showToast, toast } = useFeedbackToast();
   const [config, setConfig] = useState(initialConfig);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [busyPromptId, setBusyPromptId] = useState("");
+  const [busyPromptAction, setBusyPromptAction] = useState<"default" | "delete" | null>(null);
 
   const activeGroup = useMemo(() => getGroup(config, type), [config, type]);
 
@@ -192,11 +306,14 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
       return;
     }
     if (prompt.isDefault) {
-      setErrorMessage(t("adminMasterPrompt.deleteDefaultBlocked"));
+      const message = t("adminMasterPrompt.deleteDefaultBlocked");
+      setErrorMessage(message);
       setStatusMessage("");
+      showToast({ type: "error", message });
       return;
     }
     setBusyPromptId(prompt.id);
+    setBusyPromptAction("delete");
     setStatusMessage("");
     setErrorMessage("");
     try {
@@ -211,11 +328,16 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
         throw new Error(await readApiError(response));
       }
       await refreshConfig();
-      setStatusMessage(t("adminMasterPrompt.deleted"));
+      const message = t("adminMasterPrompt.deleted");
+      setStatusMessage(message);
+      showToast({ type: "success", message });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("adminMasterPrompt.deleteFailed"));
+      const message = error instanceof Error ? error.message : t("adminMasterPrompt.deleteFailed");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
     } finally {
       setBusyPromptId("");
+      setBusyPromptAction(null);
     }
   }
 
@@ -224,6 +346,7 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
       return;
     }
     setBusyPromptId(prompt.id);
+    setBusyPromptAction("default");
     setStatusMessage("");
     setErrorMessage("");
     try {
@@ -238,16 +361,22 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
         throw new Error(await readApiError(response));
       }
       await refreshConfig();
-      setStatusMessage(t("adminMasterPrompt.defaultSaved"));
+      const message = t("adminMasterPrompt.defaultSaved");
+      setStatusMessage(message);
+      showToast({ type: "success", message });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("adminMasterPrompt.defaultFailed"));
+      const message = error instanceof Error ? error.message : t("adminMasterPrompt.defaultFailed");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
     } finally {
       setBusyPromptId("");
+      setBusyPromptAction(null);
     }
   }
 
   return (
     <div className="space-y-5">
+      <FeedbackToast toast={toast} onClose={clearToast} />
       <Card
         title={`${typeTitle(type)} ${t("adminMasterPrompt.prompts")}`}
         action={
@@ -309,7 +438,11 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
                     disabled={Boolean(busyPromptId) || prompt.isBuiltIn || prompt.isDefault}
                     onClick={() => void setDefaultPrompt(prompt)}
                   >
-                    {busyPromptId === prompt.id ? <Loader2 size={15} className="animate-spin" /> : <Star size={15} />}
+                    {busyPromptId === prompt.id && busyPromptAction === "default" ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Star size={15} />
+                    )}
                     {t("adminMasterPrompt.setDefault")}
                   </Button>
                   <Button
@@ -319,7 +452,11 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
                     disabled={Boolean(busyPromptId) || prompt.isBuiltIn}
                     onClick={() => void deletePrompt(prompt)}
                   >
-                    {busyPromptId === prompt.id ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                    {busyPromptId === prompt.id && busyPromptAction === "delete" ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={15} />
+                    )}
                     {t("adminMasterPrompt.delete")}
                   </Button>
                 </div>
@@ -335,6 +472,7 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
 export function MasterPromptEditor({ config, type, promptId, source }: MasterPromptEditorProps) {
   const router = useRouter();
   const { t } = useI18n();
+  const { clearToast, showToast, toast } = useFeedbackToast();
   const activeGroup = useMemo(() => getGroup(config, type), [config, type]);
   const existingPrompt = promptId
     ? activeGroup.prompts.find((prompt) => prompt.id === promptId) ?? null
@@ -349,13 +487,23 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
     initialPrompt && !initialPrompt.isBuiltIn ? initialPrompt.name : `${typeTitle(type)} master prompt`,
   );
   const [draftContent, setDraftContent] = useState(initialPrompt?.content ?? defaultPromptTemplate(type));
+  const [draftOutputFormat, setDraftOutputFormat] = useState(
+    initialPrompt?.outputFormat ?? defaultOutputFormatTemplate(type),
+  );
   const [draftAttributeSelection, setDraftAttributeSelection] = useState<MasterPromptAttributeSelection>(
     getPromptAttributeSelection(initialPrompt),
   );
+  const [draftWorkflowAttributeSelection, setDraftWorkflowAttributeSelection] = useState<MasterPromptAttributeSelection>(
+    getPromptWorkflowAttributeSelection(initialPrompt),
+  );
   const [masterPromptAttributeConfig, setMasterPromptAttributeConfig] =
     useState<MasterPromptAttributeConfig | null>(null);
+  const [workflowAttributeCatalog, setWorkflowAttributeCatalog] = useState<AttributeCatalog | null>(null);
+  const [workflowAttributeError, setWorkflowAttributeError] = useState("");
   const [expandedAttributeIds, setExpandedAttributeIds] = useState<Record<string, boolean>>({});
   const [expandedOptionHelpIds, setExpandedOptionHelpIds] = useState<Record<string, boolean>>({});
+  const [expandedWorkflowAttributeIds, setExpandedWorkflowAttributeIds] = useState<Record<string, boolean>>({});
+  const [expandedWorkflowOptionHelpIds, setExpandedWorkflowOptionHelpIds] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSettingDefault, setIsSettingDefault] = useState(false);
@@ -364,6 +512,7 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
     isMissingPrompt ? "Master prompt was not found or has been archived." : "",
   );
   const [debugDialog, setDebugDialog] = useState<AiDebugDialogData | null>(null);
+  const isProcessing = isSaving || isDeleting || isSettingDefault;
 
   useEffect(() => {
     let cancelled = false;
@@ -387,22 +536,51 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
       }
     }
 
+    async function loadWorkflowAttributeCatalog() {
+      try {
+        const catalogType = workflowCatalogType(type);
+        const response = await fetch(`${apiBaseUrl}/api/v1/admin/attribute-catalogs?type=${catalogType}`, {
+          headers: { "x-request-id": `web-${Date.now()}` },
+        });
+        if (!response.ok) {
+          throw new Error(await readApiError(response));
+        }
+        const payload = (await response.json()) as ApiSuccess<AttributeCatalogConfig>;
+        if (!cancelled) {
+          setWorkflowAttributeCatalog(payload.data.defaultCatalog);
+          setWorkflowAttributeError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setWorkflowAttributeCatalog(null);
+          setWorkflowAttributeError(
+            error instanceof Error ? error.message : `Cannot load ${workflowAttributeTitle(type)} catalog.`,
+          );
+        }
+      }
+    }
+
     void loadMasterPromptAttributeConfig();
+    void loadWorkflowAttributeCatalog();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [type]);
 
   async function savePrompt() {
     if (isMissingPrompt) {
+      const message = "Master prompt was not found or has been archived.";
       setStatusMessage("");
-      setErrorMessage("Master prompt was not found or has been archived.");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
       return;
     }
     if (!draftName.trim() || !draftContent.trim()) {
+      const message = t("adminMasterPrompt.required");
       setStatusMessage("");
-      setErrorMessage(t("adminMasterPrompt.required"));
+      setErrorMessage(message);
+      showToast({ type: "error", message });
       return;
     }
 
@@ -425,7 +603,9 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
             ...(isCreating ? { type } : {}),
             name: draftName,
             content: draftContent,
+            outputFormat: draftOutputFormat,
             attributeSelection: draftAttributeSelection,
+            workflowAttributeSelection: draftWorkflowAttributeSelection,
           }),
         },
       );
@@ -435,13 +615,17 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
       }
 
       const payload = (await response.json()) as ApiSuccess<MasterPrompt>;
-      setStatusMessage(t("adminMasterPrompt.saved"));
+      const message = t("adminMasterPrompt.saved");
+      setStatusMessage(message);
+      showToast({ type: "success", message });
       if (isCreating) {
         router.replace(masterPromptEditHref(type, payload.data));
       }
       router.refresh();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("adminMasterPrompt.saveFailed"));
+      const message = error instanceof Error ? error.message : t("adminMasterPrompt.saveFailed");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
     } finally {
       setIsSaving(false);
     }
@@ -452,8 +636,10 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
       return;
     }
     if (existingPrompt.isDefault) {
-      setErrorMessage(t("adminMasterPrompt.deleteDefaultBlocked"));
+      const message = t("adminMasterPrompt.deleteDefaultBlocked");
+      setErrorMessage(message);
       setStatusMessage("");
+      showToast({ type: "error", message });
       return;
     }
 
@@ -477,7 +663,9 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
       router.replace(masterPromptListHref(type));
       router.refresh();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("adminMasterPrompt.deleteFailed"));
+      const message = error instanceof Error ? error.message : t("adminMasterPrompt.deleteFailed");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
     } finally {
       setIsDeleting(false);
     }
@@ -505,10 +693,14 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
         throw new Error(await readApiError(response));
       }
 
-      setStatusMessage(t("adminMasterPrompt.defaultSaved"));
+      const message = t("adminMasterPrompt.defaultSaved");
+      setStatusMessage(message);
+      showToast({ type: "success", message });
       router.refresh();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("adminMasterPrompt.defaultFailed"));
+      const message = error instanceof Error ? error.message : t("adminMasterPrompt.defaultFailed");
+      setErrorMessage(message);
+      showToast({ type: "error", message });
     } finally {
       setIsSettingDefault(false);
     }
@@ -520,20 +712,45 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
     try {
       setDebugDialog({
         title: `${typeTitle(type)} master prompt`,
-        help: "Exact admin preview. Only {masterPromptAttributes} is rendered here; user runtime placeholders stay unchanged.",
-        value: renderMasterPromptAttributePreview(
-          draftContent,
-          draftAttributeSelection,
-          masterPromptAttributeConfig,
+        help: "Exact admin preview. {masterPromptAttributes} and {outputFormat} are rendered from this draft; user runtime placeholders stay unchanged.",
+        value: renderOutputFormatPreview(
+          renderWorkflowAttributePreview(
+            renderMasterPromptAttributePreview(
+              draftContent,
+              draftAttributeSelection,
+              masterPromptAttributeConfig,
+            ),
+            type,
+            draftWorkflowAttributeSelection,
+            workflowAttributeCatalog,
+          ),
+          draftOutputFormat,
         ),
       });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Cannot render master prompt preview.");
+      const message = error instanceof Error ? error.message : "Cannot render master prompt preview.";
+      setErrorMessage(message);
+      showToast({ type: "error", message });
     }
+  }
+
+  function renderSaveButton(className = "") {
+    return (
+      <Button
+        type="button"
+        className={`gap-2 ${className}`}
+        disabled={isProcessing || isMissingPrompt}
+        onClick={() => void savePrompt()}
+      >
+        {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+        {t("adminMasterPrompt.save")}
+      </Button>
+    );
   }
 
   return (
     <div className="space-y-5">
+      <FeedbackToast toast={toast} onClose={clearToast} />
       <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -544,9 +761,12 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
               {typeTitle(type)} master prompt editor.
             </p>
           </div>
-          <LinkButton href={masterPromptListHref(type)} variant="secondary" className="gap-2">
-            <ArrowLeft size={16} /> Back to list
-          </LinkButton>
+          <div className="flex flex-wrap justify-end gap-2">
+            {renderSaveButton()}
+            <LinkButton href={masterPromptListHref(type)} variant="secondary" className="gap-2">
+              <ArrowLeft size={16} /> Back to list
+            </LinkButton>
+          </div>
         </div>
 
         {statusMessage ? (
@@ -580,6 +800,15 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
             onChange={(event) => setDraftContent(event.target.value)}
             placeholderSuggestions={ADMIN_MASTER_PROMPT_PLACEHOLDERS[type]}
             className="min-h-[420px] resize-y"
+          />
+          <MasterPromptField
+            id="adminMasterPromptOutputFormat"
+            label={t("adminMasterPrompt.outputFormat")}
+            help={t("adminMasterPrompt.outputFormatHelp")}
+            rows={8}
+            value={draftOutputFormat}
+            onChange={(event) => setDraftOutputFormat(event.target.value)}
+            className="min-h-[220px] resize-y"
           />
           <div className="rounded-lg border border-border bg-white p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -694,15 +923,133 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
               </div>
             )}
           </div>
+          <div className="rounded-lg border border-border bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">{workflowAttributeTitle(type)}</h3>
+                <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+                  Select options from the active Admin {workflowAttributeTitle(type)} catalog for this prompt. The admin preview renders them only when the prompt content contains {workflowAttributePlaceholder(type)}.
+                </p>
+              </div>
+              <Badge variant="info">{selectedOptionCount(draftWorkflowAttributeSelection)} selected</Badge>
+            </div>
+            {workflowAttributeError ? (
+              <div className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+                {workflowAttributeError}
+              </div>
+            ) : null}
+            {!workflowAttributeCatalog ? (
+              <div className="mt-3 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                No active {workflowAttributeTitle(type)} catalog exists. Open{" "}
+                <a href={`/admin/${workflowCatalogType(type)}/attributes`} className="font-medium text-sky-700 underline">
+                  {workflowAttributeTitle(type)}
+                </a>{" "}
+                to create and set a default catalog.
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-md bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
+                  <span className="font-semibold">{workflowAttributeCatalog.name}</span>
+                  {workflowAttributeCatalog.description ? ` - ${workflowAttributeCatalog.description}` : ""}
+                </div>
+                {workflowAttributeCatalog.attributes.map((attribute, attributeIndex) => (
+                  <div key={attribute.id} className="rounded-md border border-border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                            {attributeIndex + 1}
+                          </span>
+                          <span className="font-medium text-foreground">{attribute.name}</span>
+                        </div>
+                      </div>
+                      {attribute.description ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-9 w-9 px-0"
+                          aria-label={`Show ${attribute.name} helper`}
+                          title={attribute.description}
+                          onClick={() =>
+                            setExpandedWorkflowAttributeIds((current) => ({
+                              ...current,
+                              [attribute.id]: !current[attribute.id],
+                            }))
+                          }
+                        >
+                          <Info size={15} />
+                        </Button>
+                      ) : null}
+                    </div>
+                    {expandedWorkflowAttributeIds[attribute.id] ? (
+                      <div className="mt-3 rounded-md bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
+                        {attribute.description}
+                      </div>
+                    ) : null}
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      {attribute.options.map((option) => {
+                        const optionHelpKey = `${attribute.id}:${option.id}`;
+                        const isOptionHelpOpen = Boolean(expandedWorkflowOptionHelpIds[optionHelpKey]);
+                        return (
+                          <div
+                            key={option.id}
+                            className={`rounded-md border px-3 py-2 text-sm ${
+                              isSelected(draftWorkflowAttributeSelection, attribute.id, option.id)
+                                ? "border-sky-200 bg-sky-50"
+                                : "border-border bg-white"
+                            }`}
+                          >
+                            <div className="flex min-w-0 items-start justify-between gap-2">
+                              <label className="flex min-w-0 flex-1 items-start gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected(draftWorkflowAttributeSelection, attribute.id, option.id)}
+                                  onChange={(event) =>
+                                    setDraftWorkflowAttributeSelection((current) =>
+                                      toggleSelection(current, attribute.id, option.id, event.target.checked),
+                                    )
+                                  }
+                                  className="mt-1"
+                                />
+                                <span className="min-w-0 truncate font-medium text-foreground">{option.name}</span>
+                              </label>
+                              {option.description ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="h-7 w-7 shrink-0 px-0"
+                                  aria-label={`Show ${option.name} helper`}
+                                  title={option.description}
+                                  onClick={() =>
+                                    setExpandedWorkflowOptionHelpIds((current) => ({
+                                      ...current,
+                                      [optionHelpKey]: !current[optionHelpKey],
+                                    }))
+                                  }
+                                >
+                                  <Info size={14} />
+                                </Button>
+                              ) : null}
+                            </div>
+                            {isOptionHelpOpen ? (
+                              <p className="mt-2 rounded-md bg-white/70 px-2 py-1.5 text-xs leading-5 text-sky-800">
+                                {option.description}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">{t("adminMasterPrompt.freeFormHelp")}</p>
         </div>
       </section>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" className="gap-2" disabled={isSaving || isMissingPrompt} onClick={() => void savePrompt()}>
-          {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-          {t("adminMasterPrompt.save")}
-        </Button>
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Button type="button" variant="secondary" className="gap-2" onClick={openPromptPreview}>
           <FileText size={16} />
           Prompt
@@ -727,6 +1074,7 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
           {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
           {t("adminMasterPrompt.delete")}
         </Button>
+        {renderSaveButton()}
       </div>
 
       <AiDebugDialog

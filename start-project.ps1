@@ -90,6 +90,26 @@ function Assert-RequiredEnv {
   }
 }
 
+function Get-PortFromUrl {
+  param(
+    [string]$Url,
+    [int]$DefaultPort,
+    [string]$Name
+  )
+
+  try {
+    $uri = [Uri]$Url
+  } catch {
+    throw "$Name must be a valid URL with a host and optional port."
+  }
+
+  if ($uri.Port -gt 0) {
+    return $uri.Port
+  }
+
+  return $DefaultPort
+}
+
 function Invoke-Checked {
   param(
     [string]$FilePath,
@@ -238,6 +258,21 @@ function Wait-Port {
   throw "$Name did not start on port $Port within $TimeoutSeconds seconds."
 }
 
+function Ensure-DockerServicePort {
+  param(
+    [string]$ServiceName,
+    [int]$Port,
+    [string]$Name
+  )
+
+  if (Test-Port -Port $Port) {
+    return
+  }
+
+  Write-Step "$Name is not publishing port $Port; recreating Docker service '$ServiceName'"
+  Invoke-Checked "docker" @("compose", "-f", $DockerComposeFile, "up", "-d", "--force-recreate", $ServiceName)
+}
+
 function Wait-Http {
   param(
     [string]$Url,
@@ -361,6 +396,8 @@ if ($env:SITE_GATE_ENABLED -eq "true") {
   Assert-RequiredEnv @("SITE_GATE_USERNAME", "SITE_GATE_PASSWORD", "SITE_GATE_SECRET")
 }
 
+$RedisPort = Get-PortFromUrl -Url $env:REDIS_URL -DefaultPort 6379 -Name "REDIS_URL"
+
 if (-not (Test-Path -LiteralPath (Join-Path $Root "node_modules"))) {
   Write-Step "Installing npm dependencies"
   Invoke-Checked "npm.cmd" @("install")
@@ -378,8 +415,10 @@ if (-not $SkipDocker) {
   Write-Step "Starting PostgreSQL and Redis"
   Invoke-Checked "docker" @("info")
   Invoke-Checked "docker" @("compose", "-f", $DockerComposeFile, "up", "-d")
+  Ensure-DockerServicePort -ServiceName "postgres" -Port 55432 -Name "PostgreSQL"
+  Ensure-DockerServicePort -ServiceName "redis" -Port $RedisPort -Name "Redis"
   Wait-Port -Port 55432 -Name "PostgreSQL" -TimeoutSeconds 90
-  Wait-Port -Port 56379 -Name "Redis" -TimeoutSeconds 60
+  Wait-Port -Port $RedisPort -Name "Redis" -TimeoutSeconds 60
 }
 
 if (-not $SkipDbSetup) {

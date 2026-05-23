@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   CreateTemplateRequestSchema,
   GenerateTemplateRequestSchema,
+  MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   TemplateAttributeSchema,
   UpdateTemplateRequestSchema,
   type ApiError,
@@ -161,7 +162,11 @@ export class TemplatesController {
       body.masterPrompt ?? config.templateSelectionPrompt,
       "Scenario master prompt"
     );
-    const prompt = this.buildTemplateGenerationPrompt(masterPrompt, body.idea);
+    const prompt = this.buildTemplateGenerationPrompt(
+      masterPrompt,
+      body.idea,
+      config.templateSelectionOutputFormat
+    );
     let rawRequest: ProviderRequest;
 
     try {
@@ -343,7 +348,11 @@ export class TemplatesController {
     return ok({ deleted: result.count > 0 });
   }
 
-  private buildTemplateGenerationPrompt(masterPrompt: string, idea: string) {
+  private buildTemplateGenerationPrompt(
+    masterPrompt: string,
+    idea: string,
+    outputFormat: string | null | undefined
+  ) {
     const outputContract = JSON.stringify(
       {
         name: "Reusable scenario name",
@@ -368,11 +377,18 @@ export class TemplatesController {
     );
     return this.renderOptionalPromptPlaceholders(masterPrompt, {
       story: idea,
-      attributes: outputContract
+      attributes: outputContract,
+      outputFormat: outputFormat ?? ""
     });
   }
 
   private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {
+    if (template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) && !values.outputFormat?.trim()) {
+      throw new AiTemplateGenerationError(
+        "VALIDATION_ERROR",
+        "Output Format is required before using {outputFormat}."
+      );
+    }
     return Object.entries(values).reduce(
       (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
       template

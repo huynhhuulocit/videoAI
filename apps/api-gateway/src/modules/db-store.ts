@@ -3,13 +3,19 @@ import { prisma, type Prisma } from "@videoai/database";
 import {
   ContentModeSchema,
   DEFAULT_SCRIPT_GENERATION_PROMPT,
+  DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_SHOT_GENERATION_PROMPT,
+  DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
+  DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+  DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
   DEFAULT_TEMPLATE_SELECTION_PROMPT,
+  DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
   AttributeCatalogAttributeSchema,
   AttributeCatalogTypeSchema,
   FlowTypeSchema,
   JobStatusSchema,
   MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER,
+  MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   MasterPromptAttributeConfigSchema,
   MasterPromptAttributeSelectionSchema,
   MasterPromptAttributeSchema,
@@ -72,7 +78,7 @@ export const defaultUserId = "user_001";
 export const defaultAdminId = "admin_001";
 
 const encryptedKeyPrefix = "enc:v1";
-const masterPromptTypes = ["scenario", "shots", "scripts"] as const satisfies readonly MasterPromptType[];
+const masterPromptTypes = ["scenario", "shots", "scripts", "shot"] as const satisfies readonly MasterPromptType[];
 
 function normalizeProvider(provider: string): Provider {
   return ProviderSchema.parse(provider);
@@ -143,7 +149,23 @@ function defaultMasterPromptContent(type: MasterPromptType) {
   if (type === "shots") {
     return DEFAULT_SHOT_GENERATION_PROMPT;
   }
+  if (type === "shot") {
+    return DEFAULT_SINGLE_SHOT_MASTER_PROMPT;
+  }
   return DEFAULT_SCRIPT_GENERATION_PROMPT;
+}
+
+function defaultMasterPromptOutputFormat(type: MasterPromptType) {
+  if (type === "scenario") {
+    return DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT;
+  }
+  if (type === "shots") {
+    return DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT;
+  }
+  if (type === "shot") {
+    return DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT;
+  }
+  return DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT;
 }
 
 function defaultMasterPromptName(type: MasterPromptType) {
@@ -152,6 +174,9 @@ function defaultMasterPromptName(type: MasterPromptType) {
   }
   if (type === "shots") {
     return "Built-in Shots master prompt";
+  }
+  if (type === "shot") {
+    return "Built-in Shot master prompt";
   }
   return "Built-in Story Content master prompt";
 }
@@ -163,7 +188,9 @@ function builtInMasterPrompt(type: MasterPromptType): MasterPrompt {
     type,
     name: defaultMasterPromptName(type),
     content: defaultMasterPromptContent(type),
+    outputFormat: defaultMasterPromptOutputFormat(type),
     attributeSelection: { attributes: [] },
+    workflowAttributeSelection: { attributes: [] },
     isDefault: true,
     status: "active",
     isBuiltIn: true,
@@ -284,7 +311,7 @@ export async function getDefaultAttributeCatalog(typeInput: AttributeCatalogType
     return row ? mapAttributeCatalog(type, row) : null;
   }
   const row = await prisma.shotAttributeCatalog.findFirst({
-    where: { status: "active", isDefault: true },
+    where: { type, status: "active", isDefault: true },
     orderBy: { updatedAt: "desc" }
   });
   return row ? mapAttributeCatalog(type, row) : null;
@@ -314,7 +341,11 @@ export function mapMasterPrompt(row: DbMasterPrompt): MasterPrompt {
     type: MasterPromptTypeSchema.parse(row.type),
     name: row.name,
     content: row.content,
+    outputFormat: row.outputFormat ?? "",
     attributeSelection: MasterPromptAttributeSelectionSchema.parse(row.attributeSelection ?? { attributes: [] }),
+    workflowAttributeSelection: MasterPromptAttributeSelectionSchema.parse(
+      row.workflowAttributeSelection ?? { attributes: [] }
+    ),
     isDefault: row.isDefault,
     status: MasterPromptStatusSchema.parse(row.status),
     isBuiltIn: false,
@@ -350,17 +381,24 @@ export function mapAiConfig(
   videoKeyStatus: ProviderKeyStatus,
   masterPrompts: {
     scenarioPrompt: string;
+    scenarioOutputFormat: string;
     shotsPrompt: string;
+    shotsOutputFormat: string;
     scriptsPrompt: string;
+    scriptsOutputFormat: string;
   }
 ): AiConfig {
   return {
     contentMode: ContentModeSchema.parse(row.contentMode),
+    showUserMasterPrompts: row.showUserMasterPrompts,
     promptProvider: normalizeProvider(row.promptProvider),
     promptModel: row.promptModel,
     shotGenerationPrompt: masterPrompts.shotsPrompt,
+    shotGenerationOutputFormat: masterPrompts.shotsOutputFormat,
     scriptGenerationPrompt: masterPrompts.scriptsPrompt,
+    scriptGenerationOutputFormat: masterPrompts.scriptsOutputFormat,
     templateSelectionPrompt: masterPrompts.scenarioPrompt,
+    templateSelectionOutputFormat: masterPrompts.scenarioOutputFormat,
     promptKeyStatus,
     videoProvider: normalizeProvider(row.videoProvider),
     videoModel: row.videoModel,
@@ -400,6 +438,7 @@ export async function getDefaultMasterPrompt(type: MasterPromptType, legacyPromp
       id: `legacy_${type}`,
       name: `Legacy ${type} master prompt`,
       content: legacyContent,
+      outputFormat: "",
       isBuiltIn: true
     };
   }
@@ -407,9 +446,32 @@ export async function getDefaultMasterPrompt(type: MasterPromptType, legacyPromp
   return builtInMasterPrompt(type);
 }
 
+export async function getConfiguredDefaultMasterPrompt(type: MasterPromptType) {
+  const defaultPrompt = await prisma.masterPrompt.findFirst({
+    where: {
+      type,
+      status: "active",
+      isDefault: true
+    },
+    orderBy: { updatedAt: "desc" }
+  });
+  if (defaultPrompt) {
+    return mapMasterPrompt(defaultPrompt);
+  }
+
+  const firstPrompt = await prisma.masterPrompt.findFirst({
+    where: {
+      type,
+      status: "active"
+    },
+    orderBy: { updatedAt: "desc" }
+  });
+  return firstPrompt ? mapMasterPrompt(firstPrompt) : null;
+}
+
 export async function getDefaultMasterPromptContent(type: MasterPromptType, legacyPrompt?: string | null) {
   const prompt = await getDefaultMasterPrompt(type, legacyPrompt);
-  return renderMasterPromptAttributes(prompt.content, prompt.attributeSelection);
+  return renderMasterPromptText(prompt);
 }
 
 export async function getMasterPromptAttributeConfig(): Promise<MasterPromptAttributeConfig> {
@@ -469,6 +531,57 @@ function selectedMasterPromptAttributeText(
   return selectedLines.join("\n");
 }
 
+function masterPromptWorkflowCatalogType(type: MasterPromptType): AttributeCatalogType {
+  return type === "scripts" ? "story" : type;
+}
+
+function selectedWorkflowAttributeText(
+  catalog: AttributeCatalog,
+  selection: MasterPromptAttributeSelection
+) {
+  const selectedLines = selection.attributes.flatMap((selectedAttribute) => {
+    const attribute = catalog.attributes.find((candidate) => candidate.id === selectedAttribute.attributeId);
+    if (!attribute) {
+      throw new Error(`${catalog.name} Attribute "${selectedAttribute.attributeId}" is not configured.`);
+    }
+    const selectedOptions = selectedAttribute.optionIds.map((optionId) => {
+      const option = attribute.options.find((candidate) => candidate.id === optionId);
+      if (!option) {
+        throw new Error(`${catalog.name} Attribute option "${optionId}" is not configured.`);
+      }
+      return option.name;
+    });
+    return selectedOptions.length > 0
+      ? [`${attribute.name}: ${selectedOptions.join(", ")}`]
+      : [];
+  });
+
+  if (selectedLines.length === 0) {
+    throw new Error(`${catalog.name} Attribute selection is empty.`);
+  }
+
+  return selectedLines.join("\n");
+}
+
+export async function validateMasterPromptWorkflowAttributeSelection(
+  typeInput: MasterPromptType,
+  rawSelection?: MasterPromptAttributeSelection | null
+) {
+  const selection = MasterPromptAttributeSelectionSchema.parse(rawSelection ?? { attributes: [] });
+  const hasSelectedOptions = selection.attributes.some((attribute) => attribute.optionIds.length > 0);
+  if (!hasSelectedOptions) {
+    return selection;
+  }
+
+  const catalogType = masterPromptWorkflowCatalogType(typeInput);
+  const catalog = await getDefaultAttributeCatalog(catalogType);
+  if (!catalog) {
+    throw new Error(`${catalogType} Attribute catalog is required before selecting workflow attributes on this master prompt.`);
+  }
+  selectedWorkflowAttributeText(catalog, selection);
+  return selection;
+}
+
 export async function renderMasterPromptAttributes(
   content: string,
   rawSelection?: MasterPromptAttributeSelection | null
@@ -484,6 +597,30 @@ export async function renderMasterPromptAttributes(
   const selection = MasterPromptAttributeSelectionSchema.parse(rawSelection ?? { attributes: [] });
   const renderedAttributes = selectedMasterPromptAttributeText(config.attributes, selection);
   return content.replaceAll(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER, renderedAttributes);
+}
+
+export function renderMasterPromptOutputFormat(
+  content: string,
+  outputFormat: string | null | undefined
+) {
+  if (!content.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER)) {
+    return content;
+  }
+
+  const trimmedOutputFormat = outputFormat?.trim();
+  if (!trimmedOutputFormat) {
+    throw new Error("Output Format is required before using {outputFormat}.");
+  }
+
+  return content.replaceAll(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER, trimmedOutputFormat);
+}
+
+export async function renderMasterPromptText(prompt: MasterPrompt) {
+  const withMasterPromptAttributes = await renderMasterPromptAttributes(
+    prompt.content,
+    prompt.attributeSelection
+  );
+  return renderMasterPromptOutputFormat(withMasterPromptAttributes, prompt.outputFormat);
 }
 
 export async function validateMasterPromptAttributeSelection(
@@ -502,6 +639,10 @@ export async function validateMasterPromptAttributeSelection(
   }
   await renderMasterPromptAttributes(content, selection);
   return selection;
+}
+
+export function validateMasterPromptOutputFormat(content: string, outputFormat: string | null | undefined) {
+  renderMasterPromptOutputFormat(content, outputFormat);
 }
 
 export function assertNoMasterPromptAttributePlaceholder(value: string | null | undefined) {
@@ -545,13 +686,22 @@ export async function createMasterPrompt(input: {
   type: MasterPromptType;
   name: string;
   content: string;
+  outputFormat?: string;
   attributeSelection?: MasterPromptAttributeSelection;
+  workflowAttributeSelection?: MasterPromptAttributeSelection;
 }) {
   const type = MasterPromptTypeSchema.parse(input.type);
+  const content = input.content.trim();
+  const outputFormat = input.outputFormat?.trim() ?? "";
   const attributeSelection = await validateMasterPromptAttributeSelection(
-    input.content.trim(),
+    content,
     input.attributeSelection
   );
+  const workflowAttributeSelection = await validateMasterPromptWorkflowAttributeSelection(
+    type,
+    input.workflowAttributeSelection
+  );
+  validateMasterPromptOutputFormat(content, outputFormat);
   return prisma.$transaction(async (tx) => {
     const activeCount = await tx.masterPrompt.count({
       where: { type, status: "active" }
@@ -561,8 +711,10 @@ export async function createMasterPrompt(input: {
       data: {
         type,
         name: input.name.trim(),
-        content: input.content.trim(),
+        content,
+        outputFormat,
         attributeSelection: attributeSelection as unknown as Prisma.InputJsonValue,
+        workflowAttributeSelection: workflowAttributeSelection as unknown as Prisma.InputJsonValue,
         status: "active",
         isDefault: shouldBeDefault,
         createdByAdminId: defaultAdminId
@@ -574,24 +726,41 @@ export async function createMasterPrompt(input: {
 
 export async function updateMasterPrompt(
   id: string,
-  input: { name?: string; content?: string; attributeSelection?: MasterPromptAttributeSelection }
+  input: {
+    name?: string;
+    content?: string;
+    outputFormat?: string;
+    attributeSelection?: MasterPromptAttributeSelection;
+    workflowAttributeSelection?: MasterPromptAttributeSelection;
+  }
 ) {
   const existing = await prisma.masterPrompt.findFirstOrThrow({
     where: { id, status: "active" }
   });
+  const type = MasterPromptTypeSchema.parse(existing.type);
   const nextContent = input.content?.trim() ?? existing.content;
+  const nextOutputFormat = input.outputFormat?.trim() ?? existing.outputFormat ?? "";
   const nextSelection = input.attributeSelection
     ? await validateMasterPromptAttributeSelection(nextContent, input.attributeSelection)
     : await validateMasterPromptAttributeSelection(
         nextContent,
         MasterPromptAttributeSelectionSchema.parse(existing.attributeSelection ?? { attributes: [] })
       );
+  const nextWorkflowSelection = input.workflowAttributeSelection
+    ? await validateMasterPromptWorkflowAttributeSelection(type, input.workflowAttributeSelection)
+    : await validateMasterPromptWorkflowAttributeSelection(
+        type,
+        MasterPromptAttributeSelectionSchema.parse(existing.workflowAttributeSelection ?? { attributes: [] })
+      );
+  validateMasterPromptOutputFormat(nextContent, nextOutputFormat);
   const prompt = await prisma.masterPrompt.update({
     where: { id: existing.id },
     data: {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
       ...(input.content !== undefined ? { content: input.content.trim() } : {}),
-      attributeSelection: nextSelection as unknown as Prisma.InputJsonValue
+      ...(input.outputFormat !== undefined ? { outputFormat: input.outputFormat.trim() } : {}),
+      attributeSelection: nextSelection as unknown as Prisma.InputJsonValue,
+      workflowAttributeSelection: nextWorkflowSelection as unknown as Prisma.InputJsonValue
     }
   });
   return mapMasterPrompt(prompt);
@@ -695,19 +864,28 @@ export async function getActiveAiConfig(): Promise<AiConfig> {
   ] = await Promise.all([
     getProviderKeyStatus(config.promptProvider),
     getProviderKeyStatus(config.videoProvider),
-    getDefaultMasterPromptContent("scenario"),
-    getDefaultMasterPromptContent("shots"),
-    getDefaultMasterPromptContent("scripts")
+    getDefaultMasterPrompt("scenario"),
+    getDefaultMasterPrompt("shots"),
+    getDefaultMasterPrompt("scripts")
+  ]);
+  const [scenarioPromptContent, shotsPromptContent, scriptsPromptContent] = await Promise.all([
+    renderMasterPromptText(scenarioPrompt),
+    renderMasterPromptText(shotsPrompt),
+    renderMasterPromptText(scriptsPrompt)
   ]);
   return mapAiConfig(config, promptKeyStatus, videoKeyStatus, {
-    scenarioPrompt,
-    shotsPrompt,
-    scriptsPrompt
+    scenarioPrompt: scenarioPromptContent,
+    scenarioOutputFormat: scenarioPrompt.outputFormat,
+    shotsPrompt: shotsPromptContent,
+    shotsOutputFormat: shotsPrompt.outputFormat,
+    scriptsPrompt: scriptsPromptContent,
+    scriptsOutputFormat: scriptsPrompt.outputFormat
   });
 }
 
 export async function replaceActiveAiConfig(input: {
   contentMode: "script" | "video";
+  showUserMasterPrompts?: boolean | undefined;
   promptProvider: Provider;
   promptModel: string;
   videoProvider: Provider;
@@ -727,6 +905,8 @@ export async function replaceActiveAiConfig(input: {
     prisma.aiSiteConfig.create({
       data: {
         contentMode: input.contentMode,
+        showUserMasterPrompts:
+          input.showUserMasterPrompts ?? activeConfig?.showUserMasterPrompts ?? false,
         promptProvider,
         promptModel: input.promptModel,
         shotGenerationPrompt: activeConfig?.shotGenerationPrompt ?? null,

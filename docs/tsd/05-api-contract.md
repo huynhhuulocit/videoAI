@@ -129,7 +129,7 @@ Archives a project by marking it non-active. Archived projects no longer appear 
 
 ### `POST /api/v1/projects/{projectId}/template-selection/analyze`
 
-Uses the active prompt provider/model to analyze the current Scenario story against a selected Kịch bản/scenario template. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override after replacing any placeholders present in that prompt. The provider returns strict JSON with selected option IDs. The API normalizes the response, saves the resulting `templateSelection` on the project, creates AI request/response logs and returns a completed job.
+Uses the active prompt provider/model to analyze the current Scenario story against a selected Kịch bản/scenario template. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override after replacing any placeholders present in that prompt. Temporary `masterPrompt` overrides are accepted only when Admin Site Config `showUserMasterPrompts=true`; otherwise the request is rejected and clients should omit the field. The provider returns strict JSON with selected option IDs. The API normalizes the response, saves the resulting `templateSelection` on the project, creates AI request/response logs and returns a completed job.
 
 Request:
 
@@ -342,7 +342,7 @@ Lists all active shot plans owned by the current user. Shot plans are reusable b
 
 ### `POST /api/v1/shots/generate`
 
-Generates a user-owned shot plan from story content. The API reads the active admin prompt provider/model and uses the optional request `masterPrompt` as a temporary `Shots` prompt override; when omitted, it uses the active admin default `Shots` master prompt. It optionally replaces placeholders, does not append hidden story/attribute/duration text, calls the provider with the saved encrypted provider key, stores the redacted raw provider request plus raw response in AI logs/job result, validates the returned JSON, and persists the generated shot JSON in PostgreSQL. In the project workspace, `attributes` should include the selected Step 2 Kịch bản/scenario options formatted as compact plan attributes such as `genre=Folk Tale,Drama;` only when the prompt includes `{attributes}`.
+Generates a user-owned shot plan from story content. The API reads the active admin prompt provider/model and uses the optional request `masterPrompt` as a temporary `Shots` prompt override only when Admin Site Config `showUserMasterPrompts=true`; when `showUserMasterPrompts=false`, any non-empty `masterPrompt` override is rejected. When omitted, it uses the active admin default `Shots` master prompt. It optionally replaces placeholders, does not append hidden story/attribute/duration text, calls the provider with the saved encrypted provider key, stores the redacted raw provider request plus raw response in AI logs/job result, validates the returned JSON, and persists the generated shot JSON in PostgreSQL. In the project workspace, `attributes` should include the selected Step 2 Kịch bản/scenario options formatted as compact plan attributes such as `genre=Folk Tale,Drama;` only when the prompt includes `{attributes}`.
 
 For ChatGPT, the provider request uses the OpenAI Responses API with `text.format.type = "json_schema"`, `strict = true`, and `additionalProperties: false` on every schema object. Backend validation rejects provider output with missing required fields or durations outside `1-8`.
 
@@ -437,17 +437,20 @@ Soft deletes a shot plan by marking it archived.
 Compatibility endpoints retained during migration:
 
 - `GET /api/v1/projects/{projectId}/shots`
+- `POST /api/v1/projects/{projectId}/shots`
 - `POST /api/v1/projects/{projectId}/shots/generate`
 - `PATCH /api/v1/projects/{projectId}/shots/{shotPlanId}`
 - `DELETE /api/v1/projects/{projectId}/shots/{shotPlanId}`
 
-Standalone user-facing shot-plan UI is removed. Project and One Click shot workflows use the project-scoped endpoints so generated shot plans are linked to the current project without requiring the old `/shots` pages.
+`POST /api/v1/projects/{projectId}/shots` persists a user-edited or pasted normalized shot-plan JSON after the workspace has applied it to local shot cards. It requires `name`, `sourceText`, `durationSeconds`, and at least one `shots[]` item using the same `VideoShotPlan` shot JSON structure as generated plans.
+
+Standalone user-facing shot-plan UI is removed. Project and One Click shot workflows use the project-scoped endpoints so generated or pasted shot plans are linked to the current project without requiring the old `/shots` pages.
 
 ## 9. Prompt and Script APIs
 
 ### `POST /api/v1/projects/{projectId}/prompts/generate`
 
-Starts Step 1 Story Content generation from Scenario. The optional `masterPrompt` is a temporary `Story Content` master prompt override for this request only; when omitted, runtime uses the active admin default. The persisted master-prompt type key remains `scripts` for compatibility. Runtime data is included only through placeholders present in the selected prompt. This endpoint calls the active prompt provider/model; it must not return locally generated fallback content when provider execution fails.
+Starts Step 1 Story Content generation from Scenario. The optional `masterPrompt` is a temporary `Story Content` master prompt override for this request only and is accepted only when Admin Site Config `showUserMasterPrompts=true`; when `showUserMasterPrompts=false`, any non-empty override is rejected. When omitted, runtime uses the active admin default. The persisted master-prompt type key remains `scripts` for compatibility. Runtime data is included only through placeholders present in the selected prompt. This endpoint calls the active prompt provider/model; it must not return locally generated fallback content when provider execution fails.
 
 Request:
 
@@ -612,6 +615,8 @@ Response:
 
 Starts video generation from a final prompt, script, or composed project shot prompt. The current local implementation creates a `video_generation` job, writes a video generation record, logs the AI request, and calls the configured video provider/model. It must not return a fake success when the provider is missing, unsupported, over quota, or returns an error.
 
+For Project and One Click Step 4, the web app first renders the active admin `Shot` master prompt for the selected shot using exact placeholder replacement only. The video endpoint receives the already-rendered `finalPrompt`; it does not append runtime context or substitute a fallback prompt.
+
 Request:
 
 ```json
@@ -695,25 +700,30 @@ Secrets must be masked. The response returns key status only:
 
 ### `PUT /api/v1/admin/ai-config`
 
-Updates content mode and models.
+Updates content mode, models, site config, and optionally rotates provider API keys supplied with the same request.
 
 Admin UI submits free-form provider/model values. The API normalizes provider names to lowercase and accepts any non-empty provider string; runtime provider execution still requires a matching adapter.
+`showUserMasterPrompts` controls whether user Project/One Click screens show editable master prompt fields. It defaults to `false`; when `false`, user generation APIs reject temporary `masterPrompt` overrides and use active admin defaults.
+If `promptApiKey` or `videoApiKey` is supplied, the API stores it encrypted for the corresponding provider and returns only key status, never key material.
 
 Request:
 
 ```json
 {
   "contentMode": "script",
+  "showUserMasterPrompts": false,
   "promptProvider": "chatgpt",
   "promptModel": "gpt-5.5",
+  "promptApiKey": "optional-new-secret",
   "videoProvider": "veo",
-  "videoModel": "veo-default"
+  "videoModel": "veo-default",
+  "videoApiKey": "optional-new-secret"
 }
 ```
 
 ### `PUT /api/v1/admin/ai-config/provider-keys/{provider}`
 
-Creates or rotates a provider API key. The provider path is normalized to lowercase before storage. The response returns key status only and never returns key material.
+Creates or rotates a provider API key. This endpoint remains available for API clients; the Admin UI saves keys through the shared `PUT /api/v1/admin/ai-config` action. The provider path is normalized to lowercase before storage. The response returns key status only and never returns key material.
 
 Request:
 
@@ -764,7 +774,7 @@ Response:
 
 ### `GET /api/v1/admin/master-prompts`
 
-Returns active master prompts grouped by type. Each group has one current default prompt. Built-in templates may appear in admin management only as read-only setup guidance; runtime AI calls require an active DB default prompt and do not use built-in prompt fallback.
+Returns active master prompts grouped by type. Each group has one current default prompt. Built-in templates may appear in admin management only as read-only setup guidance; runtime AI calls require an active DB default prompt and do not use built-in prompt fallback. Supported types are `scripts` (displayed as Story Content), `scenario`, `shots`, and `shot`.
 
 Response:
 
@@ -780,7 +790,11 @@ Response:
             "type": "scenario",
             "name": "Default scenario analyst",
             "content": "Choose matching scenario options.",
+            "outputFormat": "Return strict JSON only.",
             "attributeSelection": {
+              "attributes": []
+            },
+            "workflowAttributeSelection": {
               "attributes": []
             },
             "isDefault": true,
@@ -795,6 +809,7 @@ Response:
           "type": "scenario",
           "name": "Default scenario analyst",
           "content": "Choose matching scenario options.",
+          "outputFormat": "Return strict JSON only.",
           "isDefault": true,
           "status": "active",
           "isBuiltIn": false,
@@ -810,6 +825,7 @@ Response:
             "type": "shots",
             "name": "Built-in Shots master prompt",
             "content": "Split the story into continuous shots.",
+            "outputFormat": "Return the generated shots in the provider JSON schema.",
             "isDefault": true,
             "status": "active",
             "isBuiltIn": true,
@@ -822,6 +838,7 @@ Response:
           "type": "shots",
           "name": "Built-in Shots master prompt",
           "content": "Split the story into continuous shots.",
+          "outputFormat": "Return the generated shots in the provider JSON schema.",
           "isDefault": true,
           "status": "active",
           "isBuiltIn": true,
@@ -837,6 +854,7 @@ Response:
             "type": "scripts",
             "name": "Built-in Story Content master prompt",
             "content": "Create readable script and prompt content.",
+            "outputFormat": "Return a polished Story Content draft.",
             "isDefault": true,
             "status": "active",
             "isBuiltIn": true,
@@ -849,11 +867,41 @@ Response:
           "type": "scripts",
           "name": "Built-in Story Content master prompt",
           "content": "Create readable script and prompt content.",
+          "outputFormat": "Return a polished Story Content draft.",
           "isDefault": true,
           "status": "active",
           "isBuiltIn": true,
           "createdAt": "1970-01-01T00:00:00.000Z",
           "updatedAt": "1970-01-01T00:00:00.000Z"
+        }
+      },
+      {
+        "type": "shot",
+        "prompts": [
+          {
+            "id": "master_prompt_shot_default",
+            "type": "shot",
+            "name": "Default Shot master prompt",
+            "content": "Create the final video generation prompt for one shot.",
+            "outputFormat": "Return one polished video prompt for this shot.",
+            "isDefault": true,
+            "status": "active",
+            "isBuiltIn": false,
+            "createdAt": "2026-05-18T10:00:00.000Z",
+            "updatedAt": "2026-05-18T10:00:00.000Z"
+          }
+        ],
+        "defaultPrompt": {
+          "id": "master_prompt_shot_default",
+          "type": "shot",
+          "name": "Default Shot master prompt",
+          "content": "Create the final video generation prompt for one shot.",
+          "outputFormat": "Return one polished video prompt for this shot.",
+          "isDefault": true,
+          "status": "active",
+          "isBuiltIn": false,
+          "createdAt": "2026-05-18T10:00:00.000Z",
+          "updatedAt": "2026-05-18T10:00:00.000Z"
         }
       }
     ],
@@ -873,11 +921,20 @@ Request:
   "type": "shots",
   "name": "Narrative shots",
   "content": "Split the script into continuous visual shots.",
+  "outputFormat": "Return strict JSON using the configured provider schema.",
   "attributeSelection": {
     "attributes": [
       {
         "attributeId": "tone",
         "optionIds": ["tone-cinematic"]
+      }
+    ]
+  },
+  "workflowAttributeSelection": {
+    "attributes": [
+      {
+        "attributeId": "camera-style",
+        "optionIds": ["camera-style-close-up"]
       }
     ]
   }
@@ -886,10 +943,12 @@ Request:
 
 Validation:
 
-- `type` must be `scenario`, `shots` or `scripts`. The `scripts` key is displayed in admin/user UI as `Story Content`.
+- `type` must be `scenario`, `shots`, `scripts`, or `shot`. The `scripts` key is displayed in admin/user UI as `Story Content`; `shots` is Step 3 batch shot-list generation and `shot` is Step 4 per-shot prompt creation.
 - `name` and `content` are required.
 - Content may keep the recommended placeholder format, but placeholders are optional and saves do not validate their presence.
-- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`.
+- `outputFormat` is optional unless `content` contains `{outputFormat}`. When the token is present and `outputFormat` is blank, create/update/preview/runtime must fail with a clear validation error.
+- `workflowAttributeSelection` is admin-only and stores selected options from the active attribute catalog that matches the prompt type: Story Content uses Story Attribute, Scenario uses Scenario Attribute, Shots uses Shots Attribute, and Shot uses Shot Attribute.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `scenario` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `shot` uses `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
 - `{masterPromptAttributes}` is admin-only. It is suggested only in admin master prompt editors and renders from the prompt record's saved `attributeSelection`.
 - User-facing temporary master prompt overrides containing `{masterPromptAttributes}` are rejected.
 
@@ -903,7 +962,11 @@ Request:
 {
   "name": "Narrative shots v2",
   "content": "Updated instructions.",
+  "outputFormat": "Updated output instructions.",
   "attributeSelection": {
+    "attributes": []
+  },
+  "workflowAttributeSelection": {
     "attributes": []
   }
 }
@@ -1003,6 +1066,7 @@ Rules:
 Kept for read/write compatibility during migration. New admin UI should use `/admin/master-prompts`.
 
 - Runtime AI resolves the default `shots`, `scenario` and `scripts` master prompts from `config.master_prompts`; missing active defaults fail with `AI_CONFIG_MISSING`.
+- `GET` includes `showUserMasterPrompts` so Project and One Click can consistently decide whether to render user-editable master prompt textareas. It also returns the resolved `outputFormat`, `scenarioAnalysisOutputFormat`, and `scriptGenerationOutputFormat` fields used to render `{outputFormat}` when a selected master prompt contains that token.
 - `PATCH` still writes legacy `ai_site_configs` prompt columns and requires non-empty strings only; placeholder validation is no longer enforced.
 
 ## 13. Admin Log APIs
@@ -1052,7 +1116,7 @@ Scenario attribute management is admin-only. The user `/templates` UI is no long
 
 Admin endpoints:
 
-- `GET /api/v1/admin/attribute-catalogs?type=story|scenario|shots`
+- `GET /api/v1/admin/attribute-catalogs?type=story|scenario|shots|shot`
 - `POST /api/v1/admin/attribute-catalogs`
 - `GET /api/v1/admin/attribute-catalogs/{type}/{id}`
 - `PATCH /api/v1/admin/attribute-catalogs/{type}/{id}`
@@ -1092,4 +1156,5 @@ Catalog JSON:
 }
 ```
 
-Runtime data enters provider prompts only through explicit placeholders present in the selected prompt. New prompts should prefer `{storyAttributes}`, `{scenarioAttributes}`, and `{shotsAttributes}` instead of the legacy `{attributes}` token.
+Runtime data enters provider prompts only through explicit placeholders present in the selected prompt. New prompts should prefer `{storyAttributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, and `{shotAttributes}` instead of the legacy `{attributes}` token.
+Step 4 per-shot prompt rendering uses `GET /api/v1/attribute-catalogs/shot/default` for the active `Shot Attribute` catalog. The selected per-shot options are stored on each shot JSON object as `attributeSelection` and are included only when the active `Shot` master prompt contains `{shotAttributes}`.

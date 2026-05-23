@@ -1,4 +1,8 @@
 import { prisma, hashPassword } from "@videoai/database";
+import {
+  DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+  DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
+} from "@videoai/contracts";
 
 async function main() {
   const userPasswordHash = await hashPassword("User@123");
@@ -317,6 +321,7 @@ async function main() {
   await prisma.shotAttributeCatalog.upsert({
     where: { id: "shots_catalog_default" },
     update: {
+      type: "shots",
       name: "Default Shots attributes",
       description: "Shot-level controls used during shot plan generation.",
       attributes: [
@@ -363,6 +368,7 @@ async function main() {
     },
     create: {
       id: "shots_catalog_default",
+      type: "shots",
       name: "Default Shots attributes",
       description: "Shot-level controls used during shot plan generation.",
       attributes: [
@@ -399,6 +405,103 @@ async function main() {
               id: "transition-style-soft",
               name: "Soft transitions",
               description: "Gentle transitions with smooth pacing.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+  });
+
+  await prisma.shotAttributeCatalog.upsert({
+    where: { id: "shot_catalog_default" },
+    update: {
+      type: "shot",
+      name: "Default Shot attributes",
+      description: "Per-shot controls used when creating a final prompt for one shot.",
+      attributes: [
+        {
+          id: "visual-emphasis",
+          name: "Visual emphasis",
+          description: "The main visual priority for this individual shot.",
+          required: true,
+          options: [
+            {
+              id: "visual-emphasis-character",
+              name: "Character focus",
+              description: "Prioritize the character or subject expression and action.",
+            },
+            {
+              id: "visual-emphasis-environment",
+              name: "Environment focus",
+              description: "Prioritize setting, atmosphere, and surrounding visual context.",
+            },
+          ],
+        },
+        {
+          id: "motion-intensity",
+          name: "Motion intensity",
+          description: "How much movement the final shot prompt should emphasize.",
+          required: false,
+          options: [
+            {
+              id: "motion-intensity-subtle",
+              name: "Subtle movement",
+              description: "Small controlled motion and stable framing.",
+            },
+            {
+              id: "motion-intensity-active",
+              name: "Active movement",
+              description: "More visible action, camera motion, or subject movement.",
+            },
+          ],
+        },
+      ],
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+    create: {
+      id: "shot_catalog_default",
+      type: "shot",
+      name: "Default Shot attributes",
+      description: "Per-shot controls used when creating a final prompt for one shot.",
+      attributes: [
+        {
+          id: "visual-emphasis",
+          name: "Visual emphasis",
+          description: "The main visual priority for this individual shot.",
+          required: true,
+          options: [
+            {
+              id: "visual-emphasis-character",
+              name: "Character focus",
+              description: "Prioritize the character or subject expression and action.",
+            },
+            {
+              id: "visual-emphasis-environment",
+              name: "Environment focus",
+              description: "Prioritize setting, atmosphere, and surrounding visual context.",
+            },
+          ],
+        },
+        {
+          id: "motion-intensity",
+          name: "Motion intensity",
+          description: "How much movement the final shot prompt should emphasize.",
+          required: false,
+          options: [
+            {
+              id: "motion-intensity-subtle",
+              name: "Subtle movement",
+              description: "Small controlled motion and stable framing.",
+            },
+            {
+              id: "motion-intensity-active",
+              name: "Active movement",
+              description: "More visible action, camera motion, or subject movement.",
             },
           ],
         },
@@ -460,6 +563,17 @@ async function main() {
         "{attributeJsonFormat}",
       ].join("\n"),
     ],
+    [
+      "shot",
+      [
+        "Create Shot attribute JSON for one final per-shot prompt.",
+        "",
+        "Source:",
+        "{inputText}",
+        "",
+        "{attributeJsonFormat}",
+      ].join("\n"),
+    ],
   ] as const) {
     await prisma.attributeGenerationPrompt.upsert({
       where: { type },
@@ -475,6 +589,33 @@ async function main() {
     });
   }
 
+  await prisma.masterPrompt.upsert({
+    where: { id: "master_prompt_shot_default" },
+    update: {
+      type: "shot",
+      name: "Default Shot master prompt",
+      content: DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+      outputFormat: DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
+      attributeSelection: { attributes: [] },
+      workflowAttributeSelection: { attributes: [] },
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+    create: {
+      id: "master_prompt_shot_default",
+      type: "shot",
+      name: "Default Shot master prompt",
+      content: DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+      outputFormat: DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
+      attributeSelection: { attributes: [] },
+      workflowAttributeSelection: { attributes: [] },
+      isDefault: true,
+      status: "active",
+      createdByAdminId: "admin_001",
+    },
+  });
+
   await prisma.aiSiteConfig.updateMany({
     where: { isActive: true },
     data: { isActive: false }
@@ -483,6 +624,7 @@ async function main() {
   await prisma.aiSiteConfig.create({
     data: {
       contentMode: "script",
+      showUserMasterPrompts: false,
       promptProvider: "gemini",
       promptModel: "gemini-2.5-flash",
       videoProvider: "veo",

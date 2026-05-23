@@ -245,7 +245,25 @@ JSON shape:
         "name": "Camera",
         "value": "Stable close-up"
       }
-    ]
+    ],
+    "attributeSelection": {
+      "catalogId": "shot_catalog_default",
+      "catalogName": "Default Shot attributes",
+      "type": "shot",
+      "attributes": [
+        {
+          "id": "visual-emphasis",
+          "name": "Visual emphasis",
+          "required": true,
+          "options": [
+            {
+              "id": "visual-emphasis-character",
+              "name": "Character focus"
+            }
+          ]
+        }
+      ]
+    }
   }
 ]
 ```
@@ -256,20 +274,21 @@ Rules:
 - Existing project-linked shot plans remain readable and editable by the owner.
 - A shot duration must be between 1 and 8 seconds to match current Veo constraints.
 - User can edit plan-level attributes; those attributes are saved with the shot plan and included when the plan is selected for prompt composition.
-- User can edit shots, add/remove shots and add/remove arbitrary shot attributes.
+- User can edit shots, add/remove shots, edit generated shot attributes, and select admin-defined per-shot `attributeSelection` from the active `Shot Attribute` catalog.
 - Each shot can store `mediaIds` so Scenario prompts can use media references scoped to that shot.
 
 ### 3.6. `config.master_prompts`
 
-Purpose: admin-managed Story Content, Scenario, and Shots master prompts.
+Purpose: admin-managed Story Content, Scenario, Shots, and Shot master prompts.
 
 Fields:
 
 - `id`
-- `type`: `scripts`, `scenario`, or `shots`
+- `type`: `scripts`, `scenario`, `shots`, or `shot`
 - `name`
 - `content`
 - `attribute_selection`: nullable JSONB storing the admin-selected Master Prompt Config options for that prompt
+- `workflow_attribute_selection`: nullable JSONB storing admin-selected options from the active Story, Scenario, Shots, or Shot Attribute catalog for that prompt
 - `is_default`
 - `status`
 - `created_by_admin_id`
@@ -279,6 +298,7 @@ Fields:
 Rules:
 
 - `attribute_selection` is admin-only. It is not editable from user Project or One Click screens.
+- `workflow_attribute_selection` is admin-only prompt-authoring metadata. Story Content prompts use the active Story Attribute catalog, Scenario prompts use the active Scenario Attribute catalog, Shots prompts use the active Shots Attribute catalog, and Shot prompts use the active Shot Attribute catalog.
 - Runtime uses `attribute_selection` only when the prompt content contains `{masterPromptAttributes}`.
 - Temporary user prompt overrides are not allowed to use `{masterPromptAttributes}`.
 
@@ -315,9 +335,9 @@ JSON shape:
 
 Rules:
 
-- This config is shared by Story Content, Scenario, and Shots master prompts.
+- This config is shared by Story Content, Scenario, Shots, and Shot master prompts.
 - The config is admin-only and must not appear as a selectable user workflow attribute.
-- The config is separate from Story, Scenario, and Shots user workflow Attribute catalogs.
+- The config is separate from Story, Scenario, Shots, and Shot workflow Attribute catalogs.
 - Shot selections used for prompt generation should be persisted in AI request payload and prompt provider metadata.
 
 ### 3.6. `config.ai_site_configs`
@@ -328,10 +348,11 @@ Fields:
 
 - `id`
 - `content_mode`: `script` or `video`
+- `show_user_master_prompts`: boolean, default `false`; controls whether user Project/One Click workspaces show editable Story Content, Scenario, Shots and Shot master prompt fields
 - `prompt_provider`
 - `prompt_model`
 - `shot_generation_prompt`: nullable legacy admin-managed prompt for `shot_generation`; new CRUD uses `config.master_prompts`
-- `shot_composer_prompt`: nullable admin-managed local prompt template used when a user clicks `Tạo Prompt` inside a shot card
+- `shot_composer_prompt`: nullable legacy local prompt template column; Step 4 now uses `config.master_prompts` type `shot` instead
 - `template_selection_prompt`: nullable legacy master prompt for `template_selection`; new CRUD uses `config.master_prompts`
 - `video_provider`
 - `video_model`
@@ -345,6 +366,7 @@ Rules:
 - Only one active config should exist at a time.
 - `shot_generation_prompt` and `template_selection_prompt` remain read-compatibility columns during migration to `config.master_prompts`; runtime AI requests do not use them as fallback.
 - Runtime master prompts keep a recommended placeholder format, but placeholder replacement is optional compatibility; backend does not append hidden runtime context to the selected prompt.
+- When `show_user_master_prompts` is `false`, user-facing generation requests must not accept temporary `masterPrompt` overrides. Runtime uses the active admin default prompt while prompt preview buttons may still show the rendered prompt.
 - Config updates should create audit records.
 
 ### 3.7. `config.master_prompts`
@@ -354,9 +376,10 @@ Purpose: admin-managed master prompts grouped by workflow type.
 Fields:
 
 - `id`
-- `type`: `scenario`, `shots` or `scripts`
+- `type`: `scenario`, `shots`, `scripts` or `shot`
 - `name`
 - `content`: master prompt instructions, usually with the recommended placeholder format
+- `output_format`: optional instructions inserted only when `content` contains `{outputFormat}`
 - `is_default`
 - `status`: `active`, `archived`
 - `created_by_admin_id`
@@ -375,7 +398,8 @@ Rules:
 - Deleting/archiving the current default is blocked until another active prompt of the same type is set as default.
 - If no active prompt exists for a type, runtime AI requests fail with `AI_CONFIG_MISSING`. Built-in prompt text is setup guidance only, not runtime fallback.
 - Prompt content is required but placeholders are optional.
-- Recommended placeholders by type: `scripts`/`Story Content` uses `{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`; `scenario` uses `{story}`, `{attributes}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `scenario` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `shot` uses `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
+- If `content` contains `{outputFormat}`, `output_format` is required for save/preview/runtime. The backend must fail clearly when it is missing instead of substituting fallback output instructions.
 
 ### 3.8. `config.ai_provider_keys`
 
@@ -566,8 +590,8 @@ Recommended defaults:
 - Admin-managed catalogs are stored separately from Master Prompts:
   - `content.story_attribute_catalogs`
   - `content.scenario_attribute_catalogs`
-  - `content.shot_attribute_catalogs`
+  - `content.shot_attribute_catalogs` with `type='shots'` for Step 3 and `type='shot'` for Step 4
 - Each catalog stores `id`, `name`, optional `description`, `attributes` JSONB, `is_default`, `status`, `created_by_admin_id`, `created_at`, and `updated_at`.
 - Catalog JSON uses `id`, `name`, `description`, `required`, and `options[]` with the same `id`, `name`, and `description` fields.
-- `config.attribute_generation_prompts` stores one Attribute Generation Prompt per type (`story`, `scenario`, `shots`). This prompt is not a Master Prompt and is used only to generate catalog JSON.
-- `projects.projects.attribute_selections` stores selected options keyed by `story`, `scenario`, and `shots`. Required attributes default to the first option but remain user-changeable as multi-select, as long as at least one option stays selected.
+- `config.attribute_generation_prompts` stores one Attribute Generation Prompt per type (`story`, `scenario`, `shots`, `shot`). This prompt is not a Master Prompt and is used only to generate catalog JSON.
+- `projects.projects.attribute_selections` stores selected options keyed by `story`, `scenario`, and `shots`. Per-shot Step 4 selections use each shot JSON object's `attributeSelection`. Required attributes default to the first option but remain user-changeable as multi-select, as long as at least one option stays selected.

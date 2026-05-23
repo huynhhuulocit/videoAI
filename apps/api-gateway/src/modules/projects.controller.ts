@@ -1,4 +1,5 @@
 ﻿import { BadRequestException, Body, Controller, Delete, Get, Inject, Param, Patch, Post } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { Prisma, prisma } from "@videoai/database";
 import { z } from "zod";
 import {
@@ -6,10 +7,12 @@ import {
   AnalyzeTemplateSelectionRequestSchema,
   AttributeCatalogAttributeSchema,
   CreateProjectRequestSchema,
+  CreateShotPlanRequestSchema,
   CreateScriptRequestSchema,
   CreateVideoRequestSchema,
   GeneratePromptRequestSchema,
   GenerateShotsRequestSchema,
+  MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   SaveProjectStoryContentRequestSchema,
   SaveProjectAttributeSelectionsRequestSchema,
   SaveProjectTemplateSelectionRequestSchema,
@@ -307,10 +310,44 @@ export class ProjectsController {
     return ok(shotPlans.map(mapVideoShotPlan));
   }
 
+  @Post(":projectId/shots")
+  async createShotPlan(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
+    const body = CreateShotPlanRequestSchema.parse(rawBody);
+    const project = await prisma.projectRecord.findFirst({
+      where: {
+        id: projectId,
+        ownerUserId: defaultUserId,
+        status: "active"
+      }
+    });
+
+    if (!project) {
+      throw new BadRequestException("Project is missing or archived.");
+    }
+
+    const shotPlan = await prisma.videoShotPlanRecord.create({
+      data: {
+        id: `shot_plan_${Date.now()}_${randomUUID().slice(0, 8)}`,
+        projectId,
+        ownerUserId: defaultUserId,
+        name: body.name,
+        description: body.description ?? null,
+        sourceText: body.sourceText,
+        durationSeconds: body.durationSeconds,
+        attributes: this.toJson(body.attributes),
+        shots: this.toJson(body.shots),
+        isDefault: false,
+        status: "active"
+      }
+    });
+
+    return ok(mapVideoShotPlan(shotPlan));
+  }
+
   @Post(":projectId/shots/generate")
   async generateShots(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
     const body = GenerateShotsRequestSchema.parse(rawBody);
-    this.assertUserPromptOverrideAllowed(body.masterPrompt);
+    await this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.shotPlansService.createShotGenerationJob(projectId, body));
   }
 
@@ -364,7 +401,7 @@ export class ProjectsController {
   @Post(":projectId/prompts/generate")
   async generatePrompt(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
     const body = GeneratePromptRequestSchema.parse(rawBody);
-    this.assertUserPromptOverrideAllowed(body.masterPrompt);
+    await this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.createJob("prompt_generation", projectId, body));
   }
 
@@ -440,7 +477,7 @@ export class ProjectsController {
   @Post(":projectId/template-selection/analyze")
   async analyzeTemplateSelection(@Param("projectId") projectId: string, @Body() rawBody: unknown) {
     const body = AnalyzeTemplateSelectionRequestSchema.parse(rawBody);
-    this.assertUserPromptOverrideAllowed(body.masterPrompt);
+    await this.assertUserPromptOverrideAllowed(body.masterPrompt);
     return ok(await this.createJob("template_selection", projectId, body));
   }
 
@@ -782,7 +819,6 @@ export class ProjectsController {
     const payload = this.toRecord(input);
     const mediaIds = this.extractMediaIds(input).map(String);
     const templateGuidance = this.createTemplateGuidance(payload.templateSelection);
-    const shotGuidance = this.createShotGuidance(payload.shotSelection);
 
     if (type === "shot_generation") {
       const sourceText = String(payload.sourceText ?? "");
@@ -832,8 +868,6 @@ export class ProjectsController {
         projectId,
         inputText,
         mediaIds,
-        shotGuidance,
-        templateGuidance,
         storyAttributes,
         config,
         masterPrompt
@@ -1078,7 +1112,8 @@ export class ProjectsController {
         id: sourceId,
         name: sourceName,
         attributes
-      }
+      },
+      config.templateSelectionOutputFormat
     );
     const rawRequest = this.buildTemplateSelectionProviderRequest(provider, model, prompt);
     const rawResponse = await this.callTemplateSelectionProvider(provider, model, rawRequest);
@@ -1138,7 +1173,8 @@ export class ProjectsController {
   private buildTemplateSelectionPrompt(
     masterPrompt: string,
     inputText: string,
-    template: { id: string; name: string; attributes: TemplateAttribute[] }
+    template: { id: string; name: string; attributes: TemplateAttribute[] },
+    outputFormat: string | null | undefined
   ) {
     const attributeCatalog = template.attributes.map((attribute) => ({
       attributeId: attribute.id,
@@ -1165,7 +1201,8 @@ export class ProjectsController {
       {
         story: inputText,
         attributes: attributeCatalogText,
-        scenarioAttributes: attributeCatalogText
+        scenarioAttributes: attributeCatalogText,
+        outputFormat: outputFormat ?? ""
       }
     );
 
@@ -1175,24 +1212,14 @@ export class ProjectsController {
   private buildScriptGenerationPrompt(
     configuredPrompt: string | null | undefined,
     inputText: string,
-    mediaIds: string[],
-    shotGuidance: string,
-    templateGuidance: string,
-    storyAttributes: string
+    storyAttributes: string,
+    outputFormat: string | null | undefined
   ) {
     const masterPrompt = this.requirePrompt(configuredPrompt, "Story Content master prompt");
-    const mediaSummary =
-      mediaIds.length > 0
-        ? `Use ${mediaIds.length} reference media file(s) to keep visual style, lighting, composition, and pacing consistent.`
-        : "";
-    const shotSelection = shotGuidance;
-    const scenarioSelection = templateGuidance;
     const renderedPrompt = this.renderOptionalPromptPlaceholders(masterPrompt, {
-      inputText,
-      mediaSummary,
-      shotSelection,
-      scenarioSelection,
-      storyAttributes
+      storyContent: inputText,
+      storyAttributes,
+      outputFormat: outputFormat ?? ""
     });
     return renderedPrompt;
   }
@@ -1201,8 +1228,6 @@ export class ProjectsController {
     projectId: string,
     inputText: string,
     mediaIds: string[],
-    shotGuidance: string,
-    templateGuidance: string,
     storyAttributes: string,
     config: AiConfig,
     configuredPrompt: string | null | undefined
@@ -1212,10 +1237,8 @@ export class ProjectsController {
     const prompt = this.buildScriptGenerationPrompt(
       configuredPrompt,
       inputText,
-      mediaIds,
-      shotGuidance,
-      templateGuidance,
-      storyAttributes
+      storyAttributes,
+      config.scriptGenerationOutputFormat
     );
     const rawRequest = this.buildStoryContentProviderRequest(provider, model, prompt);
     const result = await this.callStoryContentProvider(provider, model, rawRequest);
@@ -1625,7 +1648,8 @@ export class ProjectsController {
       sourceText,
       attributes,
       scenarioAttributes,
-      shotsAttributes
+      shotsAttributes,
+      config.shotGenerationOutputFormat
     );
     const rawResponse = await this.callShotProvider(provider, model, prompt);
     const shotPlan = this.normalizeAiShotPlan(rawResponse, {
@@ -1767,7 +1791,8 @@ export class ProjectsController {
     sourceText: string,
     attributes: VideoShotAttribute[],
     scenarioAttributes: VideoShotAttribute[],
-    shotsAttributes: VideoShotAttribute[]
+    shotsAttributes: VideoShotAttribute[],
+    outputFormat: string | null | undefined
   ) {
     const attributeText = attributes
       .filter((attribute) => attribute.name.trim() && attribute.value.trim())
@@ -1788,13 +1813,17 @@ export class ProjectsController {
         story: sourceText,
         attributes: attributeText,
         scenarioAttributes: scenarioAttributeText,
-        shotsAttributes: shotsAttributeText
+        shotsAttributes: shotsAttributeText,
+        outputFormat: outputFormat ?? ""
       }
     );
     return renderedPrompt;
   }
 
   private renderOptionalPromptPlaceholders(template: string, values: Record<string, string>) {
+    if (template.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER) && !values.outputFormat?.trim()) {
+      throw new AiJobError("VALIDATION_ERROR", "Output Format is required before using {outputFormat}.");
+    }
     return Object.entries(values).reduce(
       (rendered, [key, value]) => rendered.replaceAll(`{${key}}`, value),
       template
@@ -2340,11 +2369,19 @@ export class ProjectsController {
     }
   }
 
-  private assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined) {
+  private async assertUserPromptOverrideAllowed(masterPrompt: string | null | undefined) {
     try {
       assertNoMasterPromptAttributePlaceholder(masterPrompt);
     } catch (error) {
       throw new BadRequestException(error instanceof Error ? error.message : "Invalid master prompt override.");
+    }
+    if (masterPrompt?.trim()) {
+      const config = await getActiveAiConfig();
+      if (!config.showUserMasterPrompts) {
+        throw new BadRequestException(
+          "Temporary master prompt overrides are disabled by Admin Site Config."
+        );
+      }
     }
   }
 
@@ -2365,33 +2402,6 @@ export class ProjectsController {
     return [
       `Template attributes: ${parsed.data.templateName}`,
       ...selections.map((selection) => `- ${selection}`)
-    ].join("\n");
-  }
-
-  private createShotGuidance(rawSelection: unknown) {
-    const parsed = ShotSelectionSchema.safeParse(rawSelection);
-    if (!parsed.success || parsed.data.shots.length === 0) {
-      return "";
-    }
-
-    const planAttributes = parsed.data.attributes
-      .filter((attribute) => attribute.name && attribute.value)
-      .map((attribute) => `- ${attribute.name}: ${attribute.value}`);
-    const shots = parsed.data.shots.map((shot, index) => {
-      const attributes = shot.attributes
-        .filter((attribute) => attribute.name && attribute.value)
-        .map((attribute) => `   - ${attribute.name}: ${attribute.value}`);
-      return [
-        `${index + 1}. ${shot.title} (${shot.durationSeconds}s)`,
-        `   - Description: ${shot.description}`,
-        ...attributes
-      ].join("\n");
-    });
-
-    return [
-      `Selected shot plan: ${parsed.data.shotPlanName}`,
-      ...(planAttributes.length > 0 ? ["Plan-level attributes:", ...planAttributes] : []),
-      ...shots
     ].join("\n");
   }
 

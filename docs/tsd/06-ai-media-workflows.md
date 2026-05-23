@@ -135,9 +135,10 @@ Steps:
 12. If no saved key exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails for other reasons or returns invalid/contract-mismatched JSON, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to fake or mock shot generation.
 13. User can edit, add or remove shots, arbitrary shot attributes and the dedicated per-shot dialogue/voiceover textarea.
 14. User can upload reference media inside each shot card; validated media IDs are stored in that shot JSON as `mediaIds`.
-15. Any project workspace owned by the same user can load and select the saved shot plan, then compose a local prompt for each shot from the shot JSON, that shot's media references and the current template selection.
-16. Media-aware prompt popups show the saved image/video preview and metadata. Prompt copy remains text-only and does not copy image binaries from the media card or popup.
-17. The per-shot `Create Prompt` action uses the legacy local composer prompt from `config.ai_site_configs.shot_composer_prompt` or its built-in default, then appends structured shot context locally. Attribute placeholders render bracketed rows such as `[Start State]: ...`, `[Action & Motion]: ...`, `[End State]: ...`, and `[Voiceover Script]: "..."` for the `Dialogue` value. It must not call an AI provider.
+15. Step 4 loads the active admin `Shot` master prompt and active `Shot Attribute` catalog. The `Shot` prompt is singular and distinct from the Step 3 `Shots` prompt: `Shots` creates the shot-list JSON, while `Shot` creates the final prompt for one selected shot.
+16. User can select per-shot `Shot Attribute` options in each shot card. Required Shot attributes auto-select the first option and cannot be cleared to zero selections. The selection is saved on that shot JSON as `attributeSelection`.
+17. Media-aware prompt popups show the saved image/video preview and metadata. Prompt copy remains text-only and does not copy image binaries from the media card or popup.
+18. The per-shot `Prompt` action renders the active `Shot` master prompt with exact placeholder replacement only. Supported placeholders include `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{masterPromptAttributes}` and `{outputFormat}`. The UI must not append hidden runtime context, provider output contract text or fallback prompt content.
 
 ## 2.4. Script Prompt/Content Generation
 
@@ -145,7 +146,7 @@ Steps:
 
 1. User edits Step 1 `Story Content`, optionally edits the visible `Story Content` master prompt, then clicks `Generate Story Content`.
 2. API reads the active prompt provider/model config and uses the temporary request `masterPrompt` when present; otherwise it uses the active `Story Content` master prompt. If the active prompt is missing, the request fails with `AI_CONFIG_MISSING`. The persisted type key remains `scripts`.
-3. Backend replaces optional `Story Content` placeholders (`{inputText}`, `{mediaSummary}`, `{shotSelection}`, `{scenarioSelection}`) when present, then sends exactly the rendered master prompt. Runtime data is included only when the selected prompt contains the relevant placeholder.
+3. Backend replaces optional `Story Content` placeholders (`{storyContent}`, `{storyAttributes}`) when present, then sends exactly the rendered master prompt. Runtime data is included only when the selected prompt contains the relevant placeholder.
 4. API creates an AI request log with flow type `prompt_generation`, calls the active provider/model, and stores the redacted raw provider request plus raw provider response in the completed job/AI logs.
 5. The generated provider text is written back into the workspace `Story Content` textarea. The workspace shows a `Prompt` button before `Request` beside `Generate Story Content` so users can inspect exactly the rendered prompt after placeholder replacement; adjacent `Request`/`Response` buttons open the latest raw provider payloads in read-only popups. That textarea becomes the source of truth for scenario analysis, shot generation, per-shot prompt composition and script creation.
 6. If no saved key exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails or returns empty text, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to local/sample Story Content.
@@ -156,7 +157,7 @@ Steps:
 Rules:
 
 1. Admins manage one global Master Prompt Config under `/admin/master-prompt-config`.
-2. Story Content, Scenario, and Shots master prompt editors let admins select options from that config for each prompt record.
+2. Story Content, Scenario, Shots, and Shot master prompt editors let admins select options from that config for each prompt record.
 3. `{masterPromptAttributes}` is an admin-only placeholder. It appears only in admin master prompt placeholder suggestions.
 4. User Project and One Click screens must not show Master Prompt Attribute selectors or suggest `{masterPromptAttributes}`.
 5. Runtime replaces `{masterPromptAttributes}` only for active admin default prompts, using the prompt record's saved `attribute_selection`.
@@ -319,16 +320,19 @@ userId:projectId:operation:clientRequestId
 Workers must tolerate duplicate job execution and should check whether a result already exists before writing final output.
 ## 10. Attribute Catalog Workflow
 
-- Story, Scenario, and Shots attributes are admin-managed catalogs, separate from Master Prompts.
+- Story, Scenario, Shots, and Shot attributes are admin-managed catalogs, separate from Master Prompts.
 - Attribute Generation Prompt is saved per type and is used only for generating or editing catalog JSON. It is not loaded from Master Prompt.
 - Attribute generation uses exact placeholder replacement only. The supported generation placeholders are `{inputText}` and `{attributeJsonFormat}`.
 - Project and One Click load the active default catalog for each step:
   - Step 1 uses Story attributes.
   - Step 2 uses Scenario attributes.
   - Step 3 uses Shots attributes plus the saved Scenario selection when the prompt asks for it.
+  - Step 4 uses Shot attributes saved per shot.
 - Required attributes auto-select the first option when no saved selection exists. Users may multi-select or change options, but required attributes cannot be empty.
 - Master Prompt runtime data is included only when the prompt contains the explicit placeholder:
-  - Story Content: `{storyAttributes}`
-  - Scenario: `{scenarioAttributes}`
-  - Shots: `{scenarioAttributes}` and `{shotsAttributes}`
+  - Story Content: `{storyContent}`, `{storyAttributes}`, `{outputFormat}`
+  - Scenario: `{story}`, `{scenarioAttributes}`, `{outputFormat}`
+  - Shots: `{story}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`
+  - Shot: `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`
+- `{outputFormat}` renders from the Output Format textarea saved on the active master prompt. If the prompt contains `{outputFormat}` and that saved field is empty, the workflow fails with a clear validation error. No hidden output contract text is appended.
 - The legacy `{attributes}` token remains compatibility-only and should not be expanded for new defaults or docs.

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Check, FileText, Plus, Save, Sparkles, Star, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, FileText, Loader2, Plus, Save, Sparkles, Star, Trash2 } from "lucide-react";
 import type {
   AttributeCatalog,
   AttributeCatalogAttribute,
@@ -11,6 +11,7 @@ import type {
 import { Button, LinkButton } from "../ui/button";
 import { TextareaWithCounter } from "../ui/textarea-with-counter";
 import { AiDebugDialog, type AiDebugDialogData } from "../ui/ai-debug-dialog";
+import { FeedbackToast, useFeedbackToast } from "../ui/feedback-toast";
 
 type CatalogConfig = {
   type: AttributeCatalogType;
@@ -48,6 +49,7 @@ const typeLabel = {
   story: "Story",
   scenario: "Scenario",
   shots: "Shots",
+  shot: "Shot",
 } satisfies Record<AttributeCatalogType, string>;
 
 const inputClass =
@@ -263,11 +265,14 @@ function catalogEditHref(type: AttributeCatalogType, catalogId: string) {
 }
 
 export function AttributeCatalogList({ type, title, description }: AttributeCatalogListProps) {
+  const { clearToast, showToast, toast } = useFeedbackToast();
   const [catalogs, setCatalogs] = useState<AttributeCatalog[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
+  const [busyCatalogId, setBusyCatalogId] = useState("");
+  const [busyCatalogAction, setBusyCatalogAction] = useState<"default" | "delete" | null>(null);
 
   async function loadData() {
     setIsLoading(true);
@@ -276,7 +281,9 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
       const config = await apiGet<CatalogConfig>(`/admin/attribute-catalogs?type=${type}`);
       setCatalogs(config.catalogs);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Cannot load attribute catalogs.");
+      const message = loadError instanceof Error ? loadError.message : "Cannot load attribute catalogs.";
+      setError(message);
+      showToast({ type: "error", message });
     } finally {
       setIsLoading(false);
     }
@@ -289,6 +296,8 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
 
   async function setDefault(catalog: AttributeCatalog) {
     setIsBusy(true);
+    setBusyCatalogId(catalog.id);
+    setBusyCatalogAction("default");
     setError("");
     setMessage("");
     try {
@@ -299,11 +308,17 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
       setCatalogs((current) =>
         current.map((item) => ({ ...item, isDefault: item.id === updated.id })),
       );
-      setMessage("Default catalog updated.");
+      const message = "Default catalog updated.";
+      setMessage(message);
+      showToast({ type: "success", message });
     } catch (defaultError) {
-      setError(defaultError instanceof Error ? defaultError.message : "Cannot set default catalog.");
+      const message = defaultError instanceof Error ? defaultError.message : "Cannot set default catalog.";
+      setError(message);
+      showToast({ type: "error", message });
     } finally {
       setIsBusy(false);
+      setBusyCatalogId("");
+      setBusyCatalogAction(null);
     }
   }
 
@@ -312,21 +327,30 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
       return;
     }
     setIsBusy(true);
+    setBusyCatalogId(catalog.id);
+    setBusyCatalogAction("delete");
     setError("");
     setMessage("");
     try {
       await apiSend<{ archived: boolean }>("DELETE", `/admin/attribute-catalogs/${type}/${catalog.id}`);
       setCatalogs((current) => current.filter((item) => item.id !== catalog.id));
-      setMessage("Catalog deleted.");
+      const message = "Catalog deleted.";
+      setMessage(message);
+      showToast({ type: "success", message });
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Cannot delete catalog.");
+      const message = deleteError instanceof Error ? deleteError.message : "Cannot delete catalog.";
+      setError(message);
+      showToast({ type: "error", message });
     } finally {
       setIsBusy(false);
+      setBusyCatalogId("");
+      setBusyCatalogAction(null);
     }
   }
 
   return (
     <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
+      <FeedbackToast toast={toast} onClose={clearToast} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-foreground">{title}</h2>
@@ -384,7 +408,12 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
                     disabled={catalog.isDefault || isBusy}
                     onClick={() => void setDefault(catalog)}
                   >
-                    <Star size={15} /> Set default
+                    {busyCatalogId === catalog.id && busyCatalogAction === "default" ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Star size={15} />
+                    )}
+                    Set default
                   </Button>
                   <Button
                     type="button"
@@ -393,7 +422,12 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
                     disabled={catalog.isDefault || isBusy}
                     onClick={() => void deleteCatalog(catalog)}
                   >
-                    <Trash2 size={15} /> Delete
+                    {busyCatalogId === catalog.id && busyCatalogAction === "delete" ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={15} />
+                    )}
+                    Delete
                   </Button>
                 </div>
               </div>
@@ -407,6 +441,7 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
 
 export function AttributeCatalogEditor({ type, title, description, catalogId }: AttributeCatalogEditorProps) {
   const router = useRouter();
+  const { clearToast, showToast, toast } = useFeedbackToast();
   const isNewCatalog = !catalogId;
   const [selectedId, setSelectedId] = useState(catalogId ?? "");
   const [name, setName] = useState("");
@@ -422,6 +457,7 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<"generate" | "save" | null>(null);
   const [debugDialog, setDebugDialog] = useState<AiDebugDialogData | null>(null);
 
   const pageTitle = useMemo(() => {
@@ -549,11 +585,15 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
     try {
       const parsed = parseCatalogJson(jsonText);
       syncAttributes(parsed);
-      setMessage("JSON applied.");
+      const message = "JSON applied.";
+      setMessage(message);
       setError("");
+      showToast({ type: "success", message });
     } catch (jsonError) {
+      const message = jsonError instanceof Error ? jsonError.message : "Invalid JSON.";
       setMessage("");
-      setError(jsonError instanceof Error ? jsonError.message : "Invalid JSON.");
+      setError(message);
+      showToast({ type: "error", message });
     }
   }
 
@@ -569,6 +609,7 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
 
   async function saveCatalog() {
     setIsBusy(true);
+    setBusyAction("save");
     setMessage("");
     setError("");
     try {
@@ -591,20 +632,26 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
       const saved = selectedId
         ? await apiSend<AttributeCatalog>("PATCH", `/admin/attribute-catalogs/${type}/${selectedId}`, body)
         : await apiSend<AttributeCatalog>("POST", "/admin/attribute-catalogs", body);
-      setMessage("Catalog saved.");
+      const message = "Catalog saved.";
+      setMessage(message);
+      showToast({ type: "success", message });
       openCatalog(saved);
       if (!selectedId || selectedId !== saved.id) {
         router.replace(catalogEditHref(type, saved.id));
       }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Cannot save catalog.");
+      const message = saveError instanceof Error ? saveError.message : "Cannot save catalog.";
+      setError(message);
+      showToast({ type: "error", message });
     } finally {
       setIsBusy(false);
+      setBusyAction(null);
     }
   }
 
   async function generateAttributes() {
     setIsBusy(true);
+    setBusyAction("generate");
     setMessage("");
     setError("");
     try {
@@ -618,25 +665,43 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
       syncAttributes(result.attributes);
       setRawRequest(result.rawRequest);
       setRawResponse(result.rawResponse);
-      setMessage("Attributes generated.");
+      const message = "Attributes generated.";
+      setMessage(message);
+      showToast({ type: "success", message });
     } catch (generateError) {
-      setError(generateError instanceof Error ? generateError.message : "Cannot generate attributes.");
+      const message = generateError instanceof Error ? generateError.message : "Cannot generate attributes.";
+      setError(message);
+      showToast({ type: "error", message });
     } finally {
       setIsBusy(false);
+      setBusyAction(null);
     }
+  }
+
+  function renderSaveButton() {
+    return (
+      <Button type="button" className="gap-2" disabled={isBusy || isLoading} onClick={() => void saveCatalog()}>
+        {busyAction === "save" ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+        Save
+      </Button>
+    );
   }
 
   return (
     <>
       <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
+        <FeedbackToast toast={toast} onClose={clearToast} />
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-foreground">{pageTitle}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{description}</p>
           </div>
-          <LinkButton href={catalogListHref(type)} variant="secondary" className="gap-2">
-            <ArrowLeft size={16} /> Back to list
-          </LinkButton>
+          <div className="flex flex-wrap justify-end gap-2">
+            {renderSaveButton()}
+            <LinkButton href={catalogListHref(type)} variant="secondary" className="gap-2">
+              <ArrowLeft size={16} /> Back to list
+            </LinkButton>
+          </div>
         </div>
 
         {message ? (
@@ -706,7 +771,8 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
 
             <div className="mt-4 flex flex-wrap gap-2">
               <Button type="button" className="gap-2" disabled={isBusy} onClick={() => void generateAttributes()}>
-                <Sparkles size={16} /> Generate attributes
+                {busyAction === "generate" ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                Generate attributes
               </Button>
               <Button
                 type="button"
@@ -845,13 +911,11 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
               </Button>
             </div>
 
-            <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-4">
-              <Button type="button" className="gap-2" disabled={isBusy} onClick={() => void saveCatalog()}>
-                <Save size={16} /> Save
-              </Button>
+            <div className="mt-6 flex flex-wrap justify-end gap-2 border-t border-border pt-4">
               <LinkButton href={catalogNewHref(type)} variant="secondary">
                 New catalog
               </LinkButton>
+              {renderSaveButton()}
             </div>
           </>
         )}
