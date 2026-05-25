@@ -7,6 +7,7 @@ import type {
   AttributeCatalog,
   AttributeCatalogAttribute,
   AttributeCatalogType,
+  DataExample,
 } from "@videoai/contracts";
 import { Button, LinkButton } from "../ui/button";
 import { TextareaWithCounter } from "../ui/textarea-with-counter";
@@ -106,6 +107,37 @@ function makeId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 }
 
+function getUniqueCatalogId(baseId: string, usedIds: Set<string>) {
+  let candidate = baseId;
+  let index = 2;
+  while (usedIds.has(candidate)) {
+    candidate = `${baseId}-${index}`;
+    index += 1;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+function normalizeCatalogIds(attributes: AttributeCatalogAttribute[]) {
+  const usedAttributeIds = new Set<string>();
+  return attributes.map((attribute, attributeIndex) => {
+    const attributeBaseId = normalizeId(attribute.id || attribute.name, `attribute-${attributeIndex + 1}`);
+    const attributeId = getUniqueCatalogId(attributeBaseId, usedAttributeIds);
+    const usedOptionIds = new Set<string>();
+    return {
+      ...attribute,
+      id: attributeId,
+      options: attribute.options.map((option, optionIndex) => {
+        const optionBaseId = normalizeId(option.id || option.name, `${attributeId}-option-${optionIndex + 1}`);
+        return {
+          ...option,
+          id: getUniqueCatalogId(optionBaseId, usedOptionIds),
+        };
+      }),
+    };
+  });
+}
+
 function emptyAttribute(): AttributeCatalogAttribute {
   const id = makeId("attribute");
   return {
@@ -182,7 +214,7 @@ function parseCatalogJson(value: string): AttributeCatalogAttribute[] {
   if (attributes.length === 0) {
     throw new Error("At least one valid attribute is required.");
   }
-  return attributes;
+  return normalizeCatalogIds(attributes);
 }
 
 function parseCatalogJsonDraft(value: string): AttributeCatalogAttribute[] {
@@ -198,7 +230,7 @@ function parseCatalogJsonDraft(value: string): AttributeCatalogAttribute[] {
   if (!attributesInput) {
     throw new Error("JSON must contain an attributes array.");
   }
-  return attributesInput.map((attributeInput, attributeIndex): AttributeCatalogAttribute => {
+  return normalizeCatalogIds(attributesInput.map((attributeInput, attributeIndex): AttributeCatalogAttribute => {
     const attribute = attributeInput && typeof attributeInput === "object"
       ? attributeInput as Record<string, unknown>
       : {};
@@ -225,31 +257,27 @@ function parseCatalogJsonDraft(value: string): AttributeCatalogAttribute[] {
       required: Boolean(attribute.required),
       options: options.length > 0 ? options : [{ id: makeId("option"), name: "", description: "" }],
     };
-  });
+  }));
 }
 
-function getAttributeJsonFormat(type: AttributeCatalogType) {
-  return formatCatalogJson([
-    {
-      id: `${type}-mood`,
-      name: "Mood",
-      description: "Primary feeling or direction.",
-      required: true,
-      options: [
-        {
-          id: `${type}-mood-friendly`,
-          name: "Friendly",
-          description: "Warm, approachable, and easy to understand.",
-        },
-      ],
-    },
-  ]);
+function renderOutputFormat(outputFormat: string, attributeJsonFormat: string) {
+  return outputFormat.replaceAll("{attributeJsonFormat}", attributeJsonFormat);
 }
 
-function buildPromptPreview(prompt: string, sourceText: string, type: AttributeCatalogType) {
-  return prompt
-    .replaceAll("{inputText}", sourceText)
-    .replaceAll("{attributeJsonFormat}", getAttributeJsonFormat(type));
+function buildPromptPreview(input: {
+  prompt: string;
+  sourceText: string;
+  attributeJsonFormat: string;
+  attributeOutputFormat: string;
+}) {
+  const renderedOutputFormat = renderOutputFormat(
+    input.attributeOutputFormat,
+    input.attributeJsonFormat,
+  );
+  return input.prompt
+    .replaceAll("{inputText}", input.sourceText)
+    .replaceAll("{attributeJsonFormat}", input.attributeJsonFormat)
+    .replaceAll("{outputFormat}", renderedOutputFormat);
 }
 
 function catalogListHref(type: AttributeCatalogType) {
@@ -264,6 +292,10 @@ function catalogEditHref(type: AttributeCatalogType, catalogId: string) {
   return `${catalogListHref(type)}/${catalogId}`;
 }
 
+function catalogTemplateHref(type: AttributeCatalogType) {
+  return `${catalogListHref(type)}/data-example`;
+}
+
 export function AttributeCatalogList({ type, title, description }: AttributeCatalogListProps) {
   const { clearToast, showToast, toast } = useFeedbackToast();
   const [catalogs, setCatalogs] = useState<AttributeCatalog[]>([]);
@@ -273,16 +305,25 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
   const [isBusy, setIsBusy] = useState(false);
   const [busyCatalogId, setBusyCatalogId] = useState("");
   const [busyCatalogAction, setBusyCatalogAction] = useState<"default" | "delete" | null>(null);
+  const [dataExample, setDataExample] = useState<DataExample | null>(null);
+  const [dataExampleError, setDataExampleError] = useState("");
 
   async function loadData() {
     setIsLoading(true);
     setError("");
     try {
-      const config = await apiGet<CatalogConfig>(`/admin/attribute-catalogs?type=${type}`);
+      const [config, example] = await Promise.all([
+        apiGet<CatalogConfig>(`/admin/attribute-catalogs?type=${type}`),
+        apiGet<DataExample>(`/admin/data-examples/${type}`),
+      ]);
       setCatalogs(config.catalogs);
+      setDataExample(example);
+      setDataExampleError("");
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : "Cannot load attribute catalogs.";
       setError(message);
+      setDataExample(null);
+      setDataExampleError(message);
       showToast({ type: "error", message });
     } finally {
       setIsLoading(false);
@@ -374,10 +415,38 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
 
       {isLoading ? (
         <div className="mt-5 rounded-md bg-muted p-4 text-sm text-muted-foreground">Loading catalogs...</div>
-      ) : catalogs.length === 0 ? (
-        <div className="mt-5 rounded-md bg-muted p-4 text-sm text-muted-foreground">No catalogs yet.</div>
       ) : (
         <div className="mt-5 space-y-3">
+          <div className="rounded-md border border-sky-100 bg-sky-50/70 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-foreground">
+                    {typeLabel[type]} Attribute Generation Prompt template
+                  </span>
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                    Protected
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {dataExample?.updatedAt ?? "File-backed template"}
+                </p>
+                {dataExampleError ? (
+                  <p className="mt-2 text-sm text-red-600">{dataExampleError}</p>
+                ) : (
+                  <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
+                    {dataExample?.attributeGenerationPrompt ?? "Loading file template..."}
+                  </p>
+                )}
+              </div>
+              <LinkButton href={catalogTemplateHref(type)} variant="secondary" className="gap-2">
+                <FileText size={15} /> Edit template
+              </LinkButton>
+            </div>
+          </div>
+          {catalogs.length === 0 ? (
+            <div className="rounded-md bg-muted p-4 text-sm text-muted-foreground">No catalogs yet.</div>
+          ) : null}
           {catalogs.map((catalog) => (
             <div key={catalog.id} className="rounded-md border border-border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -442,6 +511,7 @@ export function AttributeCatalogList({ type, title, description }: AttributeCata
 export function AttributeCatalogEditor({ type, title, description, catalogId }: AttributeCatalogEditorProps) {
   const router = useRouter();
   const { clearToast, showToast, toast } = useFeedbackToast();
+  const isTemplateEditor = catalogId === "data-example";
   const isNewCatalog = !catalogId;
   const [selectedId, setSelectedId] = useState(catalogId ?? "");
   const [name, setName] = useState("");
@@ -450,6 +520,8 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
   const [jsonText, setJsonText] = useState(formatCatalogJson(createEmptyAttributes()));
   const [isEditingJson, setIsEditingJson] = useState(false);
   const [generationPrompt, setGenerationPrompt] = useState("");
+  const [attributeJsonFormat, setAttributeJsonFormat] = useState("");
+  const [attributeOutputFormat, setAttributeOutputFormat] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [rawRequest, setRawRequest] = useState<unknown>(null);
   const [rawResponse, setRawResponse] = useState<unknown>(null);
@@ -461,12 +533,16 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
   const [debugDialog, setDebugDialog] = useState<AiDebugDialogData | null>(null);
 
   const pageTitle = useMemo(() => {
+    if (isTemplateEditor) {
+      return `${typeLabel[type]} Attribute Generation Prompt template`;
+    }
     return isNewCatalog ? `New ${typeLabel[type]} Attribute catalog` : `Edit ${typeLabel[type]} Attribute catalog`;
-  }, [isNewCatalog, type]);
+  }, [isNewCatalog, isTemplateEditor, type]);
 
   function syncAttributes(nextAttributes: AttributeCatalogAttribute[]) {
-    setAttributes(nextAttributes);
-    setJsonText(formatCatalogJson(nextAttributes));
+    const normalizedAttributes = normalizeCatalogIds(nextAttributes);
+    setAttributes(normalizedAttributes);
+    setJsonText(formatCatalogJson(normalizedAttributes));
     setIsEditingJson(false);
   }
 
@@ -495,9 +571,14 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
     setIsLoading(true);
     setError("");
     try {
-      const prompt = await apiGet<AttributePrompt>(`/admin/attribute-generation-prompts/${type}`);
-      setGenerationPrompt(prompt.content);
-      if (catalogId) {
+      const example = await apiGet<DataExample>(`/admin/data-examples/${type}`);
+      setGenerationPrompt(example.attributeGenerationPrompt);
+      setAttributeJsonFormat(example.attributeJsonFormat);
+      setAttributeOutputFormat(example.attributeOutputFormat);
+      if (isTemplateEditor) {
+        resetNewCatalog();
+        setName(`${typeLabel[type]} Attribute Generation Prompt template`);
+      } else if (catalogId) {
         const catalog = await apiGet<AttributeCatalog>(`/admin/attribute-catalogs/${type}/${catalogId}`);
         openCatalog(catalog);
       } else {
@@ -514,7 +595,7 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
     setSelectedId(catalogId ?? "");
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, catalogId]);
+  }, [type, catalogId, isTemplateEditor]);
 
   function updateAttribute(attributeId: string, patch: Partial<AttributeCatalogAttribute>) {
     syncAttributes(
@@ -613,6 +694,26 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
     setMessage("");
     setError("");
     try {
+      if (isTemplateEditor) {
+        if (!generationPrompt.trim()) {
+          throw new Error("Attribute Generation Prompt is required.");
+        }
+        if (!attributeJsonFormat.trim()) {
+          throw new Error("Attribute JSON Format is required.");
+        }
+        if (!attributeOutputFormat.trim()) {
+          throw new Error("Attribute Output Format is required.");
+        }
+        await apiSend<DataExample>("PATCH", `/admin/data-examples/${type}`, {
+          attributeGenerationPrompt: generationPrompt.trim(),
+          attributeJsonFormat: attributeJsonFormat.trim(),
+          attributeOutputFormat: attributeOutputFormat.trim(),
+        });
+        const message = "Template file saved.";
+        setMessage(message);
+        showToast({ type: "success", message });
+        return;
+      }
       const attributesToSave = isEditingJson ? parseCatalogJson(jsonText) : attributes;
       if (!name.trim()) {
         throw new Error("Catalog name is required.");
@@ -620,6 +721,17 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
       if (!generationPrompt.trim()) {
         throw new Error("Attribute Generation Prompt is required.");
       }
+      if (!attributeJsonFormat.trim()) {
+        throw new Error("Attribute JSON Format is required.");
+      }
+      if (!attributeOutputFormat.trim()) {
+        throw new Error("Attribute Output Format is required.");
+      }
+      await apiSend<DataExample>("PATCH", `/admin/data-examples/${type}`, {
+        attributeGenerationPrompt: generationPrompt.trim(),
+        attributeJsonFormat: attributeJsonFormat.trim(),
+        attributeOutputFormat: attributeOutputFormat.trim(),
+      });
       await apiSend<AttributePrompt>("PATCH", `/admin/attribute-generation-prompts/${type}`, {
         content: generationPrompt.trim(),
       });
@@ -719,7 +831,8 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
           <div className="mt-5 rounded-md bg-muted p-4 text-sm text-muted-foreground">Loading catalog...</div>
         ) : (
           <>
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
+            {!isTemplateEditor ? (
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
               <label className="block min-w-0 text-sm font-medium text-foreground">
                 Catalog name
                 <input
@@ -736,14 +849,15 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
                   onChange={(event) => setCatalogDescription(event.target.value)}
                 />
               </label>
-            </div>
+              </div>
+            ) : null}
 
             <div className="mt-5 rounded-md border border-sky-100 bg-sky-50/70 p-4">
               <label className="block text-sm font-semibold text-foreground" htmlFor={`${type}-attribute-prompt`}>
                 Attribute Generation Prompt
               </label>
               <p className="mt-1 text-sm text-sky-700">
-                Use {"{inputText}"} and {"{attributeJsonFormat}"} when the prompt needs runtime data. No hidden context is appended.
+                Use {"{inputText}"}, {"{attributeJsonFormat}"}, and {"{outputFormat}"} when the prompt needs runtime data. No hidden context is appended.
               </p>
               <TextareaWithCounter
                 id={`${type}-attribute-prompt`}
@@ -754,11 +868,45 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
                 placeholderSuggestions={[
                   { token: "{inputText}", description: "Source text for attribute generation." },
                   { token: "{attributeJsonFormat}", description: "Required JSON format for attribute catalog output." },
+                  { token: "{outputFormat}", description: "Output instructions after applying the JSON format." },
+                ]}
+              />
+
+              <label className="mt-5 block text-sm font-semibold text-foreground" htmlFor={`${type}-attribute-json-format`}>
+                JSON format
+              </label>
+              <p className="mt-1 text-sm text-sky-700">
+                Example JSON inserted into {"{attributeJsonFormat}"} for this Attribute type.
+              </p>
+              <TextareaWithCounter
+                id={`${type}-attribute-json-format`}
+                className="mt-3 min-h-64 font-mono text-xs"
+                value={attributeJsonFormat}
+                onChange={(event) => setAttributeJsonFormat(event.target.value)}
+                spellCheck={false}
+                placeholder={`{\n  "attributes": []\n}`}
+              />
+
+              <label className="mt-5 block text-sm font-semibold text-foreground" htmlFor={`${type}-attribute-output-format`}>
+                Output format
+              </label>
+              <p className="mt-1 text-sm text-sky-700">
+                Saved output instruction text. If it contains {"{attributeJsonFormat}"}, preview and generation render it with the JSON format above.
+              </p>
+              <TextareaWithCounter
+                id={`${type}-attribute-output-format`}
+                className="mt-3 min-h-48 font-mono text-sm"
+                value={attributeOutputFormat}
+                onChange={(event) => setAttributeOutputFormat(event.target.value)}
+                placeholder={`Return only JSON using this structure:\n{attributeJsonFormat}`}
+                placeholderSuggestions={[
+                  { token: "{attributeJsonFormat}", description: "JSON format example from the textarea above." },
                 ]}
               />
             </div>
 
-            <label className="mt-5 block text-sm font-medium text-foreground" htmlFor={`${type}-attribute-source`}>
+            {!isTemplateEditor ? (
+              <label className="mt-5 block text-sm font-medium text-foreground" htmlFor={`${type}-attribute-source`}>
               Source text for AI generation
               <TextareaWithCounter
                 id={`${type}-attribute-source`}
@@ -767,9 +915,11 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
                 onChange={(event) => setSourceText(event.target.value)}
                 placeholder={`Describe the ${typeLabel[type].toLowerCase()} attributes you want AI to create.`}
               />
-            </label>
+              </label>
+            ) : null}
 
-            <div className="mt-4 flex flex-wrap gap-2">
+            {!isTemplateEditor ? (
+              <div className="mt-4 flex flex-wrap gap-2">
               <Button type="button" className="gap-2" disabled={isBusy} onClick={() => void generateAttributes()}>
                 {busyAction === "generate" ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
                 Generate attributes
@@ -782,7 +932,12 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
                   setDebugDialog({
                     title: `${typeLabel[type]} Attribute prompt`,
                     help: "Exact prompt after replacing placeholders present in the Attribute Generation Prompt.",
-                    value: buildPromptPreview(generationPrompt, sourceText, type),
+                    value: buildPromptPreview({
+                      prompt: generationPrompt,
+                      sourceText,
+                      attributeJsonFormat,
+                      attributeOutputFormat,
+                    }),
                   })
                 }
               >
@@ -819,9 +974,33 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
               <Button type="button" variant="secondary" className="gap-2" disabled={isBusy} onClick={applyJson}>
                 <Check size={16} /> Apply JSON
               </Button>
-            </div>
+              </div>
+            ) : (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="gap-2"
+                  onClick={() =>
+                    setDebugDialog({
+                      title: `${typeLabel[type]} Attribute prompt template`,
+                      help: "File template preview after replacing format placeholders. This content is used only to prefill new DB records.",
+                      value: buildPromptPreview({
+                        prompt: generationPrompt,
+                        sourceText: "{inputText}",
+                        attributeJsonFormat,
+                        attributeOutputFormat,
+                      }),
+                    })
+                  }
+                >
+                  <FileText size={15} /> Prompt
+                </Button>
+              </div>
+            )}
 
-            <label className="mt-5 block text-sm font-semibold text-foreground" htmlFor={`${type}-catalog-json`}>
+            {!isTemplateEditor ? (
+              <label className="mt-5 block text-sm font-semibold text-foreground" htmlFor={`${type}-catalog-json`}>
               Attribute JSON
               <TextareaWithCounter
                 id={`${type}-catalog-json`}
@@ -829,9 +1008,11 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
                 value={jsonText}
                 onChange={(event) => updateJsonText(event.target.value)}
               />
-            </label>
+              </label>
+            ) : null}
 
-            <div className="mt-5 space-y-4">
+            {!isTemplateEditor ? (
+              <div className="mt-5 space-y-4">
               {attributes.map((attribute, attributeIndex) => (
                 <div key={`attribute-${attributeIndex}`} className="rounded-md border border-border p-4">
                   <div className="grid gap-3 md:grid-cols-[2rem_minmax(0,1fr)_auto]">
@@ -909,12 +1090,15 @@ export function AttributeCatalogEditor({ type, title, description, catalogId }: 
               <Button type="button" variant="secondary" className="gap-2" onClick={addAttribute}>
                 <Plus size={16} /> Add attribute
               </Button>
-            </div>
+              </div>
+            ) : null}
 
             <div className="mt-6 flex flex-wrap justify-end gap-2 border-t border-border pt-4">
-              <LinkButton href={catalogNewHref(type)} variant="secondary">
-                New catalog
-              </LinkButton>
+              {!isTemplateEditor ? (
+                <LinkButton href={catalogNewHref(type)} variant="secondary">
+                  New catalog
+                </LinkButton>
+              ) : null}
               {renderSaveButton()}
             </div>
           </>

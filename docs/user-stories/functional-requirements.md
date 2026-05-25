@@ -132,10 +132,11 @@
 - Admin AI Config phải có Site Config `Show master prompts in user workspace` dạng Yes/No, mặc định `No`. Khi `No`, Project và One Click ẩn textarea Story/Scenario/Shots/Shot master prompt, vẫn giữ nút `Prompt` preview, frontend không gửi temporary `masterPrompt`, và backend reject override nếu user gửi thủ công.
 - Menu admin hiển thị các nhóm `Story`, `Scenario`, `Shots`, `Shot`; mỗi nhóm có child `Master Prompt`. Route tương thích `/admin/shot-prompt` vẫn redirect về nhóm phù hợp.
 - Admin có thể quản lý 4 nhóm master prompt tại các list-only route `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, `/admin/shot/master-prompt`. `New prompt` mở `/new`, `Edit` mở `/{promptId}`, và built-in row mở `/new?source=built-in`. Nhóm `Story Content` vẫn dùng type key `scripts`; `Shots` dùng cho Step 3 và `Shot` dùng cho Step 4.
+- Mỗi nhóm master prompt phải hiển thị một protected file-backed template từ `data-examples/{type}/{type}-master-prompt.md`. Template này có thể edit nhưng không thể delete hoặc set default; `New prompt` dùng nội dung file này làm mẫu rồi save thành DB record.
 - Mỗi nhóm master prompt phải hỗ trợ tạo, sửa, xóa/archive và `Set default`; mỗi nhóm có đúng một default active.
 - Admin không thể xóa prompt đang là default nếu chưa chọn prompt khác làm default trước.
 - Master prompt giữ format placeholder khuyến nghị theo từng nhóm, nhưng không bắt buộc placeholder khi lưu; backend replace nếu có và không tự nối runtime field mà prompt được chọn chưa chứa placeholder.
-- Mỗi `Story Content`, `Scenario` và `Shots` master prompt phải có field textarea `Output Format placeholder`. Placeholder `{outputFormat}` chỉ render từ field này khi prompt content có token đó; nếu prompt dùng token nhưng field rỗng, hệ thống báo lỗi rõ ràng và không dùng fallback output instruction.
+- Mỗi `Story Content`, `Scenario`, `Shots` và `Shot` master prompt phải có field textarea `Output Format placeholder`. Placeholder `{outputFormat}` chỉ render từ field này khi prompt content có token đó; nếu prompt dùng token nhưng field rỗng, hệ thống báo lỗi rõ ràng và không dùng fallback output instruction.
 - Admin có thể mở `Master Prompt Config` trong nhóm `AI` để tạo một bộ attribute/option dùng riêng cho quá trình author master prompt. Bộ này là global, admin-only, và không xuất hiện trong màn hình user.
 - Trong từng editor `Story Content`, `Scenario`, `Shots` master prompt, admin có thể chọn option từ `Master Prompt Config`; selection này được lưu cùng master prompt và chỉ được đưa vào runtime nếu prompt admin chứa `{masterPromptAttributes}`.
 - UI chỉ hiển thị tên attribute/option trong phần chọn `Master Prompt Attribute`; mô tả nằm sau helper icon và không được render vào `{masterPromptAttributes}`.
@@ -216,9 +217,11 @@
 - User sidebar must not show Scenario management.
 - Admin sidebar must show Story, Scenario, Shots, and Shot as non-clickable parent groups. Each parent has Master Prompt and Attribute child pages.
 - Story, Scenario, Shots, and Shot Attribute pages must support CRUD, default selection, JSON editing, visual editing, required checkbox per attribute, and AI generation through a separate Attribute Generation Prompt.
+- Story, Scenario, Shots, and Shot Attribute list pages must show protected file-backed Attribute Generation Prompt templates from `data-examples/`. These templates include Attribute Generation Prompt, JSON format, and Output format files. They can be edited, but cannot be deleted or set as default.
 - Scenario catalogs are admin-only. User Project and One Click flows load the active Admin Scenario catalog.
 - Project and One Click Step 1, Step 2, and Step 3 load Story, Scenario, and Shots catalogs respectively.
-- Required attributes default to the first option when no saved selection exists, remain multi-select, and cannot be cleared to zero selected options.
+- When no saved selection exists, every attribute defaults to its first option. Required attributes remain multi-select and cannot be cleared to zero selected options; optional attributes may be cleared after the initial default selection.
+- Admin AI Config must include `AI select Attribute` and `User select Attribute` text values. Each user workflow attribute stores `selectionMode`; `AI suggestion` uses all catalog options for that attribute and disables option editing, while normal user selection uses only selected options.
 
 ## 12. AI Handoff Chrome Extension
 
@@ -244,5 +247,37 @@
 - `Shots` remains the Step 3 batch shot-list JSON feature. `Shot` is singular and is used only for Step 4 per-shot final prompt creation.
 - Admin can manage `Shot Master Prompt` and `Shot Attribute` with the same list-only and dedicated new/edit route model as Story, Scenario, and Shots.
 - Project and One Click Step 4 must load the active `Shot` master prompt and active `Shot Attribute` catalog.
-- Required Shot attributes auto-select the first option and cannot be cleared to zero selections. Selections are saved on the individual shot JSON object.
+- Shot attributes also default to their first option when no saved selection exists. Required Shot attributes cannot be cleared to zero selections; optional Shot attributes may be cleared after the initial default selection. Selections are saved on the individual shot JSON object.
 - Step 4 prompt rendering must replace only placeholders present in the selected `Shot` master prompt. It must not append hidden runtime context, provider output contract text, or fallback prompt content.
+## Project Template Requirements
+
+- Admins can list, create, edit, and archive Project Templates.
+- Project Template workflow selection uses the chain Story -> Scenario ->
+  Shots -> Shot, while the creation UI presents the selectable rows in the
+  priority order Shot -> Shots -> Scenario -> Story. `Shot` is always selected;
+  selecting `Shots`, `Scenario`, or `Story` also selects every later step in the
+  chain.
+- New and existing Project Templates are saved directly from the workflow page.
+  Admins keep the step checkboxes and must choose a saved active master prompt
+  for every selected step; attribute catalogs still come from the active default
+  catalog for each selected step. Missing selected prompts or default catalogs
+  block save with a clear configuration error.
+- Editing an Admin Project Template can update name, description, selected
+  workflow steps, and selected master prompt per step. There is no second raw
+  snapshot editor step.
+- Users can select active Admin Project Templates directly when creating a
+  project; the create flow must not require or show a Clone action.
+- Users can edit or archive their own Custom Templates, but cannot change their
+  selected workflow steps. Custom Template lists and edit/delete management
+  belong on the Projects list, not on the create-project form.
+- Custom Template editing must use Project-style step cards with Prompt preview
+  controls and Attribute panels. Users can save default Attribute selections and
+  AI suggestion mode per selected step.
+- Creating a project from an Admin Project Template or Custom Template persists a
+  project-owned snapshot and renders only the selected steps. If the selected
+  template includes saved Attribute selections, the new project initializes from
+  those selections unless the project already has saved selections.
+- Project and dashboard lists must show the project template snapshot name in
+  the Flow column for projects created from a Custom Template.
+- Runtime uses the project snapshot first. It must not fall back to later Admin
+  defaults when a snapshot step is selected.

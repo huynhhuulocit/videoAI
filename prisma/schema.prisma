@@ -26,20 +26,43 @@ model UserProfile {
 }
 
 model ProjectRecord {
-  id                  String   @id
-  ownerUserId         String   @map("owner_user_id")
-  name                String
-  description         String?
-  flowType            String   @map("flow_type")
-  templateSelection   Json?    @map("template_selection")
-  attributeSelections Json?    @map("attribute_selections")
-  status              String   @default("active")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  id                      String   @id
+  ownerUserId             String   @map("owner_user_id")
+  name                    String
+  description             String?
+  flowType                String   @map("flow_type")
+  projectTemplateId       String?  @map("project_template_id")
+  userProjectTemplateId   String?  @map("user_project_template_id")
+  projectTemplateSnapshot Json?    @map("project_template_snapshot")
+  templateSelection       Json?    @map("template_selection")
+  attributeSelections     Json?    @map("attribute_selections")
+  status                  String   @default("active")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
 
   @@index([ownerUserId])
   @@index([ownerUserId, createdAt])
+  @@index([projectTemplateId])
+  @@index([userProjectTemplateId])
   @@map("projects")
+  @@schema("projects")
+}
+
+model UserProjectTemplate {
+  id              String   @id @default(cuid())
+  ownerUserId     String   @map("owner_user_id")
+  adminTemplateId String?  @map("admin_template_id")
+  name            String
+  description     String?
+  finalStep       String   @map("final_step")
+  steps           Json
+  status          String   @default("active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerUserId, status])
+  @@index([adminTemplateId])
+  @@map("user_project_templates")
   @@schema("projects")
 }
 
@@ -254,6 +277,8 @@ model AiSiteConfig {
   id                      String   @id @default(cuid())
   contentMode             String   @map("content_mode")
   showUserMasterPrompts   Boolean  @default(false) @map("show_user_master_prompts")
+  aiSelectAttributeText   String   @default("") @map("ai_select_attribute_text") @db.Text
+  userSelectAttributeText String   @default("") @map("user_select_attribute_text") @db.Text
   aiHandoffProvider       String   @default("google-flow-veo") @map("ai_handoff_provider")
   aiHandoffTargetUrl      String?  @default("https://labs.google/fx/tools/flow/project/5a83ae13-0d06-48fb-a993-b092c7395df4") @map("ai_handoff_target_url")
   aiHandoffPromptSelector String?  @map("ai_handoff_prompt_selector") @db.Text
@@ -316,6 +341,23 @@ model MasterPromptAttributeConfig {
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   @@map("master_prompt_attribute_configs")
+  @@schema("config")
+}
+
+model ProjectTemplate {
+  id               String   @id @default(cuid())
+  name             String
+  description      String?
+  finalStep        String   @map("final_step")
+  steps            Json
+  status           String   @default("active")
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([updatedAt])
+  @@map("project_templates")
   @@schema("config")
 }
 

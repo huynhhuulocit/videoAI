@@ -1,4 +1,11 @@
-import type { AiConfig, AiLog, ApiSuccess, MasterPromptConfig, Project } from "@videoai/contracts";
+import type {
+  AiConfig,
+  AiLog,
+  ApiSuccess,
+  MasterPromptConfig,
+  Project,
+  UserProjectTemplate,
+} from "@videoai/contracts";
 
 const baseUrl = process.env.API_GATEWAY_URL?.trim();
 if (!baseUrl) {
@@ -25,6 +32,10 @@ export function getProjects(): Promise<Project[]> {
 
 export function getProject(projectId: string): Promise<Project | null> {
   return get(`/projects/${projectId}`);
+}
+
+export function getUserProjectTemplates(): Promise<UserProjectTemplate[]> {
+  return get("/user-project-templates");
 }
 
 export function getAiConfig(): Promise<AiConfig> {

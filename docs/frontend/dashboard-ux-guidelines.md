@@ -20,7 +20,9 @@ Recommended first screen:
 
 - Header with `Create Project` primary action.
 - Recent projects table or grid.
-- Recent projects should show the selected project flow when practical.
+- Recent projects should show the selected project flow when practical. If the
+  project was created from a Custom Template, the Flow column shows the
+  project-owned template snapshot name instead of the generic Scenario label.
 - Project rows should expose `Open` plus a compact delete/archive action; deleting removes the project from active lists.
 - Active jobs panel.
 - Small metrics: projects, videos, failed jobs.
@@ -239,6 +241,7 @@ Initial admin scope:
 Recommended layout:
 
 - AI Config uses a single-column list of collapsed sections by default. `Save configuration` appears at the top-right and bottom-right of the form and persists config plus any newly entered API keys. There is no separate `Save key` action.
+- Site Config includes `AI select Attribute` and `User select Attribute` text fields. User attribute panels render an `AI suggestion` checkbox under each attribute title. Checked attributes disable option controls and send every option for that attribute with the AI prefix; unchecked attributes send only selected options with the user-selection prefix.
 - Content mode section:
   - `Create Script`
   - `Create Video`
@@ -275,9 +278,11 @@ Recommended layout:
 - The underlying API type key for Story Content remains `scripts`.
 - Child list routes are `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, and `/admin/shot/master-prompt`; the active parent and active child must be visually highlighted.
 - Clicking a child menu item shows only that prompt type's list in CRUD format. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in rows open `/new?source=built-in` as editable copies.
-- Each child list shows prompt rows with default/built-in badges plus `Edit`, `Set default` and `Delete`; the editor contains `Save`, `Delete` and `Set default` for the open prompt.
+- Each child list shows prompt rows with default/built-in badges plus `Edit`, `Set default` and `Delete`; it also shows a protected file-backed template card with `Edit template` only. File-backed templates update `data-examples/{type}/*-master-prompt.md`, cannot be deleted, and cannot be set as default.
+- New prompt editors load the matching file-backed master prompt template as starter content, then save the prompt as a normal DB record.
+- Editor pages contain `Save`, `Delete` and `Set default` for the open prompt, except file-backed template editors which expose only `Save` and `Back to list`.
 - Master Prompt editor pages keep primary `Save` actions at the top-right and bottom-right. The action rows use loading spinners and auto-hiding success/error popups for save/default/delete failures or completion.
-- Master Prompt editor pages show two admin-only selection areas under the prompt text: the global `Master Prompt Attribute` section and a type-specific Attribute section. Story Content editors show Story Attribute, Scenario editors show Scenario Attribute, Shots editors show Shots Attribute, and Shot editors show Shot Attribute.
+- Master Prompt editor pages show only the global admin-only `Master Prompt Attribute` selection area below the prompt text. Story, Scenario, Shots, and Shot workflow attributes are selected in Project and One Click user flows, not in master prompt records.
 - Built-in defaults are read-only when no DB prompt exists.
 - Deleting the current default is blocked until another active prompt in the same type is selected as default.
 
@@ -286,7 +291,7 @@ UX rules:
 - Master prompts keep recommended placeholder formats, but helper text must state placeholders are optional and runtime data is included only through placeholders in the prompt.
 - Each Story Content, Scenario, Shots, and Shot master prompt editor includes a separate `Output Format placeholder` textarea. The editor suggests `{outputFormat}` for that prompt type, and the Prompt preview renders it from this field only when the prompt content contains `{outputFormat}`.
 - Master prompt textareas expose supported placeholder tokens directly below the editor and provide autocomplete when the user types `{...`; click, Enter or Tab inserts the selected token. Placeholder descriptions stay behind helper icons so the list remains compact.
-- Master prompt editors include a `Prompt` button that previews the exact draft. It replaces admin-owned `{masterPromptAttributes}` from the saved/draft selection, replaces the matching type-specific attribute placeholder when workflow attribute selections exist, and replaces `{outputFormat}` from the Output Format field, then leaves other user runtime placeholders unchanged.
+- Master prompt editors include a `Prompt` button that previews the exact draft. It replaces admin-owned `{masterPromptAttributes}` from the saved/draft selection and `{outputFormat}` from the Output Format field, then leaves other user runtime placeholders unchanged.
 - `Story Content` is used for Step 1 content expansion in Project and One Click, `Scenario` is used for scenario analysis, and `Shots` is used for shot-plan generation inside Project and One Click.
 - Every visible textarea in admin and user workflows shows a small muted character count at the bottom-left. Hidden clipboard helper textareas are excluded.
 
@@ -382,7 +387,8 @@ Before completing UI work, verify:
 - Prompt, Request, and Response controls belong beside the generation action, not in the editor header.
 - Attribute editor textareas must remain full-width with stable counter placement on desktop and narrow layouts.
 - Required attributes use a clear checkbox in admin and a clear `Required` badge in user selection panels.
-- In user workflows, required attributes should auto-select the first option on load and should not visually allow clearing every option.
+- In user workflows, every attribute initially auto-selects the first option when no saved selection exists. Required attributes should not visually allow clearing every option; optional attributes may be cleared after the initial default selection.
+- Attribute list pages show a protected file-backed Attribute Generation Prompt template card. `Edit template` updates `data-examples/{type}/*-attribute-generation-prompt.md`, `*-attribute-json-format.md`, and `*-attribute-output-format.md`; new catalog editors load these files as the initial prompt, JSON format, and Output format samples.
 - Scenario creation/editing is admin-only; user workflows should show the active admin Scenario catalog, not a user scenario dropdown.
 
 ## 13. AI Handoff UX
@@ -395,3 +401,30 @@ Before completing UI work, verify:
 - Extension popup `Check DOM` captures the live Flow prompt input selector, and `Test fill` inserts hardcoded text without clicking Generate so admins can validate selector changes safely.
 - Handoff failures should be specific: extension missing, target not logged in, selector missing/layout changed, generate disabled, or target origin not allowlisted.
 - Handoff progress is per shot and should not block editing other shots.
+## Project Template UX
+
+Admin navigation includes `Project Template` as a list-first CRUD area. The
+create and edit flows both use the workflow form. The workflow page shows
+checkbox rows in the priority order Shot, Shots, Scenario, Story. Shot is
+always selected; selecting Shots, Scenario, or Story also selects every later
+step in the Story -> Scenario -> Shots -> Shot chain. Each selected row includes
+a master prompt select. Saving the form snapshots the selected master prompts
+and the active default attribute catalogs. There is no second snapshot editor
+step for prompt content, output format, or attribute JSON.
+
+The user `/projects/new` page includes Admin Project Templates inside the
+`Choose how to start` section, below the Scenario/Product cards. Admin Project
+Templates appear as selectable cards using the same selection behavior as the
+standard start cards; there is no Clone button in this flow. Selecting a
+template makes the new project a Scenario project and copies the selected
+template snapshot at creation. The user `/projects` list owns Custom Template
+management, so edit/delete controls and Custom Template lists are not shown on
+the create page.
+
+The user Custom Template editor uses the same step-card mental model as the
+Project Scenario workspace. Each selected step shows the snapshot master
+prompt, output format, a Prompt preview button, and Attribute panels where the
+user can choose default options or enable AI suggestion mode. Request/Response
+and generation actions are project-runtime behaviors; the template editor keeps
+them unavailable instead of creating hidden project jobs. Saved Attribute
+selections are copied into new projects created from that Custom Template.

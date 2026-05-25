@@ -10,6 +10,11 @@ import { JobsController } from "./jobs.controller.js";
 import { MediaController } from "./media.controller.js";
 import { MeController } from "./me.controller.js";
 import { ProjectsController } from "./projects.controller.js";
+import {
+  AdminProjectTemplatesController,
+  ProjectTemplatesController,
+  UserProjectTemplatesController
+} from "./project-templates.controller.js";
 import { ShotPlansService } from "./shot-plans.service.js";
 import { ShotsController } from "./shots.controller.js";
 import { TemplatesController } from "./templates.controller.js";
@@ -26,6 +31,9 @@ import { TemplatesController } from "./templates.controller.js";
     AttributeCatalogsController,
     AdminAttributeCatalogsController,
     AdminAttributeGenerationPromptsController,
+    AdminProjectTemplatesController,
+    ProjectTemplatesController,
+    UserProjectTemplatesController,
     AdminController
   ],
   providers: [ShotPlansService]

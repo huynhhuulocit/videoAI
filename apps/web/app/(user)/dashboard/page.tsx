@@ -9,6 +9,10 @@ import { auth } from "../../../lib/auth/auth";
 import { getRoleLandingPath } from "../../../lib/auth/credentials";
 import { getProjects } from "../../../lib/api/client";
 
+function projectFlowLabel(project: Awaited<ReturnType<typeof getProjects>>[number]) {
+  return project.projectTemplateSnapshot?.name ?? null;
+}
+
 export default async function DashboardPage() {
   const session = await auth();
   if (!session) {
@@ -93,7 +97,15 @@ export default async function DashboardPage() {
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant="info">
-                      <I18nText id={project.flowType === "script" ? "flow.script" : "flow.product"} />
+                      {projectFlowLabel(project) ?? (
+                        <I18nText
+                          id={
+                            project.flowType === "script"
+                              ? "flow.script"
+                              : "flow.product"
+                          }
+                        />
+                      )}
                     </Badge>
                   </td>
                   <td className="px-4 py-3">

@@ -14,6 +14,10 @@ type ProjectsTableProps = {
   initialProjects: Project[];
 };
 
+function projectFlowLabel(project: Project, defaultLabel: string) {
+  return project.projectTemplateSnapshot?.name ?? defaultLabel;
+}
+
 export function ProjectsTable({ initialProjects }: ProjectsTableProps) {
   const { t } = useI18n();
   const [projects, setProjects] = useState(initialProjects);
@@ -97,10 +101,13 @@ export function ProjectsTable({ initialProjects }: ProjectsTableProps) {
                 </td>
                 <td className="px-4 py-3">
                   <Badge variant="info">
-                    {t(
-                      project.flowType === "script"
-                        ? "flow.script"
-                        : "flow.product",
+                    {projectFlowLabel(
+                      project,
+                      t(
+                        project.flowType === "script"
+                          ? "flow.script"
+                          : "flow.product",
+                      ),
                     )}
                   </Badge>
                 </td>

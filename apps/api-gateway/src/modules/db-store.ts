@@ -31,13 +31,17 @@ import {
   TemplateAttributeSchema,
   TemplateSelectionSchema,
   ProjectAttributeSelectionsSchema,
+  ProjectTemplateSchema,
+  ProjectTemplateSnapshotSchema,
   UserRoleSchema,
   UserStatusSchema,
   VideoShotSchema,
   VideoShotAttributeSchema,
+  UserProjectTemplateSchema,
   type AiConfig,
   type AiHandoff,
   type AttributeCatalog,
+  type AttributeCatalogAttribute,
   type AttributeCatalogType,
   type AiLog,
   type AiLogDetail,
@@ -52,10 +56,12 @@ import {
   type MasterPromptType,
   type MediaAsset,
   type Project,
+  type ProjectTemplate,
   type Provider,
   type ProviderKeySource,
   type ProviderKeyStatus,
   type UserProfile,
+  type UserProjectTemplate,
   type VideoShotPlan,
   type VideoTemplate,
 } from "@videoai/contracts";
@@ -63,6 +69,12 @@ import {
 type DbUser = Awaited<ReturnType<typeof prisma.userProfile.findFirstOrThrow>>;
 type DbProject = Awaited<
   ReturnType<typeof prisma.projectRecord.findFirstOrThrow>
+>;
+type DbProjectTemplate = Awaited<
+  ReturnType<typeof prisma.projectTemplate.findFirstOrThrow>
+>;
+type DbUserProjectTemplate = Awaited<
+  ReturnType<typeof prisma.userProjectTemplate.findFirstOrThrow>
 >;
 type DbConfig = Awaited<
   ReturnType<typeof prisma.aiSiteConfig.findFirstOrThrow>
@@ -272,6 +284,8 @@ export function mapProject(row: DbProject): Project {
     ownerUserId: row.ownerUserId,
     name: row.name,
     flowType: row.flowType === "script" ? "script" : "product",
+    projectTemplateId: row.projectTemplateId,
+    userProjectTemplateId: row.userProjectTemplateId,
     status: row.status === "archived" ? "archived" : "active",
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -290,8 +304,43 @@ export function mapProject(row: DbProject): Project {
       row.attributeSelections,
     );
   }
+  if (row.projectTemplateSnapshot) {
+    project.projectTemplateSnapshot = ProjectTemplateSnapshotSchema.parse(
+      row.projectTemplateSnapshot,
+    );
+  }
 
   return project;
+}
+
+export function mapProjectTemplate(row: DbProjectTemplate): ProjectTemplate {
+  return ProjectTemplateSchema.parse({
+    id: row.id,
+    name: row.name,
+    ...(row.description ? { description: row.description } : {}),
+    finalStep: row.finalStep,
+    steps: row.steps,
+    status: row.status === "archived" ? "archived" : "active",
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  });
+}
+
+export function mapUserProjectTemplate(
+  row: DbUserProjectTemplate,
+): UserProjectTemplate {
+  return UserProjectTemplateSchema.parse({
+    id: row.id,
+    ownerUserId: row.ownerUserId,
+    adminTemplateId: row.adminTemplateId,
+    name: row.name,
+    ...(row.description ? { description: row.description } : {}),
+    finalStep: row.finalStep,
+    steps: row.steps,
+    status: row.status === "archived" ? "archived" : "active",
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  });
 }
 
 export function mapMediaAsset(row: DbMediaAsset): MediaAsset {
@@ -347,6 +396,62 @@ type DbAttributeCatalog =
   | DbScenarioAttributeCatalog
   | DbShotAttributeCatalog;
 
+function normalizeCatalogId(value: string | undefined, fallback: string) {
+  const normalized = (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function getUniqueCatalogId(baseId: string, usedIds: Set<string>) {
+  let candidate = baseId;
+  let index = 2;
+  while (usedIds.has(candidate)) {
+    candidate = `${baseId}-${index}`;
+    index += 1;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+export function normalizeAttributeCatalogAttributes(
+  attributes: AttributeCatalogAttribute[],
+): AttributeCatalogAttribute[] {
+  const usedAttributeIds = new Set<string>();
+  return attributes.map((attribute, attributeIndex) => {
+    const attributeBaseId = normalizeCatalogId(
+      attribute.id || attribute.name,
+      `attribute-${attributeIndex + 1}`,
+    );
+    const attributeId = getUniqueCatalogId(attributeBaseId, usedAttributeIds);
+    const usedOptionIds = new Set<string>();
+    return {
+      ...attribute,
+      id: attributeId,
+      name: attribute.name.trim(),
+      ...(attribute.description !== undefined
+        ? { description: attribute.description.trim() }
+        : {}),
+      options: attribute.options.map((option, optionIndex) => {
+        const optionBaseId = normalizeCatalogId(
+          option.id || option.name,
+          `${attributeId}-option-${optionIndex + 1}`,
+        );
+        return {
+          ...option,
+          id: getUniqueCatalogId(optionBaseId, usedOptionIds),
+          name: option.name.trim(),
+          ...(option.description !== undefined
+            ? { description: option.description.trim() }
+            : {}),
+        };
+      }),
+    };
+  });
+}
+
 export function mapAttributeCatalog(
   type: AttributeCatalogType,
   row: DbAttributeCatalog,
@@ -356,7 +461,9 @@ export function mapAttributeCatalog(
     type,
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
-    attributes: AttributeCatalogAttributeSchema.array().parse(row.attributes),
+    attributes: normalizeAttributeCatalogAttributes(
+      AttributeCatalogAttributeSchema.array().parse(row.attributes),
+    ),
     isDefault: row.isDefault,
     status: row.status === "archived" ? "archived" : "active",
     createdAt: row.createdAt.toISOString(),
@@ -364,10 +471,59 @@ export function mapAttributeCatalog(
   };
 }
 
+export async function enforceSingleDefaultAttributeCatalog(
+  typeInput: AttributeCatalogType,
+) {
+  const type = AttributeCatalogTypeSchema.parse(typeInput);
+  if (type === "story") {
+    const defaults = await prisma.storyAttributeCatalog.findMany({
+      where: { status: "active", isDefault: true },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true },
+    });
+    const duplicateIds = defaults.slice(1).map((row) => row.id);
+    if (duplicateIds.length > 0) {
+      await prisma.storyAttributeCatalog.updateMany({
+        where: { id: { in: duplicateIds }, status: "active", isDefault: true },
+        data: { isDefault: false },
+      });
+    }
+    return;
+  }
+  if (type === "scenario") {
+    const defaults = await prisma.scenarioAttributeCatalog.findMany({
+      where: { status: "active", isDefault: true },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true },
+    });
+    const duplicateIds = defaults.slice(1).map((row) => row.id);
+    if (duplicateIds.length > 0) {
+      await prisma.scenarioAttributeCatalog.updateMany({
+        where: { id: { in: duplicateIds }, status: "active", isDefault: true },
+        data: { isDefault: false },
+      });
+    }
+    return;
+  }
+  const defaults = await prisma.shotAttributeCatalog.findMany({
+    where: { type, status: "active", isDefault: true },
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    select: { id: true },
+  });
+  const duplicateIds = defaults.slice(1).map((row) => row.id);
+  if (duplicateIds.length > 0) {
+    await prisma.shotAttributeCatalog.updateMany({
+      where: { id: { in: duplicateIds }, type, status: "active", isDefault: true },
+      data: { isDefault: false },
+    });
+  }
+}
+
 export async function getDefaultAttributeCatalog(
   typeInput: AttributeCatalogType,
 ) {
   const type = AttributeCatalogTypeSchema.parse(typeInput);
+  await enforceSingleDefaultAttributeCatalog(type);
   if (type === "story") {
     const row = await prisma.storyAttributeCatalog.findFirst({
       where: { status: "active", isDefault: true },
@@ -484,6 +640,8 @@ export function mapAiConfig(
   return {
     contentMode: ContentModeSchema.parse(row.contentMode),
     showUserMasterPrompts: row.showUserMasterPrompts,
+    aiSelectAttributeText: row.aiSelectAttributeText ?? "",
+    userSelectAttributeText: row.userSelectAttributeText ?? "",
     aiHandoffProvider: normalizeProvider(row.aiHandoffProvider),
     aiHandoffTargetUrl: normalizeOptionalUrl(row.aiHandoffTargetUrl),
     aiHandoffPromptSelector: row.aiHandoffPromptSelector?.trim() || null,
@@ -545,8 +703,21 @@ export async function getDefaultMasterPrompt(
   return builtInMasterPrompt(type);
 }
 
-export async function getConfiguredDefaultMasterPrompt(type: MasterPromptType) {
-  const defaultPrompt = await prisma.masterPrompt.findFirst({
+function requiredMasterPromptLabel(type: MasterPromptType) {
+  if (type === "scripts") {
+    return "Story Content";
+  }
+  if (type === "scenario") {
+    return "Scenario";
+  }
+  if (type === "shots") {
+    return "Shots";
+  }
+  return "Shot";
+}
+
+export async function getRequiredDefaultMasterPrompt(type: MasterPromptType) {
+  const prompt = await prisma.masterPrompt.findFirst({
     where: {
       type,
       status: "active",
@@ -554,18 +725,12 @@ export async function getConfiguredDefaultMasterPrompt(type: MasterPromptType) {
     },
     orderBy: { updatedAt: "desc" },
   });
-  if (defaultPrompt) {
-    return mapMasterPrompt(defaultPrompt);
+  if (!prompt) {
+    throw new Error(
+      `Active default ${requiredMasterPromptLabel(type)} master prompt is required.`,
+    );
   }
-
-  const firstPrompt = await prisma.masterPrompt.findFirst({
-    where: {
-      type,
-      status: "active",
-    },
-    orderBy: { updatedAt: "desc" },
-  });
-  return firstPrompt ? mapMasterPrompt(firstPrompt) : null;
+  return mapMasterPrompt(prompt);
 }
 
 export async function getDefaultMasterPromptContent(
@@ -1093,9 +1258,9 @@ export async function getActiveAiConfig(): Promise<AiConfig> {
   ] = await Promise.all([
     getProviderKeyStatus(config.promptProvider),
     getProviderKeyStatus(config.videoProvider),
-    getDefaultMasterPrompt("scenario"),
-    getDefaultMasterPrompt("shots"),
-    getDefaultMasterPrompt("scripts"),
+    getRequiredDefaultMasterPrompt("scenario"),
+    getRequiredDefaultMasterPrompt("shots"),
+    getRequiredDefaultMasterPrompt("scripts"),
   ]);
   const [scenarioPromptContent, shotsPromptContent, scriptsPromptContent] =
     await Promise.all([
@@ -1116,6 +1281,8 @@ export async function getActiveAiConfig(): Promise<AiConfig> {
 export async function replaceActiveAiConfig(input: {
   contentMode: "script" | "video";
   showUserMasterPrompts?: boolean | undefined;
+  aiSelectAttributeText?: string | undefined;
+  userSelectAttributeText?: string | undefined;
   aiHandoffProvider?: Provider | undefined;
   aiHandoffTargetUrl?: string | null | undefined;
   aiHandoffPromptSelector?: string | null | undefined;
@@ -1157,6 +1324,14 @@ export async function replaceActiveAiConfig(input: {
           input.showUserMasterPrompts ??
           activeConfig?.showUserMasterPrompts ??
           false,
+        aiSelectAttributeText:
+          input.aiSelectAttributeText !== undefined
+            ? input.aiSelectAttributeText
+            : activeConfig?.aiSelectAttributeText ?? "",
+        userSelectAttributeText:
+          input.userSelectAttributeText !== undefined
+            ? input.userSelectAttributeText
+            : activeConfig?.userSelectAttributeText ?? "",
         aiHandoffProvider: nextAiHandoffProvider,
         aiHandoffTargetUrl: nextAiHandoffTargetUrl,
         aiHandoffPromptSelector: nextAiHandoffPromptSelector,

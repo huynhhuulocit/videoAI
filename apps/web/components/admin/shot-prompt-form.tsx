@@ -4,9 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ADMIN_MASTER_PROMPT_PLACEHOLDERS,
-  type AttributeCatalog,
-  type AttributeCatalogAttribute,
-  type AttributeCatalogConfig,
+  type DataExample,
   DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_SCRIPT_GENERATION_PROMPT,
   DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
@@ -81,6 +79,14 @@ function masterPromptEditHref(type: MasterPromptType, prompt: MasterPrompt) {
     : `${masterPromptListHref(type)}/${encodeURIComponent(prompt.id)}`;
 }
 
+function masterPromptTemplateHref(type: MasterPromptType) {
+  return `${masterPromptListHref(type)}/data-example`;
+}
+
+function dataExampleTypeForPromptType(type: MasterPromptType) {
+  return type === "scripts" ? "story" : type;
+}
+
 function defaultPromptTemplate(type: MasterPromptType) {
   if (type === "scenario") {
     return DEFAULT_TEMPLATE_SELECTION_PROMPT;
@@ -113,40 +119,6 @@ function emptyAttributeSelection(): MasterPromptAttributeSelection {
 
 function getPromptAttributeSelection(prompt: MasterPrompt | null | undefined): MasterPromptAttributeSelection {
   return prompt?.attributeSelection ?? emptyAttributeSelection();
-}
-
-function getPromptWorkflowAttributeSelection(prompt: MasterPrompt | null | undefined): MasterPromptAttributeSelection {
-  return prompt?.workflowAttributeSelection ?? emptyAttributeSelection();
-}
-
-function workflowCatalogType(type: MasterPromptType) {
-  return type === "scripts" ? "story" : type;
-}
-
-function workflowAttributeTitle(type: MasterPromptType) {
-  if (type === "scenario") {
-    return "Scenario Attribute";
-  }
-  if (type === "shots") {
-    return "Shots Attribute";
-  }
-  if (type === "shot") {
-    return "Shot Attribute";
-  }
-  return "Story Attribute";
-}
-
-function workflowAttributePlaceholder(type: MasterPromptType) {
-  if (type === "scenario") {
-    return "{scenarioAttributes}";
-  }
-  if (type === "shots") {
-    return "{shotsAttributes}";
-  }
-  if (type === "shot") {
-    return "{shotAttributes}";
-  }
-  return "{storyAttributes}";
 }
 
 function getGroup(config: MasterPromptConfig, type: MasterPromptType) {
@@ -193,7 +165,7 @@ function selectedOptionCount(selection: MasterPromptAttributeSelection) {
 
 function normalizeSelectionForAttributes(
   selection: MasterPromptAttributeSelection,
-  attributes: Array<Pick<AttributeCatalogAttribute | MasterPromptAttribute, "id" | "options">>,
+  attributes: Array<Pick<MasterPromptAttribute, "id" | "options">>,
 ): MasterPromptAttributeSelection {
   const attributesById = new Map(attributes.map((attribute) => [attribute.id, attribute]));
   return {
@@ -261,48 +233,6 @@ function renderMasterPromptAttributePreview(
   return content.replaceAll(MASTER_PROMPT_ATTRIBUTES_PLACEHOLDER, lines.join("\n"));
 }
 
-function renderWorkflowAttributePreview(
-  content: string,
-  type: MasterPromptType,
-  selection: MasterPromptAttributeSelection,
-  catalog: AttributeCatalog | null,
-) {
-  const normalizedSelection = catalog
-    ? normalizeSelectionForAttributes(selection, catalog.attributes)
-    : selection;
-  const hasSelectedOptions = normalizedSelection.attributes.some((attribute) => attribute.optionIds.length > 0);
-  if (!hasSelectedOptions) {
-    return content;
-  }
-  const placeholder = workflowAttributePlaceholder(type);
-  if (!content.includes(placeholder)) {
-    return content;
-  }
-  if (!catalog) {
-    throw new Error(`${workflowAttributeTitle(type)} catalog is required before using ${placeholder}.`);
-  }
-  const lines = normalizedSelection.attributes.flatMap((selectedAttribute) => {
-    const attribute = catalog.attributes.find((candidate) => candidate.id === selectedAttribute.attributeId);
-    if (!attribute) {
-      throw new Error(`${workflowAttributeTitle(type)} "${selectedAttribute.attributeId}" is not configured.`);
-    }
-    const selectedOptions = selectedAttribute.optionIds.map((optionId) => {
-      const option = attribute.options.find((candidate) => candidate.id === optionId);
-      if (!option) {
-        throw new Error(`${workflowAttributeTitle(type)} option "${optionId}" is not configured.`);
-      }
-      return option.name;
-    });
-    return selectedOptions.length > 0
-      ? [`${attribute.name}: ${selectedOptions.join(", ")}`]
-      : [];
-  });
-  if (lines.length === 0) {
-    return content;
-  }
-  return content.replaceAll(placeholder, lines.join("\n"));
-}
-
 function renderOutputFormatPreview(content: string, outputFormat: string) {
   if (!content.includes(MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER)) {
     return content;
@@ -322,8 +252,44 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
   const [errorMessage, setErrorMessage] = useState("");
   const [busyPromptId, setBusyPromptId] = useState("");
   const [busyPromptAction, setBusyPromptAction] = useState<"default" | "delete" | null>(null);
+  const [dataExample, setDataExample] = useState<DataExample | null>(null);
+  const [dataExampleError, setDataExampleError] = useState("");
 
   const activeGroup = useMemo(() => getGroup(config, type), [config, type]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDataExample() {
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/api/v1/admin/data-examples/${dataExampleTypeForPromptType(type)}`,
+          { headers: { "x-request-id": `web-${Date.now()}` } },
+        );
+        if (!response.ok) {
+          throw new Error(await readApiError(response));
+        }
+        const payload = (await response.json()) as ApiSuccess<DataExample>;
+        if (!cancelled) {
+          setDataExample(payload.data);
+          setDataExampleError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDataExample(null);
+          setDataExampleError(
+            error instanceof Error ? error.message : "Cannot load data example template.",
+          );
+        }
+      }
+    }
+
+    void loadDataExample();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [type]);
 
   async function refreshConfig() {
     const response = await fetch(`${apiBaseUrl}/api/v1/admin/master-prompts`, {
@@ -436,6 +402,36 @@ export function MasterPromptList({ config: initialConfig, type }: MasterPromptLi
         ) : null}
         {errorMessage ? <p className="mb-3 text-sm text-red-600">{errorMessage}</p> : null}
         <div className="space-y-3">
+          <div className="rounded-md border border-sky-100 bg-sky-50/70 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{typeTitle(type)} file template</span>
+                  <Badge variant="info">Protected</Badge>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {dataExample?.updatedAt ?? "File-backed template"}
+                </div>
+                {dataExampleError ? (
+                  <p className="mt-2 text-sm text-red-600">{dataExampleError}</p>
+                ) : (
+                  <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
+                    {dataExample?.masterPromptContent ?? "Loading file template..."}
+                  </p>
+                )}
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <LinkButton
+                  href={masterPromptTemplateHref(type)}
+                  variant="secondary"
+                  className="h-9 gap-2 px-3"
+                >
+                  <Pencil size={15} />
+                  Edit template
+                </LinkButton>
+              </div>
+            </div>
+          </div>
           {activeGroup.prompts.map((prompt) => (
             <div
               key={prompt.id}
@@ -509,10 +505,11 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
   const { t } = useI18n();
   const { clearToast, showToast, toast } = useFeedbackToast();
   const activeGroup = useMemo(() => getGroup(config, type), [config, type]);
-  const existingPrompt = promptId
+  const isTemplateEditor = promptId === "data-example";
+  const existingPrompt = promptId && !isTemplateEditor
     ? activeGroup.prompts.find((prompt) => prompt.id === promptId) ?? null
     : null;
-  const isMissingPrompt = Boolean(promptId && !existingPrompt);
+  const isMissingPrompt = Boolean(promptId && !isTemplateEditor && !existingPrompt);
   const sourcePrompt = !promptId && source === "built-in" && activeGroup.defaultPrompt.isBuiltIn
     ? activeGroup.defaultPrompt
     : null;
@@ -528,17 +525,10 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
   const [draftAttributeSelection, setDraftAttributeSelection] = useState<MasterPromptAttributeSelection>(
     getPromptAttributeSelection(initialPrompt),
   );
-  const [draftWorkflowAttributeSelection, setDraftWorkflowAttributeSelection] = useState<MasterPromptAttributeSelection>(
-    getPromptWorkflowAttributeSelection(initialPrompt),
-  );
   const [masterPromptAttributeConfig, setMasterPromptAttributeConfig] =
     useState<MasterPromptAttributeConfig | null>(null);
-  const [workflowAttributeCatalog, setWorkflowAttributeCatalog] = useState<AttributeCatalog | null>(null);
-  const [workflowAttributeError, setWorkflowAttributeError] = useState("");
   const [expandedAttributeIds, setExpandedAttributeIds] = useState<Record<string, boolean>>({});
   const [expandedOptionHelpIds, setExpandedOptionHelpIds] = useState<Record<string, boolean>>({});
-  const [expandedWorkflowAttributeIds, setExpandedWorkflowAttributeIds] = useState<Record<string, boolean>>({});
-  const [expandedWorkflowOptionHelpIds, setExpandedWorkflowOptionHelpIds] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSettingDefault, setIsSettingDefault] = useState(false);
@@ -571,37 +561,55 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
       }
     }
 
-    async function loadWorkflowAttributeCatalog() {
-      try {
-        const catalogType = workflowCatalogType(type);
-        const response = await fetch(`${apiBaseUrl}/api/v1/admin/attribute-catalogs?type=${catalogType}`, {
-          headers: { "x-request-id": `web-${Date.now()}` },
-        });
-        if (!response.ok) {
-          throw new Error(await readApiError(response));
-        }
-        const payload = (await response.json()) as ApiSuccess<AttributeCatalogConfig>;
-        if (!cancelled) {
-          setWorkflowAttributeCatalog(payload.data.defaultCatalog);
-          setWorkflowAttributeError("");
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setWorkflowAttributeCatalog(null);
-          setWorkflowAttributeError(
-            error instanceof Error ? error.message : `Cannot load ${workflowAttributeTitle(type)} catalog.`,
-          );
-        }
-      }
-    }
-
     void loadMasterPromptAttributeConfig();
-    void loadWorkflowAttributeCatalog();
 
     return () => {
       cancelled = true;
     };
   }, [type]);
+
+  useEffect(() => {
+    if (sourcePrompt) {
+      return;
+    }
+    if (!isTemplateEditor && !isCreating) {
+      return;
+    }
+    let cancelled = false;
+
+    async function loadDataExample() {
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/api/v1/admin/data-examples/${dataExampleTypeForPromptType(type)}`,
+          { headers: { "x-request-id": `web-${Date.now()}` } },
+        );
+        if (!response.ok) {
+          throw new Error(await readApiError(response));
+        }
+        const payload = (await response.json()) as ApiSuccess<DataExample>;
+        if (cancelled) {
+          return;
+        }
+        setDraftContent(payload.data.masterPromptContent);
+        if (isTemplateEditor) {
+          setDraftName(`${typeTitle(type)} file template`);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const message =
+            error instanceof Error ? error.message : "Cannot load data example template.";
+          setErrorMessage(message);
+          showToast({ type: "error", message });
+        }
+      }
+    }
+
+    void loadDataExample();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreating, isTemplateEditor, sourcePrompt, type, showToast]);
 
   useEffect(() => {
     if (!masterPromptAttributeConfig) {
@@ -616,20 +624,47 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
     });
   }, [masterPromptAttributeConfig]);
 
-  useEffect(() => {
-    if (!workflowAttributeCatalog) {
+  async function savePrompt() {
+    if (isTemplateEditor) {
+      if (!draftContent.trim()) {
+        const message = "Template prompt content is required.";
+        setStatusMessage("");
+        setErrorMessage(message);
+        showToast({ type: "error", message });
+        return;
+      }
+      setIsSaving(true);
+      setStatusMessage("");
+      setErrorMessage("");
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/api/v1/admin/data-examples/${dataExampleTypeForPromptType(type)}`,
+          {
+            method: "PATCH",
+            headers: {
+              "content-type": "application/json",
+              "x-request-id": `web-${Date.now()}`,
+            },
+            body: JSON.stringify({ masterPromptContent: draftContent }),
+          },
+        );
+        if (!response.ok) {
+          throw new Error(await readApiError(response));
+        }
+        const message = "Template file saved.";
+        setStatusMessage(message);
+        showToast({ type: "success", message });
+        router.refresh();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Cannot save template file.";
+        setErrorMessage(message);
+        showToast({ type: "error", message });
+      } finally {
+        setIsSaving(false);
+      }
       return;
     }
-    setDraftWorkflowAttributeSelection((current) => {
-      const normalized = normalizeSelectionForAttributes(
-        current,
-        workflowAttributeCatalog.attributes,
-      );
-      return areSelectionsEqual(current, normalized) ? current : normalized;
-    });
-  }, [workflowAttributeCatalog]);
 
-  async function savePrompt() {
     if (isMissingPrompt) {
       const message = "Master prompt was not found or has been archived.";
       setStatusMessage("");
@@ -656,12 +691,6 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
             masterPromptAttributeConfig.attributes,
           )
         : draftAttributeSelection;
-      const workflowAttributeSelection = workflowAttributeCatalog
-        ? normalizeSelectionForAttributes(
-            draftWorkflowAttributeSelection,
-            workflowAttributeCatalog.attributes,
-          )
-        : draftWorkflowAttributeSelection;
       const response = await fetch(
         isCreating
           ? `${apiBaseUrl}/api/v1/admin/master-prompts`
@@ -678,7 +707,6 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
             content: draftContent,
             outputFormat: draftOutputFormat,
             attributeSelection,
-            workflowAttributeSelection,
           }),
         },
       );
@@ -785,20 +813,19 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
     try {
       setDebugDialog({
         title: `${typeTitle(type)} master prompt`,
-        help: "Exact admin preview. {masterPromptAttributes} and {outputFormat} are rendered from this draft; user runtime placeholders stay unchanged.",
-        value: renderOutputFormatPreview(
-          renderWorkflowAttributePreview(
-            renderMasterPromptAttributePreview(
-              draftContent,
-              draftAttributeSelection,
-              masterPromptAttributeConfig,
+        help: isTemplateEditor
+          ? "File template preview. This content is used only to prefill new DB records."
+          : "Exact admin preview. {masterPromptAttributes} and {outputFormat} are rendered from this draft; user runtime placeholders stay unchanged.",
+        value: isTemplateEditor
+          ? draftContent
+          : renderOutputFormatPreview(
+              renderMasterPromptAttributePreview(
+                draftContent,
+                draftAttributeSelection,
+                masterPromptAttributeConfig,
+              ),
+              draftOutputFormat,
             ),
-            type,
-            draftWorkflowAttributeSelection,
-            workflowAttributeCatalog,
-          ),
-          draftOutputFormat,
-        ),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Cannot render master prompt preview.";
@@ -828,26 +855,30 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
           <FileText size={16} />
           Prompt
         </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          className="gap-2"
-          disabled={isCreating || isSettingDefault || !existingPrompt || existingPrompt.isDefault || isMissingPrompt}
-          onClick={() => void setDefaultPrompt()}
-        >
-          {isSettingDefault ? <Loader2 size={16} className="animate-spin" /> : <Star size={16} />}
-          {t("adminMasterPrompt.setDefault")}
-        </Button>
-        <Button
-          type="button"
-          variant="destructive"
-          className="gap-2"
-          disabled={isCreating || isDeleting || !existingPrompt || isMissingPrompt}
-          onClick={() => void deletePrompt()}
-        >
-          {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-          {t("adminMasterPrompt.delete")}
-        </Button>
+        {!isTemplateEditor ? (
+          <Button
+            type="button"
+            variant="secondary"
+            className="gap-2"
+            disabled={isCreating || isSettingDefault || !existingPrompt || existingPrompt.isDefault || isMissingPrompt}
+            onClick={() => void setDefaultPrompt()}
+          >
+            {isSettingDefault ? <Loader2 size={16} className="animate-spin" /> : <Star size={16} />}
+            {t("adminMasterPrompt.setDefault")}
+          </Button>
+        ) : null}
+        {!isTemplateEditor ? (
+          <Button
+            type="button"
+            variant="destructive"
+            className="gap-2"
+            disabled={isCreating || isDeleting || !existingPrompt || isMissingPrompt}
+            onClick={() => void deletePrompt()}
+          >
+            {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+            {t("adminMasterPrompt.delete")}
+          </Button>
+        ) : null}
         {renderSaveButton()}
       </>
     );
@@ -862,7 +893,11 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="truncate text-lg font-semibold text-foreground">
-                  {isCreating ? t("adminMasterPrompt.newPrompt") : existingPrompt?.name ?? "Edit prompt"}
+                  {isTemplateEditor
+                    ? `${typeTitle(type)} file template`
+                    : isCreating
+                      ? t("adminMasterPrompt.newPrompt")
+                      : existingPrompt?.name ?? "Edit prompt"}
                 </h2>
                 {!isCreating && existingPrompt?.isDefault ? (
                   <Badge variant="success">{t("adminMasterPrompt.defaultBadge")}</Badge>
@@ -876,6 +911,7 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
                 <input
                   value={draftName}
                   onChange={(event) => setDraftName(event.target.value)}
+                  disabled={isTemplateEditor}
                   className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-sky-200"
                   placeholder={t("adminMasterPrompt.name")}
                 />
@@ -912,16 +948,19 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
             placeholderSuggestions={ADMIN_MASTER_PROMPT_PLACEHOLDERS[type]}
             className="min-h-[420px] resize-y"
           />
-          <MasterPromptField
-            id="adminMasterPromptOutputFormat"
-            label={t("adminMasterPrompt.outputFormat")}
-            help={t("adminMasterPrompt.outputFormatHelp")}
-            rows={8}
-            value={draftOutputFormat}
-            onChange={(event) => setDraftOutputFormat(event.target.value)}
-            className="min-h-[220px] resize-y"
-          />
-          <div className="rounded-lg border border-border bg-white p-4">
+          {!isTemplateEditor ? (
+            <MasterPromptField
+              id="adminMasterPromptOutputFormat"
+              label={t("adminMasterPrompt.outputFormat")}
+              help={t("adminMasterPrompt.outputFormatHelp")}
+              rows={8}
+              value={draftOutputFormat}
+              onChange={(event) => setDraftOutputFormat(event.target.value)}
+              className="min-h-[220px] resize-y"
+            />
+          ) : null}
+          {!isTemplateEditor ? (
+            <div className="rounded-lg border border-border bg-white p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-foreground">Master Prompt Attribute</h3>
@@ -1033,129 +1072,8 @@ export function MasterPromptEditor({ config, type, promptId, source }: MasterPro
                 ))}
               </div>
             )}
-          </div>
-          <div className="rounded-lg border border-border bg-white p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">{workflowAttributeTitle(type)}</h3>
-                <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-                  Select options from the active Admin {workflowAttributeTitle(type)} catalog for this prompt. The admin preview renders them only when the prompt content contains {workflowAttributePlaceholder(type)}.
-                </p>
-              </div>
-              <Badge variant="info">{selectedOptionCount(draftWorkflowAttributeSelection)} selected</Badge>
             </div>
-            {workflowAttributeError ? (
-              <div className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
-                {workflowAttributeError}
-              </div>
-            ) : null}
-            {!workflowAttributeCatalog ? (
-              <div className="mt-3 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-                No active {workflowAttributeTitle(type)} catalog exists. Open{" "}
-                <a href={`/admin/${workflowCatalogType(type)}/attributes`} className="font-medium text-sky-700 underline">
-                  {workflowAttributeTitle(type)}
-                </a>{" "}
-                to create and set a default catalog.
-              </div>
-            ) : (
-              <div className="mt-4 space-y-3">
-                <div className="rounded-md bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
-                  <span className="font-semibold">{workflowAttributeCatalog.name}</span>
-                  {workflowAttributeCatalog.description ? ` - ${workflowAttributeCatalog.description}` : ""}
-                </div>
-                {workflowAttributeCatalog.attributes.map((attribute, attributeIndex) => (
-                  <div key={attribute.id} className="rounded-md border border-border p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700">
-                            {attributeIndex + 1}
-                          </span>
-                          <span className="font-medium text-foreground">{attribute.name}</span>
-                        </div>
-                      </div>
-                      {attribute.description ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-9 w-9 px-0"
-                          aria-label={`Show ${attribute.name} helper`}
-                          title={attribute.description}
-                          onClick={() =>
-                            setExpandedWorkflowAttributeIds((current) => ({
-                              ...current,
-                              [attribute.id]: !current[attribute.id],
-                            }))
-                          }
-                        >
-                          <Info size={15} />
-                        </Button>
-                      ) : null}
-                    </div>
-                    {expandedWorkflowAttributeIds[attribute.id] ? (
-                      <div className="mt-3 rounded-md bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
-                        {attribute.description}
-                      </div>
-                    ) : null}
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      {attribute.options.map((option) => {
-                        const optionHelpKey = `${attribute.id}:${option.id}`;
-                        const isOptionHelpOpen = Boolean(expandedWorkflowOptionHelpIds[optionHelpKey]);
-                        return (
-                          <div
-                            key={option.id}
-                            className={`rounded-md border px-3 py-2 text-sm ${
-                              isSelected(draftWorkflowAttributeSelection, attribute.id, option.id)
-                                ? "border-sky-200 bg-sky-50"
-                                : "border-border bg-white"
-                            }`}
-                          >
-                            <div className="flex min-w-0 items-start justify-between gap-2">
-                              <label className="flex min-w-0 flex-1 items-start gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected(draftWorkflowAttributeSelection, attribute.id, option.id)}
-                                  onChange={(event) =>
-                                    setDraftWorkflowAttributeSelection((current) =>
-                                      toggleSelection(current, attribute.id, option.id, event.target.checked),
-                                    )
-                                  }
-                                  className="mt-1"
-                                />
-                                <span className="min-w-0 truncate font-medium text-foreground">{option.name}</span>
-                              </label>
-                              {option.description ? (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  className="h-7 w-7 shrink-0 px-0"
-                                  aria-label={`Show ${option.name} helper`}
-                                  title={option.description}
-                                  onClick={() =>
-                                    setExpandedWorkflowOptionHelpIds((current) => ({
-                                      ...current,
-                                      [optionHelpKey]: !current[optionHelpKey],
-                                    }))
-                                  }
-                                >
-                                  <Info size={14} />
-                                </Button>
-                              ) : null}
-                            </div>
-                            {isOptionHelpOpen ? (
-                              <p className="mt-2 rounded-md bg-white/70 px-2 py-1.5 text-xs leading-5 text-sky-800">
-                                {option.description}
-                              </p>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          ) : null}
           <p className="text-sm text-muted-foreground">{t("adminMasterPrompt.freeFormHelp")}</p>
         </div>
       </section>

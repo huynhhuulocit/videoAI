@@ -136,7 +136,7 @@ Steps:
 14. User can edit, add or remove shots, arbitrary shot attributes and the dedicated per-shot dialogue/voiceover textarea.
 15. User can upload reference media inside each shot card; validated media IDs are stored in that shot JSON as `mediaIds`.
 16. Step 4 loads the active admin `Shot` master prompt and active `Shot Attribute` catalog. The `Shot` prompt is singular and distinct from the Step 3 `Shots` prompt: `Shots` creates the shot-list JSON, while `Shot` creates the final prompt for one selected shot.
-17. User can select per-shot `Shot Attribute` options in each shot card. Required Shot attributes auto-select the first option and cannot be cleared to zero selections. The selection is saved on that shot JSON as `attributeSelection`.
+17. User can select per-shot `Shot Attribute` options in each shot card. When no saved selection exists, each Shot attribute starts with its first option selected. Required Shot attributes cannot be cleared to zero selections; optional Shot attributes may be cleared after the initial default selection. The selection is saved on that shot JSON as `attributeSelection`.
 18. Media-aware prompt popups show the saved image/video preview and metadata. Prompt copy remains text-only and does not copy image binaries from the media card or popup.
 19. The per-shot `Prompt` action renders the active `Shot` master prompt with exact placeholder replacement only. Supported placeholders include `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{masterPromptAttributes}` and `{outputFormat}`. The UI must not append hidden runtime context, provider output contract text or fallback prompt content.
 
@@ -322,14 +322,16 @@ Workers must tolerate duplicate job execution and should check whether a result 
 ## 10. Attribute Catalog Workflow
 
 - Story, Scenario, Shots, and Shot attributes are admin-managed catalogs, separate from Master Prompts.
-- Attribute Generation Prompt is saved per type and is used only for generating or editing catalog JSON. It is not loaded from Master Prompt.
-- Attribute generation uses exact placeholder replacement only. The supported generation placeholders are `{inputText}` and `{attributeJsonFormat}`.
+- Attribute Generation Prompt is a protected file-backed template per type under `data-examples/{type}/{type}-attribute-generation-prompt.md` and is used only for generating or editing catalog JSON. It is not loaded from Master Prompt. New catalog editors load this file as starter content before saving DB records.
+- Attribute JSON format and output instructions are also file-backed under `data-examples/{type}/{type}-attribute-json-format.md` and `data-examples/{type}/{type}-attribute-output-format.md`.
+- Attribute generation uses exact placeholder replacement only. The supported generation placeholders are `{inputText}`, `{attributeJsonFormat}`, and `{outputFormat}`. `{outputFormat}` renders from the Attribute Output Format file after replacing `{attributeJsonFormat}` with the Attribute JSON Format file.
 - Project and One Click load the active default catalog for each step:
   - Step 1 uses Story attributes.
   - Step 2 uses Scenario attributes.
   - Step 3 uses Shots attributes plus the saved Scenario selection when the prompt asks for it.
   - Step 4 uses Shot attributes saved per shot.
-- Required attributes auto-select the first option when no saved selection exists. Users may multi-select or change options, but required attributes cannot be empty.
+- When no saved selection exists, every attribute starts with its first option selected. Users may multi-select or change options; required attributes cannot be empty, while optional attributes may be cleared after the initial default selection.
+- Each selected attribute stores `selectionMode`. `user_selection` renders only selected options with the Admin `User select Attribute` prefix. `ai_suggestion` renders the Admin `AI select Attribute` prefix plus every option in that attribute and disables option editing in the user panel while preserving existing checked states.
 - Master Prompt runtime data is included only when the prompt contains the explicit placeholder:
   - Story Content: `{storyContent}`, `{storyAttributes}`, `{outputFormat}`
   - Scenario: `{story}`, `{scenarioAttributes}`, `{outputFormat}`
@@ -353,3 +355,11 @@ AI Handoff is separate from API-based video generation.
 - The extension must not store provider cookies, passwords, API keys, or access tokens.
 - AI Handoff v1 transfers prompt text only. Reference images/videos remain available in VideoAI and are uploaded manually to the target AI website.
 - Because no provider API is called by VideoAI for AI Handoff, normal provider request/response AI logs are not created for this flow; `ai_handoffs` is the audit record for browser handoff progress.
+## Template Snapshot Runtime
+
+For projects created from a User Custom Template, AI prompt rendering uses the
+project-owned `projectTemplateSnapshot` first. Selected Story, Scenario, Shots,
+and Shot steps render from the snapshot prompt and attribute catalog. Runtime
+data is still included only through explicit placeholders in those prompts. If a
+selected snapshot step is malformed or missing required prompt/catalog data, the
+request fails clearly; it does not fall back to live Admin defaults.

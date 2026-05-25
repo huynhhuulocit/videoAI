@@ -8,10 +8,12 @@ import type {
   AiHandoffStatus,
   AttributeCatalog,
   AttributeSelection,
+  AttributeSelectionMode,
   GenerateShotsJobResult,
   Job,
   MediaAsset,
   ProjectFlow,
+  ProjectTemplateSnapshot,
   ShotSelection,
   ShotPromptConfig,
   TemplateSelection,
@@ -22,12 +24,6 @@ import type {
   VideoTemplate,
 } from "@videoai/contracts";
 import {
-  DEFAULT_SCRIPT_GENERATION_PROMPT,
-  DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
-  DEFAULT_SHOT_GENERATION_PROMPT,
-  DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
-  DEFAULT_TEMPLATE_SELECTION_PROMPT,
-  DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
   MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   MASTER_PROMPT_PLACEHOLDERS,
   AttributeSelectionSchema,
@@ -61,10 +57,9 @@ import { Card } from "../ui/card";
 import { MasterPromptField } from "../ui/master-prompt-field";
 import { TextareaWithCounter } from "../ui/textarea-with-counter";
 import { useI18n } from "../i18n/language-provider";
-import {
-  translate,
-  type TranslationKey,
-  type TranslationValues,
+import type {
+  TranslationKey,
+  TranslationValues,
 } from "../../lib/i18n/dictionary";
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "";
@@ -85,6 +80,9 @@ type MediaKind = "image" | "video" | "unknown";
 type MediaStatus = "validated" | "rejected";
 type ScenarioAttribute = VideoTemplate["attributes"][number];
 type ScenarioOption = ScenarioAttribute["options"][number];
+type ProjectTemplateStepSnapshot = NonNullable<
+  ProjectTemplateSnapshot["steps"]["story"]
+>;
 
 function isValidAbsoluteUrl(value: string) {
   try {
@@ -121,6 +119,27 @@ function catalogToVideoTemplate(catalog: AttributeCatalog): VideoTemplate {
   };
 }
 
+function snapshotCatalogToAttributeCatalog(
+  type: AttributeCatalog["type"],
+  snapshot: ProjectTemplateStepSnapshot["attributeCatalog"] | undefined,
+): AttributeCatalog | null {
+  if (!snapshot) {
+    return null;
+  }
+  const now = new Date(0).toISOString();
+  return {
+    id: snapshot.id ?? `${type}_template_snapshot`,
+    type,
+    name: snapshot.name,
+    ...(snapshot.description ? { description: snapshot.description } : {}),
+    attributes: snapshot.attributes,
+    isDefault: false,
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 type MediaItem = {
   id: string;
   name: string;
@@ -145,6 +164,7 @@ type ProjectWorkspaceProps = {
     scenario?: AttributeSelection | null | undefined;
     shots?: AttributeSelection | null | undefined;
   } | null;
+  projectTemplateSnapshot?: ProjectTemplateSnapshot | null;
   defaultPrompt: string;
   defaultProductUrl: string;
 };
@@ -157,6 +177,15 @@ type PromptResult = {
   model: string;
   rawRequest?: unknown;
   rawResponse?: unknown;
+};
+
+type SiteConfig = {
+  showUserMasterPrompts: boolean;
+  aiSelectAttributeText: string;
+  userSelectAttributeText: string;
+  aiHandoffProvider: string;
+  aiHandoffTargetUrl?: string | null;
+  aiHandoffPromptSelector?: string | null;
 };
 
 type ProductAnalysisResult = {
@@ -1221,7 +1250,7 @@ function requiredOptionIdsForTemplate(template: VideoTemplate | null) {
   }
   return template.attributes.reduce<Record<string, string[]>>(
     (selectedIds, attribute) => {
-      if (attribute.required && attribute.options[0]) {
+      if (attribute.options[0]) {
         selectedIds[attribute.id] = [attribute.options[0].id];
       }
       return selectedIds;
@@ -1258,7 +1287,7 @@ function requiredOptionIdsForCatalog(catalog: AttributeCatalog | null) {
   }
   return catalog.attributes.reduce<Record<string, string[]>>(
     (selectedIds, attribute) => {
-      if (attribute.required && attribute.options[0]) {
+      if (attribute.options[0]) {
         selectedIds[attribute.id] = [attribute.options[0].id];
       }
       return selectedIds;
@@ -1305,9 +1334,45 @@ function attributeSelectionToOptionIds(
   );
 }
 
+type AttributeSelectionModes = Record<string, AttributeSelectionMode>;
+
+const userSelectionMode: AttributeSelectionMode = "user_selection";
+
+function attributeSelectionToModes(
+  selection: AttributeSelection | null | undefined,
+): AttributeSelectionModes {
+  if (!selection) {
+    return {};
+  }
+
+  return selection.attributes.reduce<AttributeSelectionModes>(
+    (modes, attribute) => ({
+      ...modes,
+      [attribute.id]: attribute.selectionMode ?? userSelectionMode,
+    }),
+    {},
+  );
+}
+
+function defaultSelectionModesForCatalog(
+  catalog: AttributeCatalog | null,
+): AttributeSelectionModes {
+  if (!catalog) {
+    return {};
+  }
+  return catalog.attributes.reduce<AttributeSelectionModes>(
+    (modes, attribute) => ({
+      ...modes,
+      [attribute.id]: userSelectionMode,
+    }),
+    {},
+  );
+}
+
 function buildAttributeSelection(
   catalog: AttributeCatalog | null,
   selectedOptionIds: Record<string, string[]>,
+  selectionModes: AttributeSelectionModes = {},
 ): AttributeSelection | null {
   if (!catalog) {
     return null;
@@ -1319,6 +1384,7 @@ function buildAttributeSelection(
         id: attribute.id,
         name: attribute.name,
         required: attribute.required,
+        selectionMode: selectionModes[attribute.id] ?? userSelectionMode,
         options: attribute.options
           .filter((option) => selectedIds.includes(option.id))
           .map((option) => ({
@@ -1328,7 +1394,11 @@ function buildAttributeSelection(
           })),
       };
     })
-    .filter((attribute) => attribute.options.length > 0);
+    .filter(
+      (attribute) =>
+        attribute.options.length > 0 ||
+        attribute.selectionMode === "ai_suggestion",
+    );
   return {
     catalogId: catalog.id,
     catalogName: catalog.name,
@@ -1337,32 +1407,86 @@ function buildAttributeSelection(
   };
 }
 
-function formatAttributeSelectionCompact(selection: AttributeSelection | null) {
+function formatAttributePrefix(prefix: string, content: string) {
+  const normalizedPrefix = prefix.trim();
+  return normalizedPrefix ? `${normalizedPrefix} ${content}` : content;
+}
+
+function formatAttributeSelectionCompact(
+  selection: AttributeSelection | null,
+  catalog: AttributeCatalog | null,
+  aiSelectAttributeText: string,
+  userSelectAttributeText: string,
+) {
   if (!selection || selection.attributes.length === 0) {
     return "";
   }
 
   return selection.attributes
-    .map(
-      (attribute) =>
-        `${attribute.name}=${attribute.options.map((option) => option.name).join(",")};`,
-    )
+    .map((attribute) => {
+      const mode = attribute.selectionMode ?? userSelectionMode;
+      const catalogAttribute = catalog?.attributes.find(
+        (item) => item.id === attribute.id,
+      );
+      const options =
+        mode === "ai_suggestion"
+          ? catalogAttribute?.options.map((option) => option.name) ?? []
+          : attribute.options.map((option) => option.name);
+
+      if (options.length === 0) {
+        return "";
+      }
+
+      const prefix =
+        mode === "ai_suggestion"
+          ? aiSelectAttributeText
+          : userSelectAttributeText;
+      return formatAttributePrefix(
+        prefix,
+        `${attribute.name}=${options.join(",")};`,
+      );
+    })
+    .filter(Boolean)
     .join("\n");
 }
 
 function attributeSelectionToShotAttributes(
   selection: AttributeSelection | null,
+  catalog: AttributeCatalog | null,
+  aiSelectAttributeText: string,
+  userSelectAttributeText: string,
 ): VideoShotAttribute[] {
   if (!selection) {
     return [];
   }
   return selection.attributes
-    .filter((attribute) => attribute.options.length > 0)
-    .map((attribute) => ({
-      id: `${selection.type}_${attribute.id}`,
-      name: attribute.name,
-      value: attribute.options.map((option) => option.name).join(", "),
-    }));
+    .map(
+      (attribute): VideoShotAttribute | null => {
+        const mode = attribute.selectionMode ?? userSelectionMode;
+        const catalogAttribute = catalog?.attributes.find(
+          (item) => item.id === attribute.id,
+        );
+        const options =
+          mode === "ai_suggestion"
+            ? catalogAttribute?.options.map((option) => option.name) ?? []
+            : attribute.options.map((option) => option.name);
+
+        if (options.length === 0) {
+          return null;
+        }
+
+        const prefix =
+          mode === "ai_suggestion"
+            ? aiSelectAttributeText
+            : userSelectAttributeText;
+        return {
+          id: `${selection.type}_${attribute.id}`,
+          name: attribute.name,
+          value: formatAttributePrefix(prefix, options.join(", ")),
+        };
+      },
+    )
+    .filter((attribute): attribute is VideoShotAttribute => Boolean(attribute));
 }
 
 function formatMediaPromptSummary(items: MediaItem[], emptyText: string) {
@@ -1714,11 +1838,20 @@ export function ProjectWorkspace({
   workspaceMode = "project",
   savedTemplateSelection,
   savedAttributeSelections,
+  projectTemplateSnapshot,
   defaultPrompt,
   defaultProductUrl,
 }: ProjectWorkspaceProps) {
   const { t } = useI18n();
   const isOneClickMode = workspaceMode === "one-click";
+  const hasProjectTemplateSnapshot = Boolean(projectTemplateSnapshot);
+  const templateSteps = projectTemplateSnapshot?.steps ?? null;
+  const hasTemplateStep = (step: keyof ProjectTemplateSnapshot["steps"]) =>
+    !templateSteps || Boolean(templateSteps[step]);
+  const showStoryStep = flowType === "script" && hasTemplateStep("story");
+  const showScenarioStep = flowType === "script" && hasTemplateStep("scenario");
+  const showShotsStep = flowType === "script" && hasTemplateStep("shots");
+  const showShotStep = flowType === "script" && hasTemplateStep("shot");
   const oneClickRecordName =
     projectName?.trim() || t("oneClick.namePlaceholder");
   const oneClickRecordDescription =
@@ -1730,9 +1863,7 @@ export function ProjectWorkspace({
     (isOneClickMode
       ? t("oneClick.wizardDescription")
       : t("projectDetail.description"));
-  const [promptText, setPromptText] = useState(
-    defaultPrompt || (isOneClickMode ? "" : t("projectDetail.defaultPrompt")),
-  );
+  const [promptText, setPromptText] = useState(defaultPrompt || "");
   const [productUrl, setProductUrl] = useState(defaultProductUrl);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [shotPlans, setShotPlans] = useState<VideoShotPlan[]>([]);
@@ -1775,9 +1906,15 @@ export function ProjectWorkspace({
   const [storyOptionIds, setStoryOptionIds] = useState<
     Record<string, string[]>
   >({});
+  const [storySelectionModes, setStorySelectionModes] =
+    useState<AttributeSelectionModes>({});
   const [shotsOptionIds, setShotsOptionIds] = useState<
     Record<string, string[]>
   >({});
+  const [scenarioSelectionModes, setScenarioSelectionModes] =
+    useState<AttributeSelectionModes>({});
+  const [shotsSelectionModes, setShotsSelectionModes] =
+    useState<AttributeSelectionModes>({});
   const [templateAnalysisCompact, setTemplateAnalysisCompact] = useState("");
   const [generatedShotPrompts, setGeneratedShotPrompts] = useState<
     Record<string, string>
@@ -1808,23 +1945,18 @@ export function ProjectWorkspace({
   >({});
   const [shotPromptTemplate, setShotPromptTemplate] = useState("");
   const [shotPromptOutputFormat, setShotPromptOutputFormat] = useState("");
-  const [shotGenerationPrompt, setShotGenerationPrompt] = useState(
-    DEFAULT_SHOT_GENERATION_PROMPT,
-  );
-  const [shotGenerationOutputFormat, setShotGenerationOutputFormat] = useState(
-    DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
-  );
-  const [scenarioAnalysisPrompt, setScenarioAnalysisPrompt] = useState(
-    DEFAULT_TEMPLATE_SELECTION_PROMPT,
-  );
+  const [shotGenerationPrompt, setShotGenerationPrompt] = useState("");
+  const [shotGenerationOutputFormat, setShotGenerationOutputFormat] =
+    useState("");
+  const [scenarioAnalysisPrompt, setScenarioAnalysisPrompt] = useState("");
   const [scenarioAnalysisOutputFormat, setScenarioAnalysisOutputFormat] =
-    useState(DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT);
-  const [scriptGenerationPrompt, setScriptGenerationPrompt] = useState(
-    DEFAULT_SCRIPT_GENERATION_PROMPT,
-  );
+    useState("");
+  const [scriptGenerationPrompt, setScriptGenerationPrompt] = useState("");
   const [scriptGenerationOutputFormat, setScriptGenerationOutputFormat] =
-    useState(DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT);
+    useState("");
   const [showUserMasterPrompts, setShowUserMasterPrompts] = useState(false);
+  const [aiSelectAttributeText, setAiSelectAttributeText] = useState("");
+  const [userSelectAttributeText, setUserSelectAttributeText] = useState("");
   const [aiHandoffProvider, setAiHandoffProvider] = useState("");
   const [aiHandoffTargetUrl, setAiHandoffTargetUrl] = useState("");
   const [aiHandoffPromptSelector, setAiHandoffPromptSelector] = useState("");
@@ -1900,14 +2032,17 @@ export function ProjectWorkspace({
   const storyAttributeSelection = buildAttributeSelection(
     storyAttributeCatalog,
     storyOptionIds,
+    storySelectionModes,
   );
   const scenarioAttributeSelection = buildAttributeSelection(
     scenarioAttributeCatalog,
     selectedOptionIds,
+    scenarioSelectionModes,
   );
   const shotsAttributeSelection = buildAttributeSelection(
     shotsAttributeCatalog,
     shotsOptionIds,
+    shotsSelectionModes,
   );
   const selectedShotPlan =
     shotPlans.find((shotPlan) => shotPlan.id === selectedShotPlanId) ?? null;
@@ -1917,11 +2052,28 @@ export function ProjectWorkspace({
     if (!shotAttributeCatalog) {
       return shot.attributeSelection ?? null;
     }
-    const selectedIds = mergeWithRequiredCatalogOptionIds(
+    const templateShotSelection = templateSteps?.shot?.attributeSelection ?? null;
+    const selectedIds = shot.attributeSelection
+      ? mergeWithRequiredCatalogOptionIds(
+          shotAttributeCatalog,
+          attributeSelectionToOptionIds(shot.attributeSelection),
+        )
+      : templateShotSelection
+        ? mergeWithRequiredCatalogOptionIds(
+            shotAttributeCatalog,
+            attributeSelectionToOptionIds(templateShotSelection),
+          )
+      : requiredOptionIdsForCatalog(shotAttributeCatalog);
+    const selectionModes = shot.attributeSelection
+      ? attributeSelectionToModes(shot.attributeSelection)
+      : templateShotSelection
+        ? attributeSelectionToModes(templateShotSelection)
+        : defaultSelectionModesForCatalog(shotAttributeCatalog);
+    return buildAttributeSelection(
       shotAttributeCatalog,
-      attributeSelectionToOptionIds(shot.attributeSelection),
+      selectedIds,
+      selectionModes,
     );
-    return buildAttributeSelection(shotAttributeCatalog, selectedIds);
   }
 
   useEffect(() => {
@@ -2137,6 +2289,72 @@ export function ProjectWorkspace({
 
     async function loadTemplates() {
       try {
+        if (hasProjectTemplateSnapshot) {
+          if (!showScenarioStep) {
+            setScenarioAttributeCatalog(null);
+            setScenarioSelectionModes({});
+            setTemplates([]);
+            setSelectedTemplateId("");
+            setSelectedOptionIds({});
+            return;
+          }
+          const defaultScenarioCatalog = snapshotCatalogToAttributeCatalog(
+            "scenario",
+            templateSteps?.scenario?.attributeCatalog,
+          );
+          if (!defaultScenarioCatalog) {
+            throw new Error(
+              "Project template snapshot is missing Scenario attribute data.",
+            );
+          }
+          if (!cancelled) {
+            const snapshotTemplate = catalogToVideoTemplate(
+              defaultScenarioCatalog,
+            );
+            const templateScenarioSelection =
+              templateSteps?.scenario?.attributeSelection ?? null;
+            setScenarioAttributeCatalog(defaultScenarioCatalog);
+            setScenarioSelectionModes(
+              savedAttributeSelections?.scenario
+                ? attributeSelectionToModes(savedAttributeSelections.scenario)
+                : templateScenarioSelection
+                  ? attributeSelectionToModes(templateScenarioSelection)
+                : defaultSelectionModesForCatalog(defaultScenarioCatalog),
+            );
+            setTemplates([snapshotTemplate]);
+            setSelectedTemplateId((current) => current || snapshotTemplate.id);
+            if (savedAttributeSelections?.scenario) {
+              setSelectedOptionIds(
+                mergeWithRequiredCatalogOptionIds(
+                  defaultScenarioCatalog,
+                  attributeSelectionToOptionIds(
+                    savedAttributeSelections.scenario,
+                  ),
+                ),
+              );
+            } else if (templateScenarioSelection) {
+              setSelectedOptionIds(
+                mergeWithRequiredCatalogOptionIds(
+                  defaultScenarioCatalog,
+                  attributeSelectionToOptionIds(templateScenarioSelection),
+                ),
+              );
+            } else if (savedTemplateSelection) {
+              setSelectedOptionIds(
+                mergeWithRequiredCatalogOptionIds(
+                  defaultScenarioCatalog,
+                  templateSelectionToOptionIds(savedTemplateSelection),
+                ),
+              );
+            } else {
+              setSelectedOptionIds(
+                requiredOptionIdsForCatalog(defaultScenarioCatalog),
+              );
+            }
+          }
+          return;
+        }
+
         const defaultScenarioCatalog = await apiGet<AttributeCatalog | null>(
           "/attribute-catalogs/scenario/default",
         );
@@ -2144,7 +2362,17 @@ export function ProjectWorkspace({
           ? [catalogToVideoTemplate(defaultScenarioCatalog)]
           : [];
         if (!cancelled) {
+          if (!defaultScenarioCatalog) {
+            const loadError = t("workspace.attributeCatalogConfigLoadFailed");
+            setErrorMessage(loadError);
+            setStatus({ label: loadError, tone: "danger" });
+          }
           setScenarioAttributeCatalog(defaultScenarioCatalog);
+          setScenarioSelectionModes(
+            savedAttributeSelections?.scenario
+              ? attributeSelectionToModes(savedAttributeSelections.scenario)
+              : defaultSelectionModesForCatalog(defaultScenarioCatalog),
+          );
           setTemplates(loadedTemplates);
           const nextTemplateId =
             loadedTemplates[0]?.id ||
@@ -2157,21 +2385,43 @@ export function ProjectWorkspace({
             )
           ) {
             setSelectedOptionIds(
-              mergeWithRequiredOptionIds(
-                loadedTemplates[0] ?? null,
-                templateSelectionToOptionIds(savedTemplateSelection),
+              defaultScenarioCatalog
+                ? mergeWithRequiredCatalogOptionIds(
+                    defaultScenarioCatalog,
+                    savedAttributeSelections?.scenario
+                      ? attributeSelectionToOptionIds(
+                          savedAttributeSelections.scenario,
+                        )
+                      : templateSelectionToOptionIds(savedTemplateSelection),
+                  )
+                : mergeWithRequiredOptionIds(
+                    loadedTemplates[0] ?? null,
+                    templateSelectionToOptionIds(savedTemplateSelection),
+                  ),
+            );
+          } else if (savedAttributeSelections?.scenario) {
+            setSelectedOptionIds(
+              mergeWithRequiredCatalogOptionIds(
+                defaultScenarioCatalog,
+                attributeSelectionToOptionIds(savedAttributeSelections.scenario),
               ),
             );
           } else if (loadedTemplates[0]) {
             setSelectedOptionIds(
-              requiredOptionIdsForTemplate(loadedTemplates[0]),
+              defaultScenarioCatalog
+                ? requiredOptionIdsForCatalog(defaultScenarioCatalog)
+                : requiredOptionIdsForTemplate(loadedTemplates[0]),
             );
           }
         }
       } catch {
         if (!cancelled) {
+          const loadError = t("workspace.attributeCatalogConfigLoadFailed");
           setScenarioAttributeCatalog(null);
+          setScenarioSelectionModes({});
           setTemplates([]);
+          setErrorMessage(loadError);
+          setStatus({ label: loadError, tone: "danger" });
         }
       }
     }
@@ -2181,13 +2431,101 @@ export function ProjectWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [savedTemplateSelection]);
+  }, [
+    hasProjectTemplateSnapshot,
+    savedAttributeSelections,
+    savedTemplateSelection,
+    showScenarioStep,
+    t,
+    templateSteps,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadStepAttributeCatalogs() {
       try {
+        if (hasProjectTemplateSnapshot) {
+          const storyCatalog = showStoryStep
+            ? snapshotCatalogToAttributeCatalog(
+                "story",
+                templateSteps?.story?.attributeCatalog,
+              )
+            : null;
+          const shotsCatalog = showShotsStep
+            ? snapshotCatalogToAttributeCatalog(
+                "shots",
+                templateSteps?.shots?.attributeCatalog,
+              )
+            : null;
+          const shotCatalog = showShotStep
+            ? snapshotCatalogToAttributeCatalog(
+                "shot",
+                templateSteps?.shot?.attributeCatalog,
+              )
+            : null;
+          if (
+            (showStoryStep && !storyCatalog) ||
+            (showShotsStep && !shotsCatalog) ||
+            (showShotStep && !shotCatalog)
+          ) {
+            throw new Error(
+              "Project template snapshot is missing selected step attribute data.",
+            );
+          }
+          if (cancelled) {
+            return;
+          }
+          const templateStorySelection =
+            templateSteps?.story?.attributeSelection ?? null;
+          const templateShotsSelection =
+            templateSteps?.shots?.attributeSelection ?? null;
+          setStoryAttributeCatalog(storyCatalog);
+          setStorySelectionModes(
+            savedAttributeSelections?.story
+              ? attributeSelectionToModes(savedAttributeSelections.story)
+              : templateStorySelection
+                ? attributeSelectionToModes(templateStorySelection)
+              : defaultSelectionModesForCatalog(storyCatalog),
+          );
+          setStoryOptionIds(
+            savedAttributeSelections?.story
+              ? mergeWithRequiredCatalogOptionIds(
+                  storyCatalog,
+                  attributeSelectionToOptionIds(savedAttributeSelections.story),
+                )
+              : templateStorySelection
+                ? mergeWithRequiredCatalogOptionIds(
+                    storyCatalog,
+                    attributeSelectionToOptionIds(templateStorySelection),
+                  )
+              : requiredOptionIdsForCatalog(storyCatalog),
+          );
+          setShotsAttributeCatalog(shotsCatalog);
+          setShotsSelectionModes(
+            savedAttributeSelections?.shots
+              ? attributeSelectionToModes(savedAttributeSelections.shots)
+              : templateShotsSelection
+                ? attributeSelectionToModes(templateShotsSelection)
+              : defaultSelectionModesForCatalog(shotsCatalog),
+          );
+          setShotsOptionIds(
+            savedAttributeSelections?.shots
+              ? mergeWithRequiredCatalogOptionIds(
+                  shotsCatalog,
+                  attributeSelectionToOptionIds(savedAttributeSelections.shots),
+                )
+              : templateShotsSelection
+                ? mergeWithRequiredCatalogOptionIds(
+                    shotsCatalog,
+                    attributeSelectionToOptionIds(templateShotsSelection),
+                  )
+              : requiredOptionIdsForCatalog(shotsCatalog),
+          );
+          setShotAttributeCatalog(shotCatalog);
+          return;
+        }
+
         const [storyCatalog, shotsCatalog, shotCatalog] = await Promise.all([
           apiGet<AttributeCatalog | null>("/attribute-catalogs/story/default"),
           apiGet<AttributeCatalog | null>("/attribute-catalogs/shots/default"),
@@ -2196,28 +2534,52 @@ export function ProjectWorkspace({
         if (cancelled) {
           return;
         }
+        if (!storyCatalog || !shotsCatalog || !shotCatalog) {
+          const loadError = t("workspace.attributeCatalogConfigLoadFailed");
+          setErrorMessage(loadError);
+          setStatus({ label: loadError, tone: "danger" });
+        }
         setStoryAttributeCatalog(storyCatalog);
+        setStorySelectionModes(
+          savedAttributeSelections?.story
+            ? attributeSelectionToModes(savedAttributeSelections.story)
+            : defaultSelectionModesForCatalog(storyCatalog),
+        );
         setStoryOptionIds(
-          mergeWithRequiredCatalogOptionIds(
-            storyCatalog,
-            attributeSelectionToOptionIds(savedAttributeSelections?.story),
-          ),
+          savedAttributeSelections?.story
+            ? mergeWithRequiredCatalogOptionIds(
+                storyCatalog,
+                attributeSelectionToOptionIds(savedAttributeSelections.story),
+              )
+            : requiredOptionIdsForCatalog(storyCatalog),
         );
         setShotsAttributeCatalog(shotsCatalog);
+        setShotsSelectionModes(
+          savedAttributeSelections?.shots
+            ? attributeSelectionToModes(savedAttributeSelections.shots)
+            : defaultSelectionModesForCatalog(shotsCatalog),
+        );
         setShotsOptionIds(
-          mergeWithRequiredCatalogOptionIds(
-            shotsCatalog,
-            attributeSelectionToOptionIds(savedAttributeSelections?.shots),
-          ),
+          savedAttributeSelections?.shots
+            ? mergeWithRequiredCatalogOptionIds(
+                shotsCatalog,
+                attributeSelectionToOptionIds(savedAttributeSelections.shots),
+              )
+            : requiredOptionIdsForCatalog(shotsCatalog),
         );
         setShotAttributeCatalog(shotCatalog);
       } catch {
         if (!cancelled) {
+          const loadError = t("workspace.attributeCatalogConfigLoadFailed");
           setStoryAttributeCatalog(null);
           setStoryOptionIds({});
+          setStorySelectionModes({});
           setShotsAttributeCatalog(null);
           setShotsOptionIds({});
+          setShotsSelectionModes({});
           setShotAttributeCatalog(null);
+          setErrorMessage(loadError);
+          setStatus({ label: loadError, tone: "danger" });
         }
       }
     }
@@ -2227,69 +2589,95 @@ export function ProjectWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [savedAttributeSelections]);
+  }, [
+    hasProjectTemplateSnapshot,
+    savedAttributeSelections,
+    showShotStep,
+    showShotsStep,
+    showStoryStep,
+    t,
+    templateSteps,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadShotPromptConfig() {
       try {
+        if (hasProjectTemplateSnapshot) {
+          const config = await apiGet<SiteConfig>("/admin/site-config");
+          if (!cancelled) {
+            setShotPromptTemplate(
+              templateSteps?.shot?.masterPrompt.content ?? "",
+            );
+            setShotPromptOutputFormat(
+              templateSteps?.shot?.masterPrompt.outputFormat ?? "",
+            );
+            setShotGenerationPrompt(
+              templateSteps?.shots?.masterPrompt.content ?? "",
+            );
+            setShotGenerationOutputFormat(
+              templateSteps?.shots?.masterPrompt.outputFormat ?? "",
+            );
+            setScenarioAnalysisPrompt(
+              templateSteps?.scenario?.masterPrompt.content ?? "",
+            );
+            setScenarioAnalysisOutputFormat(
+              templateSteps?.scenario?.masterPrompt.outputFormat ?? "",
+            );
+            setScriptGenerationPrompt(
+              templateSteps?.story?.masterPrompt.content ?? "",
+            );
+            setScriptGenerationOutputFormat(
+              templateSteps?.story?.masterPrompt.outputFormat ?? "",
+            );
+            setShowUserMasterPrompts(config.showUserMasterPrompts);
+            setAiSelectAttributeText(config.aiSelectAttributeText);
+            setUserSelectAttributeText(config.userSelectAttributeText);
+            setAiHandoffProvider(config.aiHandoffProvider);
+            setAiHandoffTargetUrl(config.aiHandoffTargetUrl ?? "");
+            setAiHandoffPromptSelector(config.aiHandoffPromptSelector ?? "");
+          }
+          return;
+        }
+
         const config = await apiGet<ShotPromptConfig>("/admin/shot-prompt");
         if (!cancelled) {
           setShotPromptTemplate(config.shotPrompt);
           setShotPromptOutputFormat(config.shotOutputFormat);
-          setShotGenerationPrompt(
-            config.prompt ||
-              config.defaultPrompt ||
-              DEFAULT_SHOT_GENERATION_PROMPT,
-          );
-          setShotGenerationOutputFormat(
-            config.outputFormat ??
-              config.defaultOutputFormat ??
-              DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
-          );
-          setScenarioAnalysisPrompt(
-            config.scenarioAnalysisPrompt ||
-              config.defaultScenarioAnalysisPrompt ||
-              DEFAULT_TEMPLATE_SELECTION_PROMPT,
-          );
+          setShotGenerationPrompt(config.prompt);
+          setShotGenerationOutputFormat(config.outputFormat);
+          setScenarioAnalysisPrompt(config.scenarioAnalysisPrompt);
           setScenarioAnalysisOutputFormat(
-            config.scenarioAnalysisOutputFormat ??
-              config.defaultScenarioAnalysisOutputFormat ??
-              DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
+            config.scenarioAnalysisOutputFormat,
           );
-          setScriptGenerationPrompt(
-            config.scriptGenerationPrompt ||
-              config.defaultScriptGenerationPrompt ||
-              DEFAULT_SCRIPT_GENERATION_PROMPT,
-          );
-          setScriptGenerationOutputFormat(
-            config.scriptGenerationOutputFormat ??
-              config.defaultScriptGenerationOutputFormat ??
-              DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
-          );
+          setScriptGenerationPrompt(config.scriptGenerationPrompt);
+          setScriptGenerationOutputFormat(config.scriptGenerationOutputFormat);
           setShowUserMasterPrompts(config.showUserMasterPrompts);
+          setAiSelectAttributeText(config.aiSelectAttributeText);
+          setUserSelectAttributeText(config.userSelectAttributeText);
           setAiHandoffProvider(config.aiHandoffProvider);
           setAiHandoffTargetUrl(config.aiHandoffTargetUrl ?? "");
           setAiHandoffPromptSelector(config.aiHandoffPromptSelector ?? "");
         }
       } catch {
         if (!cancelled) {
+          const loadError = t("workspace.masterPromptConfigLoadFailed");
           setShotPromptTemplate("");
           setShotPromptOutputFormat("");
-          setShotGenerationPrompt(DEFAULT_SHOT_GENERATION_PROMPT);
-          setShotGenerationOutputFormat(DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT);
-          setScenarioAnalysisPrompt(DEFAULT_TEMPLATE_SELECTION_PROMPT);
-          setScenarioAnalysisOutputFormat(
-            DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
-          );
-          setScriptGenerationPrompt(DEFAULT_SCRIPT_GENERATION_PROMPT);
-          setScriptGenerationOutputFormat(
-            DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
-          );
+          setShotGenerationPrompt("");
+          setShotGenerationOutputFormat("");
+          setScenarioAnalysisPrompt("");
+          setScenarioAnalysisOutputFormat("");
+          setScriptGenerationPrompt("");
+          setScriptGenerationOutputFormat("");
+          setAiSelectAttributeText("");
+          setUserSelectAttributeText("");
           setAiHandoffProvider("");
           setAiHandoffTargetUrl("");
           setAiHandoffPromptSelector("");
+          setErrorMessage(loadError);
+          setStatus({ label: loadError, tone: "danger" });
         }
       }
     }
@@ -2299,7 +2687,7 @@ export function ProjectWorkspace({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hasProjectTemplateSnapshot, t, templateSteps]);
 
   useEffect(() => {
     setStatus((current) =>
@@ -2335,18 +2723,6 @@ export function ProjectWorkspace({
   useEffect(() => {
     setIsPromptPreviewCopied(false);
   }, [isPromptPreviewOpen]);
-
-  useEffect(() => {
-    if (defaultPrompt || isOneClickMode) {
-      return;
-    }
-    const defaultPrompts: string[] = [translate("projectDetail.defaultPrompt")];
-    setPromptText((current) =>
-      defaultPrompts.includes(current)
-        ? t("projectDetail.defaultPrompt")
-        : current,
-    );
-  }, [defaultPrompt, isOneClickMode, t]);
 
   useEffect(() => {
     if (!isOneClickMode) {
@@ -2899,9 +3275,15 @@ export function ProjectWorkspace({
           attributes: templateSelectionToShotAttributes(templateSelection),
           scenarioAttributes: attributeSelectionToShotAttributes(
             scenarioAttributeSelection,
+            scenarioAttributeCatalog,
+            aiSelectAttributeText,
+            userSelectAttributeText,
           ),
           shotsAttributes: attributeSelectionToShotAttributes(
             shotsAttributeSelection,
+            shotsAttributeCatalog,
+            aiSelectAttributeText,
+            userSelectAttributeText,
           ),
           ...(showUserMasterPrompts ? { masterPrompt } : {}),
           ...(isOneClickMode
@@ -3286,6 +3668,9 @@ export function ProjectWorkspace({
           inputText,
           catalogId: selectedTemplate.id,
           ...(showUserMasterPrompts ? { masterPrompt } : {}),
+          attributeSelections: {
+            scenario: scenarioAttributeSelection,
+          },
         },
       );
       const completedJob = await pollJob(queuedJob.jobId);
@@ -3445,7 +3830,12 @@ export function ProjectWorkspace({
 
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       storyContent: inputText,
-      storyAttributes: formatAttributeSelectionCompact(storyAttributeSelection),
+      storyAttributes: formatAttributeSelectionCompact(
+        storyAttributeSelection,
+        storyAttributeCatalog,
+        aiSelectAttributeText,
+        userSelectAttributeText,
+      ),
       outputFormat: scriptGenerationOutputFormat,
     });
     return renderedPrompt;
@@ -3479,7 +3869,12 @@ export function ProjectWorkspace({
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       story: inputText,
       attributes: attributeCatalogText,
-      scenarioAttributes: attributeCatalogText,
+      scenarioAttributes: formatAttributeSelectionCompact(
+        scenarioAttributeSelection,
+        scenarioAttributeCatalog,
+        aiSelectAttributeText,
+        userSelectAttributeText,
+      ),
       outputFormat: scenarioAnalysisOutputFormat,
     });
 
@@ -3507,7 +3902,12 @@ export function ProjectWorkspace({
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       story: inputText,
       attributes: attributeContext,
-      scenarioAttributes: attributeContext,
+      scenarioAttributes: formatAttributeSelectionCompact(
+        scenarioAttributeSelection,
+        scenarioAttributeCatalog,
+        aiSelectAttributeText,
+        userSelectAttributeText,
+      ),
       outputFormat: scenarioAnalysisOutputFormat,
     });
 
@@ -3525,10 +3925,20 @@ export function ProjectWorkspace({
       templateSelectionToShotAttributes(templateSelection),
     );
     const scenarioAttributesText = formatPlanAttributesForPrompt(
-      attributeSelectionToShotAttributes(scenarioAttributeSelection),
+      attributeSelectionToShotAttributes(
+        scenarioAttributeSelection,
+        scenarioAttributeCatalog,
+        aiSelectAttributeText,
+        userSelectAttributeText,
+      ),
     );
     const shotsAttributesText = formatPlanAttributesForPrompt(
-      attributeSelectionToShotAttributes(shotsAttributeSelection),
+      attributeSelectionToShotAttributes(
+        shotsAttributeSelection,
+        shotsAttributeCatalog,
+        aiSelectAttributeText,
+        userSelectAttributeText,
+      ),
     );
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       story: sourceText,
@@ -4058,6 +4468,8 @@ export function ProjectWorkspace({
     catalog,
     selectedIds,
     setSelectedIds,
+    selectionModes,
+    setSelectionModes,
     title,
     help,
     helperPrefix,
@@ -4068,6 +4480,10 @@ export function ProjectWorkspace({
     selectedIds: Record<string, string[]>;
     setSelectedIds: (
       updater: (current: Record<string, string[]>) => Record<string, string[]>,
+    ) => void;
+    selectionModes: AttributeSelectionModes;
+    setSelectionModes: (
+      updater: (current: AttributeSelectionModes) => AttributeSelectionModes,
     ) => void;
     title: string;
     help: string;
@@ -4166,10 +4582,32 @@ export function ProjectWorkspace({
       setRawDataModal(null);
     }
 
+    function toggleCatalogMode(attributeId: string, checked: boolean) {
+      setSelectionModes((current) => ({
+        ...current,
+        [attributeId]: checked ? "ai_suggestion" : "user_selection",
+      }));
+      setGeneratedShotPrompts({});
+      setRawStoryRequest(null);
+      setRawStoryResponse(null);
+      setRawTemplateRequest(null);
+      setRawTemplateResponse(null);
+      setRawShotRequest(null);
+      setRawShotResponse(null);
+      setShotGenerationErrorMessage("");
+      setShotGenerationSuccessMessage("");
+      setTemplateAnalysisCompact("");
+      setTemplateAnalysisErrorMessage("");
+      setRawDataModal(null);
+    }
+
     const attributeList = (
       <div className="grid gap-3">
         {catalog.attributes.map((attribute, attributeIndex) => {
           const attributeSelectedIds = selectedIds[attribute.id] ?? [];
+          const selectionMode =
+            selectionModes[attribute.id] ?? userSelectionMode;
+          const isAiSuggestion = selectionMode === "ai_suggestion";
           const collapseKey = `${helperPrefix}:${attribute.id}`;
           const isAttributeCollapsed =
             collapsedCatalogAttributeIds[collapseKey] ?? true;
@@ -4230,6 +4668,17 @@ export function ProjectWorkspace({
                   translateLabel={t("workspace.scenarioHelperTranslate")}
                 />
               </div>
+              <label className="mt-2 inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-border"
+                  checked={isAiSuggestion}
+                  onChange={(event) =>
+                    toggleCatalogMode(attribute.id, event.target.checked)
+                  }
+                />
+                {t("workspace.attributeAiSuggestion")}
+              </label>
               {!isAttributeCollapsed ? (
                 <>
                   {attribute.description ? (
@@ -4248,6 +4697,10 @@ export function ProjectWorkspace({
                             checked
                               ? "border-sky-300 bg-sky-50 text-sky-800"
                               : "border-border bg-white text-foreground hover:bg-muted"
+                          } ${
+                            isAiSuggestion
+                              ? "cursor-not-allowed opacity-70"
+                              : ""
                           }`}
                         >
                           <input
@@ -4255,13 +4708,18 @@ export function ProjectWorkspace({
                             type="checkbox"
                             className="h-4 w-4 rounded border-border"
                             checked={checked}
+                            disabled={isAiSuggestion}
                             onChange={() =>
                               toggleCatalogOption(attribute.id, option.id)
                             }
                           />
                           <label
                             htmlFor={optionInputId}
-                            className="flex min-w-0 cursor-pointer items-center gap-2"
+                            className={`flex min-w-0 items-center gap-2 ${
+                              isAiSuggestion
+                                ? "cursor-not-allowed"
+                                : "cursor-pointer"
+                            }`}
                           >
                             <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                               {attributeIndex + 1}.{optionIndex + 1}
@@ -4348,7 +4806,7 @@ export function ProjectWorkspace({
   }
 
   function renderStoryContentStep() {
-    if (flowType !== "script") {
+    if (!showStoryStep) {
       return null;
     }
 
@@ -4497,6 +4955,8 @@ export function ProjectWorkspace({
                 catalog: storyAttributeCatalog,
                 selectedIds: storyOptionIds,
                 setSelectedIds: setStoryOptionIds,
+                selectionModes: storySelectionModes,
+                setSelectionModes: setStorySelectionModes,
                 title: "Story Attributes",
                 help: "Admin-managed Story attributes. Required attributes keep at least one selected option.",
                 helperPrefix: "story",
@@ -5011,6 +5471,8 @@ export function ProjectWorkspace({
             catalog: scenarioAttributeCatalog,
             selectedIds: selectedOptionIds,
             setSelectedIds: setSelectedOptionIds,
+            selectionModes: scenarioSelectionModes,
+            setSelectionModes: setScenarioSelectionModes,
             title: "Scenario Attributes",
             help: "Admin-managed Scenario attributes. AI can analyze Story Content and select matching options, and required attributes cannot be empty.",
             helperPrefix: "scenario-one-click",
@@ -5144,6 +5606,9 @@ export function ProjectWorkspace({
         : "";
     const shotAttributeText = formatAttributeSelectionCompact(
       buildShotAttributeSelectionForShot(shot),
+      shotAttributeCatalog,
+      aiSelectAttributeText,
+      userSelectAttributeText,
     );
     const mediaSummary =
       shotMediaItems.length > 0
@@ -5489,7 +5954,7 @@ export function ProjectWorkspace({
   }
 
   function renderShotsPanel() {
-    if (flowType !== "script") {
+    if (!showShotsStep && !showShotStep) {
       return null;
     }
 
@@ -5501,6 +5966,7 @@ export function ProjectWorkspace({
 
     return (
       <>
+        {showShotsStep ? (
         <div className="mt-4 rounded-lg border border-border bg-white p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <button
@@ -5637,6 +6103,8 @@ export function ProjectWorkspace({
                     catalog: shotsAttributeCatalog,
                     selectedIds: shotsOptionIds,
                     setSelectedIds: setShotsOptionIds,
+                    selectionModes: shotsSelectionModes,
+                    setSelectionModes: setShotsSelectionModes,
                     title: "Shots Attributes",
                     help: "Admin-managed Shots attributes used when the Shots master prompt contains {shotsAttributes}. Required attributes keep at least one selected option.",
                     helperPrefix: "shots",
@@ -5653,7 +6121,9 @@ export function ProjectWorkspace({
             </>
           ) : null}
         </div>
+        ) : null}
 
+        {showShotStep ? (
         <div className="mt-4 rounded-lg border border-border bg-white p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <button
@@ -5744,6 +6214,9 @@ export function ProjectWorkspace({
                       (attribute) => !isDialogueAttribute(attribute),
                     );
                     const adminShotSelectedIds = attributeSelectionToOptionIds(
+                      buildShotAttributeSelectionForShot(shot),
+                    );
+                    const adminShotSelectionModes = attributeSelectionToModes(
                       buildShotAttributeSelectionForShot(shot),
                     );
                     const isShotAttributesOpen =
@@ -5842,6 +6315,39 @@ export function ProjectWorkspace({
                                       ? buildAttributeSelection(
                                           shotAttributeCatalog,
                                           nextIds,
+                                          attributeSelectionToModes(
+                                            currentShot.attributeSelection,
+                                          ),
+                                        )
+                                      : null,
+                                  };
+                                });
+                              },
+                              selectionModes: adminShotSelectionModes,
+                              setSelectionModes: (updater) => {
+                                updateShot(shot.id, (currentShot) => {
+                                  const currentModes =
+                                    attributeSelectionToModes(
+                                      currentShot.attributeSelection,
+                                    );
+                                  const nextModes = updater(currentModes);
+                                  const currentIds = shotAttributeCatalog
+                                    ? mergeWithRequiredCatalogOptionIds(
+                                        shotAttributeCatalog,
+                                        attributeSelectionToOptionIds(
+                                          currentShot.attributeSelection,
+                                        ),
+                                      )
+                                    : attributeSelectionToOptionIds(
+                                        currentShot.attributeSelection,
+                                      );
+                                  return {
+                                    ...currentShot,
+                                    attributeSelection: shotAttributeCatalog
+                                      ? buildAttributeSelection(
+                                          shotAttributeCatalog,
+                                          currentIds,
+                                          nextModes,
                                         )
                                       : null,
                                   };
@@ -6103,11 +6609,16 @@ export function ProjectWorkspace({
             )
           ) : null}
         </div>
+        ) : null}
       </>
     );
   }
 
   function renderTemplateSelector() {
+    if (flowType === "script" && !showScenarioStep) {
+      return null;
+    }
+
     const activeTemplate = selectedTemplate ?? templates[0] ?? null;
     const selectedTemplateOptionCount = selectedTemplate
       ? selectedTemplate.attributes.reduce(

@@ -64,6 +64,10 @@ import {
 } from "./db-store.js";
 import { ok } from "./response.js";
 import { ShotPlansService } from "./shot-plans.service.js";
+import {
+  resolveProjectTemplateSnapshot,
+  resolveUserProjectTemplateSnapshot,
+} from "./project-templates.controller.js";
 
 const aiShotAttributeSchema = z.object({
   name: z.string().trim().min(1),
@@ -243,13 +247,28 @@ export class ProjectsController {
   @Post()
   async createProject(@Body() rawBody: unknown) {
     const body = CreateProjectRequestSchema.parse(rawBody);
+    if (body.projectTemplateId && body.userProjectTemplateId) {
+      throw new BadRequestException(
+        "Choose either a Project Template or a Custom Template, not both.",
+      );
+    }
+    const templateSnapshot = body.projectTemplateId
+      ? await resolveProjectTemplateSnapshot(body.projectTemplateId)
+      : body.userProjectTemplateId
+        ? await resolveUserProjectTemplateSnapshot(body.userProjectTemplateId)
+        : null;
     const project = await prisma.projectRecord.create({
       data: {
         id: `project_${Date.now()}`,
         ownerUserId: defaultUserId,
         name: body.name,
         description: body.description ?? null,
-        flowType: body.flowType,
+        flowType: templateSnapshot ? "script" : body.flowType,
+        projectTemplateId: templateSnapshot?.templateId ?? null,
+        userProjectTemplateId: templateSnapshot?.userTemplateId ?? null,
+        projectTemplateSnapshot: templateSnapshot
+          ? this.toJson(templateSnapshot)
+          : Prisma.JsonNull,
         status: "active",
       },
     });
@@ -1080,6 +1099,15 @@ export class ProjectsController {
       const masterPrompt = payload.masterPrompt
         ? String(payload.masterPrompt)
         : undefined;
+      const scenarioAttributeSelection = this.extractAttributeSelection(
+        payload.attributeSelections,
+        "scenario",
+      );
+      const scenarioAttributesText =
+        await this.formatAttributeSelectionCompact(
+          scenarioAttributeSelection,
+          config,
+        );
       return this.createTemplateSelectionWithAi(
         projectId,
         inputText,
@@ -1087,6 +1115,7 @@ export class ProjectsController {
         catalogId,
         config,
         masterPrompt,
+        scenarioAttributesText,
         Boolean(payload.saveAsTemplate),
         payload.templateName ? String(payload.templateName) : undefined,
         payload.templateDescription
@@ -1106,8 +1135,9 @@ export class ProjectsController {
       const masterPrompt = payload.masterPrompt
         ? String(payload.masterPrompt)
         : config.scriptGenerationPrompt;
-      const storyAttributes = this.formatAttributeSelectionCompact(
+      const storyAttributes = await this.formatAttributeSelectionCompact(
         this.extractAttributeSelection(payload.attributeSelections, "story"),
+        config,
       );
       return this.createStoryContentWithAi(
         projectId,
@@ -1346,6 +1376,7 @@ export class ProjectsController {
     catalogId: string | undefined,
     config: AiConfig,
     masterPrompt?: string,
+    scenarioAttributesText = "",
     saveAsTemplate?: boolean,
     templateNameOverride?: string,
     templateDescriptionOverride?: string,
@@ -1387,6 +1418,7 @@ export class ProjectsController {
         attributes,
       },
       config.templateSelectionOutputFormat,
+      scenarioAttributesText,
     );
     const rawRequest = this.buildTemplateSelectionProviderRequest(
       provider,
@@ -1462,6 +1494,7 @@ export class ProjectsController {
     inputText: string,
     template: { id: string; name: string; attributes: TemplateAttribute[] },
     outputFormat: string | null | undefined,
+    scenarioAttributesText: string,
   ) {
     const attributeCatalog = template.attributes.map((attribute) => ({
       attributeId: attribute.id,
@@ -1491,7 +1524,7 @@ export class ProjectsController {
       {
         story: inputText,
         attributes: attributeCatalogText,
-        scenarioAttributes: attributeCatalogText,
+        scenarioAttributes: scenarioAttributesText,
         outputFormat: outputFormat ?? "",
       },
     );
@@ -2614,6 +2647,9 @@ export class ProjectsController {
             id: z.string(),
             name: z.string(),
             required: z.boolean().default(false),
+            selectionMode: z
+              .enum(["user_selection", "ai_suggestion"])
+              .default("user_selection"),
             options: z.array(
               z.object({
                 id: z.string(),
@@ -2628,18 +2664,50 @@ export class ProjectsController {
     return parsed.success ? parsed.data : null;
   }
 
-  private formatAttributeSelectionCompact(
+  private async formatAttributeSelectionCompact(
     selection: AttributeSelection | null,
+    config: AiConfig,
   ) {
     if (!selection) {
       return "";
     }
+    const needsCatalog = selection.attributes.some(
+      (attribute) => attribute.selectionMode === "ai_suggestion",
+    );
+    const catalog = needsCatalog
+      ? await getDefaultAttributeCatalog(selection.type)
+      : null;
+    if (needsCatalog && !catalog) {
+      throw new BadRequestException(
+        `Default ${selection.type} attribute catalog is missing.`,
+      );
+    }
     return selection.attributes
-      .filter((attribute) => attribute.options.length > 0)
-      .map(
-        (attribute) =>
-          `${attribute.id}=${attribute.options.map((option) => option.name).join(",")};`,
-      )
+      .map((attribute) => {
+        const mode = attribute.selectionMode ?? "user_selection";
+        const catalogAttribute = catalog?.attributes.find(
+          (item) => item.id === attribute.id,
+        );
+        if (mode === "ai_suggestion" && !catalogAttribute) {
+          throw new BadRequestException(
+            `${selection.catalogName} Attribute "${attribute.id}" is not configured.`,
+          );
+        }
+        const optionNames =
+          mode === "ai_suggestion"
+            ? catalogAttribute?.options.map((option) => option.name) ?? []
+            : attribute.options.map((option) => option.name);
+        if (optionNames.length === 0) {
+          return "";
+        }
+        const prefix =
+          mode === "ai_suggestion"
+            ? config.aiSelectAttributeText.trim()
+            : config.userSelectAttributeText.trim();
+        const content = `${attribute.name}=${optionNames.join(",")};`;
+        return prefix ? `${prefix} ${content}` : content;
+      })
+      .filter(Boolean)
       .join("\n");
   }
 
@@ -2658,6 +2726,7 @@ export class ProjectsController {
         id: attribute.id,
         name: attribute.name,
         required: false,
+        selectionMode: "user_selection",
         options: attribute.options.map((option) => ({
           id: option.id,
           name: option.label,

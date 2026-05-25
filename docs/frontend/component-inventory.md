@@ -184,15 +184,16 @@ Purpose:
 
 - Allow admin to manage site-wide prompt/video behavior and provider credentials.
 - `AiConfigForm` renders `Content mode`, `Site Config`, `Prompt provider/model`, and `Video provider/model` as a single-column set of collapsed sections by default. The form manages prompt/video provider keys, shows `configured`/`missing` status, saves config plus any newly entered keys through the shared `Save configuration` button at the top-right and bottom-right of the form, and tests provider/model connectivity through `POST /api/v1/admin/ai-config/test-connection`.
-- `AiConfigForm` also renders a `Site Config` section with `Show master prompts in user workspace`. The default is `No`; when disabled, Project and One Click hide editable master prompt textareas while keeping `Prompt` preview buttons visible.
+- `AiConfigForm` also renders a `Site Config` section with `Show master prompts in user workspace`, `AI select Attribute`, and `User select Attribute`. The default master prompt visibility is `No`; when disabled, Project and One Click hide editable master prompt textareas while keeping `Prompt` preview buttons visible. The attribute text fields are used as prefixes when rendering attribute placeholders and may be empty.
 - `AiConfigForm` renders a read-only `JS DOM detector script` under Site Config > AI Handoff with a `Copy script` action. This lets admins reuse the console helper that exports prompt input and Generate button selectors from an allowlisted AI target page, including `bestSelector`, `.class`-only `classPath`, and `tagClassPath`; the script is not executed by the app and does not change runtime handoff behavior by itself.
 - Allow admin to manage `Story Content`, `Scenario`, `Shots`, and `Shot` master prompts from list-only child routes: `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, and `/admin/shot/master-prompt`. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in rows open `/new?source=built-in` so `Save` creates a persisted prompt instead of editing built-in content. The persisted type key for Story Content remains `scripts` for API compatibility. Prompt content keeps a recommended placeholder format, but placeholders are optional when saving.
+- `MasterPromptList` shows a protected file-backed template row for each Story Content, Scenario, Shots, and Shot type. `Edit template` opens `/data-example` under the selected type and updates `data-examples/{type}/*-master-prompt.md`; the file row has no Delete or Set default action.
 - Admin `Master Prompt` content editing uses `MasterPromptField` for both `Prompt content` and the separate `Output Format placeholder` textarea. `{outputFormat}` is inserted only when the prompt content contains that token.
 - `MasterPromptConfigManager` renders the admin-only global Master Prompt Config page. It provides a synchronized JSON textarea and visual attribute/option editor.
 - `MasterPromptEditor` renders a read/select `Master Prompt Attribute` section in each Story Content, Scenario, Shots, and Shot master prompt editor. The section selects options from the global Master Prompt Config for that prompt record and does not allow editing the global config.
-- `MasterPromptEditor` also renders a type-specific admin workflow attribute section below `Master Prompt Attribute`: Story Content shows Story Attribute, Scenario shows Scenario Attribute, Shots shows Shots Attribute, and Shot shows Shot Attribute. The section reads the active catalog for that type and saves the selected options on the prompt record as `workflowAttributeSelection`.
+- `MasterPromptEditor` does not render the type-specific Story/Scenario/Shots/Shot workflow Attribute selector. Those workflow attributes are selected in Project and One Click user flows, not on master prompt records.
 - `MasterPromptEditor` shows Master Prompt Attribute option names only in the selection rows. Attribute and option descriptions are hidden behind helper icons and are not injected into `{masterPromptAttributes}`.
-- `MasterPromptEditor` exposes a `Prompt` preview button. It opens a read-only exact preview that replaces admin-owned `{masterPromptAttributes}` from the draft selection, replaces the matching type-specific attribute placeholder when `workflowAttributeSelection` has selected options, and replaces `{outputFormat}` from the draft Output Format textarea. Other user runtime placeholders stay unchanged.
+- `MasterPromptEditor` exposes a `Prompt` preview button. It opens a read-only exact preview that replaces admin-owned `{masterPromptAttributes}` from the draft selection and replaces `{outputFormat}` from the draft Output Format textarea. Other user runtime placeholders stay unchanged.
 - Admin master prompt editors include `{masterPromptAttributes}` in their placeholder suggestions. User-facing master prompt editors exclude it.
 
 ## 7. Admin Log Components
@@ -300,10 +301,11 @@ Install or generate these first:
 
 - Admin attribute pages use shared Story, Scenario, Shots, and Shot catalog components.
 - The `Attribute` child routes are list-only pages. `New catalog` and `Edit` open dedicated editor routes instead of appending the editor beside the list.
-- The editor contains a separate Attribute Generation Prompt textarea, source textarea, JSON textarea, visual attribute/option editor, required checkbox per attribute, and Prompt/Request/Response debug actions next to the AI generation controls.
+- `AttributeCatalogList` shows a protected file-backed Attribute Generation Prompt template row for each type. `Edit template` updates `data-examples/{type}/*-attribute-generation-prompt.md`, `*-attribute-json-format.md`, and `*-attribute-output-format.md`; the file row has no Delete or Set default action.
+- The editor contains separate Attribute Generation Prompt, JSON format, and Output format textareas, plus source textarea, JSON textarea, visual attribute/option editor, required checkbox per attribute, and Prompt/Request/Response debug actions next to the AI generation controls.
 - Attribute JSON and visual attribute/option rows stay synchronized while editing; the attribute name, description, and `Require` checkbox sit on one row on desktop.
 - Attribute Generation Prompt is not a Master Prompt. It only creates catalog JSON.
-- Project and One Click use the same attribute selection pattern for Story, Scenario, Shots, and per-shot Shot: required attributes keep one selected option; optional attributes may be empty.
+- Project and One Click use the same attribute selection pattern for Story, Scenario, Shots, and per-shot Shot: every attribute initially selects its first option, required attributes keep one selected option, and optional attributes may be cleared after the initial default selection. Each attribute header includes `AI suggestion`; when checked, options are disabled and prompt rendering uses all options with the Admin AI prefix. When unchecked, prompt rendering uses selected options with the Admin user-selection prefix.
 - Master Prompt placeholder autocomplete should list the explicit attribute placeholders for the active prompt type.
 
 ## 12. AI Handoff Components
@@ -317,3 +319,24 @@ Install or generate these first:
 - If the saved target URL is missing or invalid, the shot card shows a clear configuration error and does not open a fallback URL.
 - Extension popup/settings live in `apps/chrome-extension` and show extension status, current target support, and last handoff result.
 - No component should expose provider cookies, passwords, API keys, or auto-upload reference media in AI Handoff v1.
+## Project Template Components
+
+- `AdminProjectTemplateList`: Admin list-only Project Template view with Add,
+  Edit, and Delete actions.
+- `AdminProjectTemplateWorkflow`: create/edit form with name/description,
+  checkbox rows ordered Shot, Shots, Scenario, Story, Shot-always-selected
+  enforcement, and saved master prompt selectors for the selected steps. It
+  saves the template directly and replaces the older second-step snapshot
+  editor.
+- `CustomTemplateEditor`: user-owned step editor for Custom Templates. It uses
+  Project-style step cards with master prompt editing, Prompt preview, disabled
+  Request/Response placeholders until runtime AI runs in a project, Attribute
+  panels, option selection, and AI suggestion mode. The selected Attribute
+  defaults are saved into the Custom Template snapshot and copied into projects
+  created from it.
+- `CreateProjectForm` `Choose how to start` section: shows Scenario/Product
+  start cards, then selectable Admin Project Template cards. Selecting an Admin
+  template passes `projectTemplateId`. Clone, edit, delete, and Custom Template
+  management lists are not shown in this creation flow.
+- `UserProjectTemplatesList`: Projects-list management section for user-owned
+  Custom Templates with Edit and Delete actions.

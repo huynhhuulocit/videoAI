@@ -156,7 +156,7 @@ Admin async actions use a shared feedback pattern: the active button is disabled
 
 Visible master prompt editors use a shared cyan prompt surface. This applies to project workspace Story Content, Scenario, Shots and Shot master prompts, scenario create/edit master prompts and the admin Master Prompt editor. Ordinary content/schema/output textareas stay neutral.
 
-Admin master prompt navigation uses list/editor route separation. `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, and `/admin/shot/master-prompt` are list-only pages. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in prompt rows open `/new?source=built-in` so admin users create persisted copies instead of editing built-in content. Editor pages expose `Prompt content` plus a separate `Output Format placeholder` textarea. They keep prompt name, the editor description, and `Prompt`/`Set default`/`Delete`/`Save` controls in a sticky top editor bar so long attribute sections can still be saved without scrolling to the bottom. They also show the matching admin workflow Attribute catalog below `Master Prompt Attribute`: Story Content shows Story Attribute, Scenario shows Scenario Attribute, Shots shows Shots Attribute, and Shot shows Shot Attribute. Their `Prompt` preview button renders the exact draft prompt, replacing admin-owned `{masterPromptAttributes}`, replacing the matching type-specific attribute placeholder when admin selections exist, and replacing `{outputFormat}` while leaving other user runtime placeholders unchanged.
+Admin master prompt navigation uses list/editor route separation. `/admin/story/master-prompt`, `/admin/scenario/master-prompt`, `/admin/shots/master-prompt`, and `/admin/shot/master-prompt` are list-only pages. `New prompt` opens `/new`; `Edit` opens `/{promptId}`. Built-in prompt rows open `/new?source=built-in` so admin users create persisted copies instead of editing built-in content. Each list page also shows a protected file-backed template row; `Edit template` opens the `data-example` editor and updates `data-examples/{type}/*-master-prompt.md` without Delete or Set default actions. Editor pages expose `Prompt content` plus a separate `Output Format placeholder` textarea. They keep prompt name, the editor description, and `Prompt`/`Set default`/`Delete`/`Save` controls in a sticky top editor bar so long sections can still be saved without scrolling to the bottom. They show the global admin-only `Master Prompt Attribute` section, but they do not show the Story/Scenario/Shots/Shot workflow Attribute selector. Their `Prompt` preview button renders the exact draft prompt, replacing admin-owned `{masterPromptAttributes}` and `{outputFormat}` while leaving other user runtime placeholders unchanged.
 
 ## 7. Integration With API Gateway
 
@@ -194,6 +194,7 @@ For UI-heavy changes, screenshots are part of implementation verification, not o
   - `/admin/shot/master-prompt`
   - `/admin/shot/attributes`
 - The `Attribute` child routes are catalog list pages only. Catalog creation and editing use dedicated routes under the same type, such as `/admin/story/attributes/new` and `/admin/story/attributes/{catalogId}`.
+- Each Attribute list page also shows a protected file-backed Attribute Generation Prompt template row. `Edit template` opens the `data-example` editor and updates `data-examples/{type}/*-attribute-generation-prompt.md`; the file row has no Delete or Set default actions. New catalog editors load this file as the initial Attribute Generation Prompt sample.
 - Attribute editor pages share the same prompt/source/JSON/visual editor pattern. `Prompt`, `Request`, and `Response` actions sit next to the AI generation button so raw debug controls stay tied to generation.
 - Old `/admin/shot-prompt/...` routes should redirect to the matching new Master Prompt routes.
 - User navigation no longer exposes Scenario management. Project and One Click screens read admin default catalogs instead.
@@ -204,7 +205,7 @@ For UI-heavy changes, screenshots are part of implementation verification, not o
 - `/admin/master-prompt-config` renders a visual attribute/option editor plus a synchronized JSON textarea.
 - The config is shared by Story Content, Scenario, Shots, and Shot master prompt editors.
 - Story Content, Scenario, Shots, and Shot master prompt editor pages show a read/select `Master Prompt Attribute` section. Admins can select options for that prompt but cannot edit the global config from that section.
-- Story Content, Scenario, Shots, and Shot master prompt editor pages also show a read/select type-specific Attribute section using the active catalog for that prompt type. The selected options are saved per prompt as admin prompt-authoring metadata.
+- Story, Scenario, Shots, and Shot workflow attributes are not selected on master prompt records. They are selected in Project and One Click user workflows.
 - Master Prompt Attribute selection rows show names only. Descriptions are helper-icon content and are not inserted into `{masterPromptAttributes}`.
 - Admin master prompt placeholder suggestions include `{masterPromptAttributes}`.
 - User Project and One Click master prompt editors continue to use the user-safe placeholder list and must not show `{masterPromptAttributes}` or Master Prompt Attribute selectors.
@@ -220,3 +221,34 @@ For UI-heavy changes, screenshots are part of implementation verification, not o
 - Extension popup `Check DOM` captures the live Flow prompt selector, saves it to Admin config, displays the saved selector in the popup, and attempts to copy the selector value to the clipboard. `Copy selector` copies the saved selector value, while `Copy selector report` copies the full debug report. `Test input prompt` validates the saved selector by inserting the hardcoded text `test input prompt` and does not click Generate. For Slate/contenteditable editors such as Google Flow, the extension focuses the configured selector or its nearest editable parent and uses the browser insert-text command; it does not try fallback selectors.
 - Extension status/error responses are persisted through the project handoff API and surfaced as user-readable feedback.
 - If AI Handoff is disabled, missing an extension id, or missing/invalid saved target URL, the UI must fail clearly instead of attempting a fallback target.
+## Project Template UI Architecture
+
+Admin Project Templates use canonical routes:
+
+- `/admin/project-templates`
+- `/admin/project-templates/new/workflow`
+- `/admin/project-templates/{templateId}`
+
+The workflow form is used for both create and edit. It shows steps in Shot,
+Shots, Scenario, Story priority order. Shot is always selected; checking Shots,
+Scenario, or Story also checks every later step in the chain. The form requires
+a saved master prompt selection per selected step before saving the template.
+The old `/admin/project-templates/new/editor` path redirects back to the
+workflow route, and there is no separate snapshot editor step.
+
+User Custom Templates use `/projects/custom-templates/{templateId}` for edit.
+The project creation page shows Admin Project Templates as selectable start
+cards and passes `projectTemplateId` when one is selected. It does not show
+clone, edit, delete, or Custom Template management controls. User Custom
+Template list management lives on the `/projects` list page.
+The edit route renders the selected steps with the Project workspace step-card
+pattern instead of raw snapshot blocks. Prompt previews replace only template
+attribute placeholders, Request/Response remain unavailable until a real
+project runtime job runs, and Attribute panels save per-step default
+selections into the snapshot.
+
+`ProjectWorkspace` reads `projectTemplateSnapshot` from the project response. If
+present, snapshot prompt and attribute data take precedence over live Admin
+defaults, saved template Attribute selections initialize the matching workflow
+step, and only selected snapshot steps are rendered. Projects without a snapshot
+keep the active-default behavior.

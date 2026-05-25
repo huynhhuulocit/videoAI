@@ -40,6 +40,7 @@ const adminNav: NavItem[] = [
       { href: "/admin/master-prompt-config", label: "shell.masterPromptConfig" },
     ],
   },
+  { href: "/admin/project-templates", label: "shell.projectTemplates", icon: FolderOpen },
   {
     label: "shell.story",
     icon: FileText,

@@ -1,10 +1,17 @@
 "use client";
 
-import type { CreateProjectRequest, Project, ProjectFlow } from "@videoai/contracts";
+import type {
+  CreateProjectRequest,
+  Project,
+  ProjectFlow,
+  ProjectTemplate,
+  ProjectTemplateStepKey,
+} from "@videoai/contracts";
+import { PROJECT_TEMPLATE_STEP_ORDER } from "@videoai/contracts";
 import type { LucideIcon } from "lucide-react";
 import { FileText, Link2, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "../i18n/language-provider";
 import { Button } from "../ui/button";
 import { Card } from "../ui/card";
@@ -36,6 +43,42 @@ const flowOptions: Array<{
   }
 ];
 
+const stepLabels = {
+  story: "Story",
+  scenario: "Scenario",
+  shots: "Shots",
+  shot: "Shot",
+} satisfies Record<ProjectTemplateStepKey, string>;
+
+function unwrap<T>(payload: ApiSuccess<T> | T): T {
+  if (payload && typeof payload === "object" && "data" in payload) {
+    return (payload as ApiSuccess<T>).data;
+  }
+  return payload as T;
+}
+
+async function readApiError(response: Response) {
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: { message?: string }; message?: string }
+    | null;
+  return payload?.error?.message ?? payload?.message ?? `Request failed with status ${response.status}`;
+}
+
+async function apiGet<T>(path: string): Promise<T> {
+  const response = await fetch(`${apiBaseUrl}/api/v1${path}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+  return unwrap<T>((await response.json()) as ApiSuccess<T>);
+}
+
+function stepsLabel(finalStep: ProjectTemplateStepKey) {
+  const index = PROJECT_TEMPLATE_STEP_ORDER.indexOf(finalStep);
+  return PROJECT_TEMPLATE_STEP_ORDER.slice(index)
+    .map((step) => stepLabels[step])
+    .join(" -> ");
+}
+
 export function CreateProjectForm() {
   const router = useRouter();
   const { t } = useI18n();
@@ -44,6 +87,30 @@ export function CreateProjectForm() {
   const [flowType, setFlowType] = useState<ProjectFlow>("product");
   const [errorMessage, setErrorMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [adminTemplates, setAdminTemplates] = useState<ProjectTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
+
+  async function loadTemplates() {
+    setIsLoadingTemplates(true);
+    try {
+      const loadedAdminTemplates = await apiGet<ProjectTemplate[]>("/project-templates");
+      setAdminTemplates(loadedAdminTemplates);
+      setSelectedTemplateId((current) =>
+        current && loadedAdminTemplates.some((template) => template.id === current)
+          ? current
+          : "",
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Cannot load Project Templates.");
+    } finally {
+      setIsLoadingTemplates(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadTemplates();
+  }, []);
 
   async function createProject() {
     const trimmedName = name.trim();
@@ -57,11 +124,14 @@ export function CreateProjectForm() {
 
     const body: CreateProjectRequest = {
       name: trimmedName,
-      flowType
+      flowType: selectedTemplateId ? "script" : flowType
     };
     const trimmedDescription = description.trim();
     if (trimmedDescription) {
       body.description = trimmedDescription;
+    }
+    if (selectedTemplateId) {
+      body.projectTemplateId = selectedTemplateId;
     }
 
     try {
@@ -75,7 +145,7 @@ export function CreateProjectForm() {
       });
 
       if (!response.ok) {
-        throw new Error(`Create project failed with status ${response.status}`);
+        throw new Error(await readApiError(response));
       }
 
       const payload = (await response.json()) as ApiSuccess<Project>;
@@ -116,16 +186,20 @@ export function CreateProjectForm() {
         </div>
       </Card>
 
+      <div className="grid gap-5">
       <Card title={t("projectCreate.cardFlow")}>
         <div className="grid gap-3 md:grid-cols-2">
           {flowOptions.map((option) => {
             const Icon = option.icon;
-            const selected = option.value === flowType;
+            const selected = !selectedTemplateId && option.value === flowType;
             return (
               <button
                 key={option.value}
                 type="button"
-                onClick={() => setFlowType(option.value)}
+                onClick={() => {
+                  setSelectedTemplateId("");
+                  setFlowType(option.value);
+                }}
                 className={`rounded-md border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-sky-200 ${
                   selected ? "border-sky-300 bg-sky-50" : "border-border bg-white hover:bg-muted"
                 }`}
@@ -139,6 +213,78 @@ export function CreateProjectForm() {
             );
           })}
         </div>
+
+        <div className="mt-5 border-t border-border pt-5">
+          <div className="text-sm font-semibold text-foreground">
+            Project templates
+          </div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            Choose a template to start with its saved workflow snapshot.
+            Custom Template edit and delete actions are managed from the
+            Projects list.
+          </div>
+
+          {isLoadingTemplates ? (
+            <div className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+              Loading templates...
+            </div>
+          ) : (
+            <div className="mt-3 space-y-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Admin templates
+                </div>
+                <div className="mt-2 grid gap-2">
+                  {adminTemplates.length === 0 ? (
+                    <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                      No Admin Project Templates are available.
+                    </div>
+                  ) : (
+                    adminTemplates.map((template) => {
+                      const selected =
+                        selectedTemplateId === template.id;
+                      return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTemplateId(template.id);
+                          setFlowType("script");
+                        }}
+                        className={`rounded-md border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-sky-200 ${
+                          selected
+                            ? "border-sky-300 bg-sky-50"
+                            : "border-border bg-white hover:bg-muted"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="font-medium text-foreground">
+                            {template.name}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {stepsLabel(template.finalStep)}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                    })
+                  )}
+                </div>
+              </div>
+              {selectedTemplateId ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="px-0"
+                  onClick={() => setSelectedTemplateId("")}
+                >
+                  Create without template
+                </Button>
+              ) : null}
+            </div>
+          )}
+        </div>
+
         <div className="mt-5 flex justify-end">
           <Button
             type="button"
@@ -151,6 +297,7 @@ export function CreateProjectForm() {
           </Button>
         </div>
       </Card>
+      </div>
     </div>
   );
 }

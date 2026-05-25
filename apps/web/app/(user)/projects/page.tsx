@@ -5,9 +5,10 @@ import { I18nText } from "../../../components/i18n/i18n-text";
 import { LinkButton } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
 import { ProjectsTable } from "../../../components/project/projects-table";
+import { UserProjectTemplatesList } from "../../../components/project/user-project-templates-list";
 import { auth } from "../../../lib/auth/auth";
 import { getRoleLandingPath } from "../../../lib/auth/credentials";
-import { getProjects } from "../../../lib/api/client";
+import { getProjects, getUserProjectTemplates } from "../../../lib/api/client";
 
 export default async function ProjectsPage() {
   const session = await auth();
@@ -18,7 +19,10 @@ export default async function ProjectsPage() {
     redirect(getRoleLandingPath(session.user.role));
   }
 
-  const projects = await getProjects();
+  const [projects, userProjectTemplates] = await Promise.all([
+    getProjects(),
+    getUserProjectTemplates(),
+  ]);
 
   return (
     <DashboardShell
@@ -32,6 +36,15 @@ export default async function ProjectsPage() {
           <CirclePlus size={16} />
           <I18nText id="dashboard.createProject" />
         </LinkButton>
+      </div>
+      <div className="mb-5">
+        <Card title="Custom Templates">
+          <p className="mb-4 text-sm text-muted-foreground">
+            Manage your saved Custom Templates here. Project creation can select
+            a template without clone actions.
+          </p>
+          <UserProjectTemplatesList initialTemplates={userProjectTemplates} />
+        </Card>
       </div>
       <Card title={<I18nText id="projects.listTitle" />}>
         {projects.length === 0 ? (

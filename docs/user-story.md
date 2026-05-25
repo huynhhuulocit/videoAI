@@ -75,8 +75,9 @@ Admin quản lý cấu hình toàn site, bao gồm chế độ user được t�
 - Scenario management is admin-only. User navigation no longer exposes the Scenario catalog list or editor.
 - Admin manages Story, Scenario, Shots, and Shot as separate parent groups. Each group has a Master Prompt page and an Attribute page.
 - Attribute catalogs are separate from Master Prompts. Attribute Generation Prompt is separate as well and is used only to produce catalog JSON.
+- Tracked `data-examples/` files are the editable admin templates for new Story, Scenario, Shots, and Shot master prompts and Attribute Generation Prompts. File-backed templates cannot be deleted or set as default; saving a new item still creates a DB record.
 - Master Prompt Config is also separate from workflow Attribute catalogs. It is admin-only, shared globally across Story/Scenario/Shots/Shot master prompt editors, and user workflows cannot select or mutate it.
-- Project and One Click workflows load active admin catalogs for Story, Scenario, Shots, and per-shot Shot. Required attributes auto-select the first option and cannot be empty, while users can still multi-select and change options.
+- Project and One Click workflows load active admin catalogs for Story, Scenario, Shots, and per-shot Shot. When there is no saved selection, every attribute starts with its first option selected. Required attributes cannot be empty; optional attributes can be cleared after the initial default selection.
 - Runtime data enters AI prompts only through explicit placeholders in the selected prompt, such as `{storyAttributes}`, `{scenarioAttributes}`, and `{shotsAttributes}`.
 - Admin also manages a singular `Shot` feature for Step 4. `Shots` creates the Step 3 shot-list JSON; `Shot` provides the Step 4 per-shot master prompt and `Shot Attribute` catalog used to render a final prompt for one shot. Step 4 uses exact placeholder rendering only and stores per-shot `Shot Attribute` selections on each shot JSON object.
 - `{masterPromptAttributes}` is an admin-only placeholder that renders only from the admin-saved selection on the active master prompt.
@@ -92,3 +93,13 @@ Admin quản lý cấu hình toàn site, bao gồm chế độ user được t�
 - AI Handoff v1 automates prompt text only. Reference images/videos remain visible in VideoAI and are uploaded manually to the target AI website.
 - The extension must not store provider cookies, passwords, API keys, or try to bypass provider login, quota, CAPTCHA, safety dialogs, or restrictions.
 - Handoff status is persisted per project/shot so users and admins can inspect whether the prompt was sent, target opened, filled, generated, failed, or completed manually.
+## Project Templates
+
+Admins can define reusable Project Templates by choosing workflow steps and a
+saved master prompt for each selected Story, Scenario, Shots, and Shot step.
+The creation UI prioritizes Shot, Shots, Scenario, Story; Shot is always
+selected, and choosing an earlier step includes every later step through Shot.
+Users clone these templates
+into their own Custom Templates, adjust prompt and attribute snapshots, and
+create projects from those snapshots. Snapshot projects remain stable after
+future Admin default changes.

@@ -625,6 +625,8 @@ async function main() {
     data: {
       contentMode: "script",
       showUserMasterPrompts: false,
+      aiSelectAttributeText: "",
+      userSelectAttributeText: "",
       aiHandoffProvider: process.env.AI_HANDOFF_PROVIDER?.trim() || "google-flow-veo",
       aiHandoffTargetUrl:
         process.env.AI_HANDOFF_TARGET_URL?.trim() ||

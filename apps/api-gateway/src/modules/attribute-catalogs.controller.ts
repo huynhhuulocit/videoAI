@@ -17,11 +17,14 @@ import {
 } from "@videoai/contracts";
 import {
   defaultAdminId,
+  enforceSingleDefaultAttributeCatalog,
   getActiveAiConfig,
   getDefaultAttributeCatalog,
   mapAttributeCatalog,
+  normalizeAttributeCatalogAttributes,
   resolveProviderApiKey
 } from "./db-store.js";
+import { readDataExample } from "./data-examples.js";
 import { ok } from "./response.js";
 
 const attributeJsonSchema = {
@@ -124,30 +127,6 @@ function renderOptionalPromptPlaceholders(template: string, values: Record<strin
   );
 }
 
-function getAttributeJsonFormat(type: AttributeCatalogType) {
-  return JSON.stringify(
-    {
-      attributes: [
-        {
-          id: `${type}-mood`,
-          name: "Mood",
-          description: "Primary feeling or direction.",
-          required: true,
-          options: [
-            {
-              id: `${type}-mood-friendly`,
-              name: "Friendly",
-              description: "Warm, approachable, and easy to understand."
-            }
-          ]
-        }
-      ]
-    },
-    null,
-    2
-  );
-}
-
 function normalizeGeneratedAttributes(value: unknown): AttributeCatalogAttribute[] {
   const root = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -215,7 +194,7 @@ function normalizeGeneratedAttributes(value: unknown): AttributeCatalogAttribute
       { issues: parsed.error.issues }
     );
   }
-  return parsed.data;
+  return normalizeAttributeCatalogAttributes(parsed.data);
 }
 
 function toApiError(error: unknown): ApiError {
@@ -246,6 +225,7 @@ function toBadRequestException(error: ApiError, requestId?: string) {
 }
 
 async function listCatalogs(type: AttributeCatalogType) {
+  await enforceSingleDefaultAttributeCatalog(type);
   if (type === "story") {
     return (await prisma.storyAttributeCatalog.findMany({
       where: { status: "active" },
@@ -292,7 +272,7 @@ async function createCatalog(input: {
           id: `story_attr_${Date.now()}`,
           name: input.name,
           description: input.description ?? null,
-          attributes: toJson(input.attributes),
+          attributes: toJson(normalizeAttributeCatalogAttributes(input.attributes)),
           isDefault: count === 0,
           status: "active",
           createdByAdminId: defaultAdminId
@@ -309,7 +289,7 @@ async function createCatalog(input: {
           id: `scenario_attr_${Date.now()}`,
           name: input.name,
           description: input.description ?? null,
-          attributes: toJson(input.attributes),
+          attributes: toJson(normalizeAttributeCatalogAttributes(input.attributes)),
           isDefault: count === 0,
           status: "active",
           createdByAdminId: defaultAdminId
@@ -326,7 +306,7 @@ async function createCatalog(input: {
         type,
         name: input.name,
         description: input.description ?? null,
-        attributes: toJson(input.attributes),
+        attributes: toJson(normalizeAttributeCatalogAttributes(input.attributes)),
         isDefault: count === 0,
         status: "active",
         createdByAdminId: defaultAdminId
@@ -351,7 +331,9 @@ async function updateCatalog(
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.description !== undefined ? { description: input.description || null } : {}),
-        ...(input.attributes !== undefined ? { attributes: toJson(input.attributes) } : {})
+        ...(input.attributes !== undefined
+          ? { attributes: toJson(normalizeAttributeCatalogAttributes(input.attributes)) }
+          : {})
       }
     });
     return mapAttributeCatalog(type, row);
@@ -362,7 +344,9 @@ async function updateCatalog(
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.description !== undefined ? { description: input.description || null } : {}),
-        ...(input.attributes !== undefined ? { attributes: toJson(input.attributes) } : {})
+        ...(input.attributes !== undefined
+          ? { attributes: toJson(normalizeAttributeCatalogAttributes(input.attributes)) }
+          : {})
       }
     });
     return mapAttributeCatalog(type, row);
@@ -372,7 +356,9 @@ async function updateCatalog(
     data: {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.description !== undefined ? { description: input.description || null } : {}),
-      ...(input.attributes !== undefined ? { attributes: toJson(input.attributes) } : {})
+      ...(input.attributes !== undefined
+        ? { attributes: toJson(normalizeAttributeCatalogAttributes(input.attributes)) }
+        : {})
     }
   });
   return mapAttributeCatalog(type, row);
@@ -495,9 +481,15 @@ export class AdminAttributeCatalogsController {
         message: `${type} Attribute Generation Prompt is required before generating attributes.`
       }, requestId);
     }
+    const dataExample = await readDataExample(type);
+    const renderedOutputFormat = renderOptionalPromptPlaceholders(
+      dataExample.attributeOutputFormat,
+      { attributeJsonFormat: dataExample.attributeJsonFormat }
+    );
     const prompt = renderOptionalPromptPlaceholders(configuredPrompt, {
       inputText: body.inputText,
-      attributeJsonFormat: getAttributeJsonFormat(type)
+      attributeJsonFormat: dataExample.attributeJsonFormat,
+      outputFormat: renderedOutputFormat
     });
     const rawRequest = this.buildProviderRequest(provider, model, prompt);
 

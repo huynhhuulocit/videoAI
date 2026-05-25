@@ -287,6 +287,12 @@ export const ProjectSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   flowType: ProjectFlowSchema,
+  projectTemplateId: z.string().nullable().optional(),
+  userProjectTemplateId: z.string().nullable().optional(),
+  projectTemplateSnapshot: z
+    .lazy(() => ProjectTemplateSnapshotSchema)
+    .nullable()
+    .optional(),
   templateSelection: z
     .lazy(() => TemplateSelectionSchema)
     .nullable()
@@ -304,6 +310,8 @@ export const CreateProjectRequestSchema = z.object({
   name: z.string().min(1).max(120),
   description: z.string().max(500).optional(),
   flowType: ProjectFlowSchema,
+  projectTemplateId: z.string().trim().min(1).optional(),
+  userProjectTemplateId: z.string().trim().min(1).optional(),
 });
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 
@@ -430,6 +438,136 @@ export type AttributeCatalogConfig = z.infer<
   typeof AttributeCatalogConfigSchema
 >;
 
+export const ProjectTemplateStepKeySchema = z.enum([
+  "story",
+  "scenario",
+  "shots",
+  "shot",
+]);
+export type ProjectTemplateStepKey = z.infer<
+  typeof ProjectTemplateStepKeySchema
+>;
+
+export const PROJECT_TEMPLATE_STEP_ORDER = [
+  "story",
+  "scenario",
+  "shots",
+  "shot",
+] as const satisfies readonly ProjectTemplateStepKey[];
+
+export const ProjectTemplateMasterPromptSnapshotSchema = z.object({
+  id: z.string().nullable().optional(),
+  name: z.string().trim().min(1),
+  content: z.string().trim().min(1).max(20000),
+  outputFormat: z.string().max(12000).default(""),
+});
+export type ProjectTemplateMasterPromptSnapshot = z.infer<
+  typeof ProjectTemplateMasterPromptSnapshotSchema
+>;
+
+export const ProjectTemplateAttributeCatalogSnapshotSchema = z.object({
+  id: z.string().nullable().optional(),
+  name: z.string().trim().min(1),
+  description: z.string().trim().optional(),
+  attributes: z.array(AttributeCatalogAttributeSchema).min(1),
+});
+export type ProjectTemplateAttributeCatalogSnapshot = z.infer<
+  typeof ProjectTemplateAttributeCatalogSnapshotSchema
+>;
+
+export const ProjectTemplateStepSnapshotSchema = z.object({
+  step: ProjectTemplateStepKeySchema,
+  masterPrompt: ProjectTemplateMasterPromptSnapshotSchema,
+  attributeCatalog: ProjectTemplateAttributeCatalogSnapshotSchema,
+  attributeSelection: z.lazy(() => AttributeSelectionSchema).nullable().optional(),
+});
+export type ProjectTemplateStepSnapshot = z.infer<
+  typeof ProjectTemplateStepSnapshotSchema
+>;
+
+export const ProjectTemplateStepsSnapshotSchema = z
+  .object({
+    story: ProjectTemplateStepSnapshotSchema.optional(),
+    scenario: ProjectTemplateStepSnapshotSchema.optional(),
+    shots: ProjectTemplateStepSnapshotSchema.optional(),
+    shot: ProjectTemplateStepSnapshotSchema.optional(),
+  })
+  .strict();
+export type ProjectTemplateStepsSnapshot = z.infer<
+  typeof ProjectTemplateStepsSnapshotSchema
+>;
+
+export const ProjectTemplateSnapshotSchema = z.object({
+  templateId: z.string().nullable().optional(),
+  userTemplateId: z.string().nullable().optional(),
+  name: z.string().trim().min(1),
+  description: z.string().trim().optional(),
+  finalStep: ProjectTemplateStepKeySchema,
+  steps: ProjectTemplateStepsSnapshotSchema,
+});
+export type ProjectTemplateSnapshot = z.infer<
+  typeof ProjectTemplateSnapshotSchema
+>;
+
+export const ProjectTemplateStatusSchema = z.enum(["active", "archived"]);
+export type ProjectTemplateStatus = z.infer<
+  typeof ProjectTemplateStatusSchema
+>;
+
+export const ProjectTemplateSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  finalStep: ProjectTemplateStepKeySchema,
+  steps: ProjectTemplateStepsSnapshotSchema,
+  status: ProjectTemplateStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ProjectTemplate = z.infer<typeof ProjectTemplateSchema>;
+
+export const UserProjectTemplateSchema = ProjectTemplateSchema.extend({
+  ownerUserId: z.string(),
+  adminTemplateId: z.string().nullable().optional(),
+});
+export type UserProjectTemplate = z.infer<typeof UserProjectTemplateSchema>;
+
+export const CreateProjectTemplateRequestSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional(),
+  finalStep: ProjectTemplateStepKeySchema,
+  steps: ProjectTemplateStepsSnapshotSchema,
+});
+export type CreateProjectTemplateRequest = z.infer<
+  typeof CreateProjectTemplateRequestSchema
+>;
+
+export const UpdateProjectTemplateRequestSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional(),
+  finalStep: ProjectTemplateStepKeySchema,
+  steps: ProjectTemplateStepsSnapshotSchema,
+});
+export type UpdateProjectTemplateRequest = z.infer<
+  typeof UpdateProjectTemplateRequestSchema
+>;
+
+export const CreateUserProjectTemplateRequestSchema = z.object({
+  adminTemplateId: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(120).optional(),
+  description: z.string().trim().max(500).optional(),
+});
+export type CreateUserProjectTemplateRequest = z.infer<
+  typeof CreateUserProjectTemplateRequestSchema
+>;
+
+export const UpdateUserProjectTemplateRequestSchema = z.object({
+  steps: ProjectTemplateStepsSnapshotSchema,
+});
+export type UpdateUserProjectTemplateRequest = z.infer<
+  typeof UpdateUserProjectTemplateRequestSchema
+>;
+
 export const CreateAttributeCatalogRequestSchema = z.object({
   type: AttributeCatalogTypeSchema,
   name: z.string().trim().min(1).max(120),
@@ -465,6 +603,35 @@ export type UpdateAttributeGenerationPromptRequest = z.infer<
   typeof UpdateAttributeGenerationPromptRequestSchema
 >;
 
+export const DataExampleSchema = z.object({
+  type: AttributeCatalogTypeSchema,
+  masterPromptContent: z.string(),
+  attributeGenerationPrompt: z.string(),
+  attributeJsonFormat: z.string(),
+  attributeOutputFormat: z.string(),
+  updatedAt: z.string().nullable(),
+});
+export type DataExample = z.infer<typeof DataExampleSchema>;
+
+export const UpdateDataExampleRequestSchema = z
+  .object({
+    masterPromptContent: z.string().trim().min(1).max(20000).optional(),
+    attributeGenerationPrompt: z.string().trim().min(1).max(20000).optional(),
+    attributeJsonFormat: z.string().trim().min(1).max(20000).optional(),
+    attributeOutputFormat: z.string().trim().min(1).max(20000).optional(),
+  })
+  .refine(
+    (value) =>
+      value.masterPromptContent !== undefined ||
+      value.attributeGenerationPrompt !== undefined ||
+      value.attributeJsonFormat !== undefined ||
+      value.attributeOutputFormat !== undefined,
+    { message: "At least one data example field is required." },
+  );
+export type UpdateDataExampleRequest = z.infer<
+  typeof UpdateDataExampleRequestSchema
+>;
+
 export const GenerateAttributeCatalogRequestSchema = z.object({
   inputText: z.string().trim().min(1).max(12000),
   prompt: z.string().trim().min(1).max(20000).optional(),
@@ -482,10 +649,19 @@ export type AttributeSelectionOption = z.infer<
   typeof AttributeSelectionOptionSchema
 >;
 
+export const AttributeSelectionModeSchema = z.enum([
+  "user_selection",
+  "ai_suggestion",
+]);
+export type AttributeSelectionMode = z.infer<
+  typeof AttributeSelectionModeSchema
+>;
+
 export const AttributeSelectionAttributeSchema = z.object({
   id: z.string(),
   name: z.string(),
   required: z.boolean().default(false),
+  selectionMode: AttributeSelectionModeSchema.default("user_selection"),
   options: z.array(AttributeSelectionOptionSchema),
 });
 export type AttributeSelectionAttribute = z.infer<
@@ -544,6 +720,7 @@ export const AnalyzeTemplateSelectionRequestSchema = z.object({
   templateId: z.string().min(1).optional(),
   catalogId: z.string().min(1).optional(),
   masterPrompt: z.string().trim().min(1).max(12000).optional(),
+  attributeSelections: ProjectAttributeSelectionsSchema.optional(),
   saveAsTemplate: z.boolean().optional().default(false),
   templateName: z.string().trim().min(1).max(120).optional(),
   templateDescription: z.string().trim().max(500).optional(),
@@ -787,6 +964,8 @@ export type Job = z.infer<typeof JobSchema>;
 export const AiConfigSchema = z.object({
   contentMode: ContentModeSchema,
   showUserMasterPrompts: z.boolean().default(false),
+  aiSelectAttributeText: z.string().default(""),
+  userSelectAttributeText: z.string().default(""),
   aiHandoffProvider: ProviderSchema.default("google-flow-veo"),
   aiHandoffTargetUrl: OptionalUrlSchema.default(null),
   aiHandoffPromptSelector: z.string().nullable().default(null),
@@ -809,6 +988,8 @@ export type AiConfig = z.infer<typeof AiConfigSchema>;
 export const UpdateAiConfigRequestSchema = z.object({
   contentMode: ContentModeSchema,
   showUserMasterPrompts: z.boolean().optional(),
+  aiSelectAttributeText: z.string().max(2000).optional(),
+  userSelectAttributeText: z.string().max(2000).optional(),
   aiHandoffProvider: ProviderSchema.optional(),
   aiHandoffTargetUrl: z
     .union([z.string().trim().url().max(2000), z.literal(""), z.null()])
@@ -1062,6 +1243,8 @@ export const ShotPromptConfigSchema = z.object({
   outputFormat: z.string().default(""),
   defaultOutputFormat: z.string().default(""),
   showUserMasterPrompts: z.boolean().default(false),
+  aiSelectAttributeText: z.string().default(""),
+  userSelectAttributeText: z.string().default(""),
   aiHandoffProvider: ProviderSchema.default("google-flow-veo"),
   aiHandoffTargetUrl: OptionalUrlSchema.default(null),
   aiHandoffPromptSelector: z.string().nullable().default(null),

@@ -371,6 +371,7 @@ Rules:
 - Runtime master prompts keep a recommended placeholder format, but placeholder replacement is optional compatibility; backend does not append hidden runtime context to the selected prompt.
 - When `show_user_master_prompts` is `false`, user-facing generation requests must not accept temporary `masterPrompt` overrides. Runtime uses the active admin default prompt while prompt preview buttons may still show the rendered prompt.
 - AI Handoff target config is saved here by Admin > AI Config. Runtime uses the saved provider, target URL, and prompt selector only; if `ai_handoff_target_url` or `ai_handoff_prompt_selector` is blank, Step 4 handoff fails clearly instead of opening a fallback target or using fallback selectors.
+- `ai_select_attribute_text` and `user_select_attribute_text` are site-wide text prefixes used when rendering workflow attribute placeholders. Empty strings are stored as empty strings and do not trigger fallback copy.
 - Config updates should create audit records.
 
 ### 3.7. `config.master_prompts`
@@ -598,8 +599,9 @@ Recommended defaults:
   - `content.shot_attribute_catalogs` with `type='shots'` for Step 3 and `type='shot'` for Step 4
 - Each catalog stores `id`, `name`, optional `description`, `attributes` JSONB, `is_default`, `status`, `created_by_admin_id`, `created_at`, and `updated_at`.
 - Catalog JSON uses `id`, `name`, `description`, `required`, and `options[]` with the same `id`, `name`, and `description` fields.
-- `config.attribute_generation_prompts` stores one Attribute Generation Prompt per type (`story`, `scenario`, `shots`, `shot`). This prompt is not a Master Prompt and is used only to generate catalog JSON.
-- `projects.projects.attribute_selections` stores selected options keyed by `story`, `scenario`, and `shots`. Per-shot Step 4 selections use each shot JSON object's `attributeSelection`. Required attributes default to the first option but remain user-changeable as multi-select, as long as at least one option stays selected.
+- Tracked `data-examples/{type}/{type}-master-prompt.md`, `data-examples/{type}/{type}-attribute-generation-prompt.md`, `data-examples/{type}/{type}-attribute-json-format.md`, and `data-examples/{type}/{type}-attribute-output-format.md` files are editable admin templates used to initialize new DB master prompts and new DB attribute catalog editors. These files are protected from Delete and Set default actions.
+- `config.attribute_generation_prompts` remains a compatibility store for one Attribute Generation Prompt per type (`story`, `scenario`, `shots`, `shot`). The admin UI uses the tracked `data-examples` file as the protected template and starter content.
+- `projects.projects.attribute_selections` stores selected options keyed by `story`, `scenario`, and `shots`. Per-shot Step 4 selections use each shot JSON object's `attributeSelection`. Each selected attribute can include `selectionMode`, defaulting old records to `user_selection`. `ai_suggestion` means prompt rendering uses all options from that attribute's active catalog and disables option editing in the user UI; `user_selection` means prompt rendering uses only selected options. When no saved selection exists, every attribute starts with its first option selected. Required attributes remain user-changeable as multi-select as long as at least one option stays selected; optional attributes may be cleared after the initial default selection.
 
 ## 10. AI Handoff Records
 
@@ -635,3 +637,24 @@ Rules:
 - Handoff status represents extension/browser progress only; it is separate from provider API video-generation records.
 - The extension never stores provider credentials, cookies, or API keys in the database.
 - Media upload automation is out of scope for v1; reference media remains stored through normal media tables and is handled manually on the target AI site.
+## Project Template Snapshots
+
+Admin Project Templates are stored in `config.project_templates`. Each record has
+`name`, `description`, `final_step`, `steps` JSON, `status`, and timestamps. The
+`steps` JSON is a snapshot keyed by `story`, `scenario`, `shots`, and `shot`;
+only the prefix up to `final_step` is valid. Each selected step stores the
+master prompt content/output format and the attribute catalog JSON used at the
+time the template was created or edited.
+
+User Custom Templates are stored in `projects.user_project_templates`. They are
+cloned from active Admin Project Templates and keep their own editable snapshot.
+Users may edit prompt and attribute snapshots, but not the selected step prefix.
+
+`projects.projects` stores optional `project_template_id`,
+`user_project_template_id`, and `project_template_snapshot`. A project created
+from an Admin Project Template stores `project_template_id`; a project created
+from a user Custom Template stores both the originating `project_template_id`
+when available and `user_project_template_id`. Both paths copy the selected
+snapshot at creation time so later Admin default prompt/catalog changes do not
+alter existing projects. Missing or malformed selected step data is an error; no
+fallback prompt or catalog is used.

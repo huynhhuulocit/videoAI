@@ -230,6 +230,12 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
   const [showUserMasterPrompts, setShowUserMasterPrompts] = useState(
     config.showUserMasterPrompts,
   );
+  const [aiSelectAttributeText, setAiSelectAttributeText] = useState(
+    config.aiSelectAttributeText,
+  );
+  const [userSelectAttributeText, setUserSelectAttributeText] = useState(
+    config.userSelectAttributeText,
+  );
   const [aiHandoffProvider, setAiHandoffProvider] = useState(
     config.aiHandoffProvider,
   );
@@ -309,6 +315,8 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
         body: JSON.stringify({
           contentMode,
           showUserMasterPrompts,
+          aiSelectAttributeText,
+          userSelectAttributeText,
           aiHandoffProvider: trimmedAiHandoffProvider,
           aiHandoffTargetUrl: trimmedAiHandoffTargetUrl,
           aiHandoffPromptSelector: aiHandoffPromptSelector.trim(),
@@ -328,6 +336,8 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
       const payload = (await response.json()) as ApiSuccess<AiConfig>;
       setContentMode(payload.data.contentMode);
       setShowUserMasterPrompts(payload.data.showUserMasterPrompts);
+      setAiSelectAttributeText(payload.data.aiSelectAttributeText);
+      setUserSelectAttributeText(payload.data.userSelectAttributeText);
       setAiHandoffProvider(payload.data.aiHandoffProvider);
       setAiHandoffTargetUrl(payload.data.aiHandoffTargetUrl ?? "");
       setAiHandoffPromptSelector(payload.data.aiHandoffPromptSelector ?? "");
@@ -542,6 +552,23 @@ export function AiConfigForm({ config }: AiConfigFormProps) {
           <p className="mt-3 text-sm text-muted-foreground">
             {t("adminConfig.showUserMasterPromptsHelp")}
           </p>
+          <div className="mt-5 grid gap-4">
+            <TextField
+              label={t("adminConfig.aiSelectAttributeText")}
+              value={aiSelectAttributeText}
+              onChange={setAiSelectAttributeText}
+              placeholder={t("adminConfig.aiSelectAttributeTextPlaceholder")}
+            />
+            <TextField
+              label={t("adminConfig.userSelectAttributeText")}
+              value={userSelectAttributeText}
+              onChange={setUserSelectAttributeText}
+              placeholder={t("adminConfig.userSelectAttributeTextPlaceholder")}
+            />
+            <p className="text-sm text-muted-foreground">
+              {t("adminConfig.attributeSelectionModeHelp")}
+            </p>
+          </div>
           <div className="mt-5 border-t border-border pt-4">
             <div className="text-sm font-semibold">
               {t("adminConfig.aiHandoff")}

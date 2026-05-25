@@ -34,6 +34,7 @@ const messages = {
   "shell.masterPromptShots": "Shots",
   "shell.masterPromptStory": "Story Content",
   "shell.oneClick": "One Click",
+  "shell.projectTemplates": "Project Template",
   "shell.projectWorkspace": "Projects",
   "shell.scenario": "Scenario",
   "shell.scenarioAttribute": "Scenario Attribute",
@@ -288,6 +289,11 @@ const messages = {
   "workspace.adminShotAttributesTitle": "Shot Attributes",
   "workspace.masterPromptAttributesUserBlocked":
     "{masterPromptAttributes} is admin-only and cannot be used in user workspace prompt overrides.",
+  "workspace.masterPromptConfigLoadFailed":
+    "Cannot load active admin master prompts. Set default Story, Scenario, Shots, and Shot prompts in Admin.",
+  "workspace.attributeCatalogConfigLoadFailed":
+    "Cannot load active admin attribute catalogs. Set default Story, Scenario, Shots, and Shot attributes in Admin.",
+  "workspace.attributeAiSuggestion": "AI suggestion",
   "workspace.shotGeneratedAttributesTitle": "Generated shot attributes",
   "workspace.shotMasterPromptHelp":
     "This admin-managed Shot master prompt creates the final prompt for one shot. Use placeholders to include shot fields, Shot Attributes, and reference media.",
@@ -635,6 +641,14 @@ const messages = {
   "adminConfig.aiHandoffProvider": "AI Handoff provider",
   "adminConfig.aiHandoffTargetUrl": "AI Handoff target URL",
   "adminConfig.aiHandoffPromptSelector": "AI Handoff prompt selector",
+  "adminConfig.aiSelectAttributeText": "AI select Attribute",
+  "adminConfig.aiSelectAttributeTextPlaceholder":
+    "AI should evaluate all available options for this attribute.",
+  "adminConfig.userSelectAttributeText": "User select Attribute",
+  "adminConfig.userSelectAttributeTextPlaceholder":
+    "Use only the options selected by the user for this attribute.",
+  "adminConfig.attributeSelectionModeHelp":
+    "These prefixes are inserted into attribute placeholder output. Empty values are allowed and produce no prefix.",
   "adminConfig.aiHandoffTargetUrlInvalid":
     "Enter a valid AI Handoff target URL or leave it blank to disable handoff.",
   "adminConfig.copyDomDetectorScript": "Copy script",

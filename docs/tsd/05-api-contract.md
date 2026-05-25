@@ -886,9 +886,6 @@ Response:
             "attributeSelection": {
               "attributes": []
             },
-            "workflowAttributeSelection": {
-              "attributes": []
-            },
             "isDefault": true,
             "status": "active",
             "isBuiltIn": false,
@@ -1021,14 +1018,6 @@ Request:
         "optionIds": ["tone-cinematic"]
       }
     ]
-  },
-  "workflowAttributeSelection": {
-    "attributes": [
-      {
-        "attributeId": "camera-style",
-        "optionIds": ["camera-style-close-up"]
-      }
-    ]
   }
 }
 ```
@@ -1039,7 +1028,7 @@ Validation:
 - `name` and `content` are required.
 - Content may keep the recommended placeholder format, but placeholders are optional and saves do not validate their presence.
 - `outputFormat` is optional unless `content` contains `{outputFormat}`. When the token is present and `outputFormat` is blank, create/update/preview/runtime must fail with a clear validation error.
-- `workflowAttributeSelection` is admin-only and stores selected options from the active attribute catalog that matches the prompt type: Story Content uses Story Attribute, Scenario uses Scenario Attribute, Shots uses Shots Attribute, and Shot uses Shot Attribute.
+- Master prompt records do not store Story/Scenario/Shots/Shot workflow attribute selections. Those workflow attributes are selected in Project and One Click user flows.
 - Recommended placeholders by type: `scripts`/`Story Content` uses `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `scenario` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `shot` uses `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
 - `{masterPromptAttributes}` is admin-only. It is suggested only in admin master prompt editors and renders from the prompt record's saved `attributeSelection`.
 - User-facing temporary master prompt overrides containing `{masterPromptAttributes}` are rejected.
@@ -1056,9 +1045,6 @@ Request:
   "content": "Updated instructions.",
   "outputFormat": "Updated output instructions.",
   "attributeSelection": {
-    "attributes": []
-  },
-  "workflowAttributeSelection": {
     "attributes": []
   }
 }
@@ -1092,6 +1078,56 @@ Response:
 ### `POST /api/v1/admin/master-prompts/{id}/default`
 
 Makes the prompt the only active default for its type.
+
+### `GET /api/v1/admin/data-examples/{type}`
+
+Returns the protected file-backed template content used to initialize new master prompts and attribute catalogs. Supported `type` values are `story`, `scenario`, `shots`, and `shot`.
+
+Response:
+
+```json
+{
+  "data": {
+    "type": "story",
+    "masterPromptContent": "You are a Story Content writer...",
+    "attributeGenerationPrompt": "Create Story attribute JSON...",
+    "attributeJsonFormat": "{ \"attributes\": [] }",
+    "attributeOutputFormat": "Return only strict JSON using this structure: ...",
+    "updatedAt": "2026-05-23T10:00:00.000Z"
+  }
+}
+```
+
+Rules:
+
+- This endpoint is admin-only.
+- `masterPromptContent` comes from `data-examples/{type}/{type}-master-prompt.md`.
+- `attributeGenerationPrompt` comes from `data-examples/{type}/{type}-attribute-generation-prompt.md`.
+- `attributeJsonFormat` comes from `data-examples/{type}/{type}-attribute-json-format.md`.
+- `attributeOutputFormat` comes from `data-examples/{type}/{type}-attribute-output-format.md`.
+- Missing or unreadable files fail with a clear error. The API must not return hardcoded sample fallback content.
+
+### `PATCH /api/v1/admin/data-examples/{type}`
+
+Updates one or both protected file-backed templates for the selected type.
+
+Request:
+
+```json
+{
+  "masterPromptContent": "Updated starter master prompt.",
+  "attributeGenerationPrompt": "Updated starter Attribute Generation Prompt.",
+  "attributeJsonFormat": "Updated JSON format example.",
+  "attributeOutputFormat": "Updated output format instructions."
+}
+```
+
+Rules:
+
+- At least one field is required.
+- Missing or unwritable files fail with a clear error.
+- Attribute generation renders `{outputFormat}` from `attributeOutputFormat` after replacing `{attributeJsonFormat}` with the saved `attributeJsonFormat`.
+- These file-backed templates cannot be deleted or set as default. New DB master prompts and new DB attribute catalogs use the matching file content as starter data, then save normal DB records.
 
 ### `GET /api/v1/admin/master-prompt-config`
 
@@ -1218,6 +1254,10 @@ Admin endpoints:
 - `GET /api/v1/admin/attribute-generation-prompts/{type}`
 - `PATCH /api/v1/admin/attribute-generation-prompts/{type}`
 - `POST /api/v1/admin/attribute-catalogs/{type}/generate`
+- `GET /api/v1/admin/data-examples/{type}`
+- `PATCH /api/v1/admin/data-examples/{type}`
+
+The `attribute-generation-prompts` endpoints are retained for compatibility. Admin UI uses the tracked `data-examples/{type}/{type}-attribute-generation-prompt.md` file as the editable protected template and as the starter content for new catalog editors.
 
 User/project read endpoint:
 
@@ -1251,3 +1291,49 @@ Catalog JSON:
 
 Runtime data enters provider prompts only through explicit placeholders present in the selected prompt. New prompts should prefer `{storyAttributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, and `{shotAttributes}` instead of the legacy `{attributes}` token.
 Step 4 per-shot prompt rendering uses `GET /api/v1/attribute-catalogs/shot/default` for the active `Shot Attribute` catalog. The selected per-shot options are stored on each shot JSON object as `attributeSelection` and are included only when the active `Shot` master prompt contains `{shotAttributes}`.
+
+## Attribute Selection Mode Notes
+
+- `GET/PUT /api/v1/admin/ai-config` and `GET /api/v1/admin/shot-prompt` include `aiSelectAttributeText` and `userSelectAttributeText`.
+- Project generation payloads may include `attributeSelections` where each attribute has `selectionMode: "user_selection" | "ai_suggestion"`. Older records without the field are treated as `user_selection`.
+- For Story, Scenario, Shots, and Shot placeholder rendering, `ai_suggestion` uses the Admin `AI select Attribute` text plus all options from the active catalog for that attribute. `user_selection` uses the Admin `User select Attribute` text plus selected options only.
+- Empty Admin text config values render as empty prefixes and do not trigger fallback text.
+## Project Template APIs
+
+Admin Project Template management:
+
+- `GET /api/v1/admin/project-templates` lists active Admin templates.
+- `GET /api/v1/admin/project-templates/default-snapshot?finalStep=story|scenario|shots|shot`
+  also requires `{step}MasterPromptId` query values for every selected workflow
+  step, for example `storyMasterPromptId`, `scenarioMasterPromptId`,
+  `shotsMasterPromptId`, and `shotMasterPromptId`. `Shot` is always selected;
+  `finalStep=scenario` selects Scenario, Shots, and Shot, and
+  `finalStep=story` selects all steps. It builds a new template
+  snapshot from those selected saved active master prompts and the active default
+  attribute catalog for every selected workflow step. Missing selected prompts or
+  default catalogs return a clear validation error.
+- `POST /api/v1/admin/project-templates` creates a template from a validated
+  workflow snapshot.
+- `GET /api/v1/admin/project-templates/{templateId}` reads one active template.
+- `PATCH /api/v1/admin/project-templates/{templateId}` updates the template
+  name, description, final selected step, and stored step snapshot.
+- `DELETE /api/v1/admin/project-templates/{templateId}` archives the template.
+
+Project Template selection and User Custom Template management:
+
+- `GET /api/v1/project-templates` lists active Admin templates that can be
+  selected directly during project creation.
+- `GET /api/v1/user-project-templates` lists the current user's active custom
+  templates.
+- `POST /api/v1/user-project-templates` clones an Admin template into a user
+  custom template.
+- `GET/PATCH/DELETE /api/v1/user-project-templates/{templateId}` read, update
+  snapshot, or archive the current user's custom template.
+
+`POST /api/v1/projects` accepts optional `projectTemplateId` or
+`userProjectTemplateId`, but not both. `projectTemplateId` copies an active
+Admin Project Template snapshot directly into the project. `userProjectTemplateId`
+validates ownership, then copies the user's Custom Template snapshot. In both
+cases the API creates a Scenario project using the selected template steps. If
+the selected template is missing, archived, malformed, or owned by another user,
+the request fails with a readable validation error.

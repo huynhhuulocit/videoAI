@@ -1,22 +1,16 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Put } from "@nestjs/common";
 import { prisma } from "@videoai/database";
 import {
+  AttributeCatalogTypeSchema,
   CreateMasterPromptRequestSchema,
-  DEFAULT_SHOT_GENERATION_PROMPT,
-  DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
   DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
-  DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
-  DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
-  DEFAULT_SCRIPT_GENERATION_PROMPT,
-  DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
-  DEFAULT_TEMPLATE_SELECTION_PROMPT,
-  DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
   RotateProviderKeyRequestSchema,
   SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS,
   SHOT_PROMPT_REQUIRED_PLACEHOLDERS,
   TestProviderConnectionRequestSchema,
   UpdateAiConfigRequestSchema,
   UpdateAiHandoffDomConfigRequestSchema,
+  UpdateDataExampleRequestSchema,
   UpdateMasterPromptRequestSchema,
   UpdateMasterPromptAttributeConfigRequestSchema,
   UpdateShotPromptRequestSchema
@@ -24,9 +18,7 @@ import {
 import {
   archiveMasterPrompt,
   createMasterPrompt,
-  getDefaultMasterPrompt,
-  getDefaultMasterPromptContent,
-  getConfiguredDefaultMasterPrompt,
+  getRequiredDefaultMasterPrompt,
   getActiveAiConfig,
   getMasterPromptConfig,
   getMasterPromptAttributeConfig,
@@ -40,6 +32,7 @@ import {
   setDefaultMasterPrompt,
   updateMasterPrompt
 } from "./db-store.js";
+import { readDataExample, updateDataExample } from "./data-examples.js";
 import { ok } from "./response.js";
 
 @Controller("admin")
@@ -47,6 +40,23 @@ export class AdminController {
   @Get("ai-config")
   async getAiConfig() {
     return ok(await getActiveAiConfig());
+  }
+
+  @Get("site-config")
+  async getSiteConfig() {
+    const config = await prisma.aiSiteConfig.findFirstOrThrow({
+      where: { isActive: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    return ok({
+      showUserMasterPrompts: config.showUserMasterPrompts,
+      aiSelectAttributeText: config.aiSelectAttributeText ?? "",
+      userSelectAttributeText: config.userSelectAttributeText ?? "",
+      aiHandoffProvider: config.aiHandoffProvider,
+      aiHandoffTargetUrl: config.aiHandoffTargetUrl,
+      aiHandoffPromptSelector: config.aiHandoffPromptSelector,
+      updatedAt: config.updatedAt.toISOString(),
+    });
   }
 
   @Put("ai-config")
@@ -142,6 +152,19 @@ export class AdminController {
     return ok(await this.runAdminMutation(() => replaceMasterPromptAttributeConfig(body)));
   }
 
+  @Get("data-examples/:type")
+  async getDataExample(@Param("type") rawType: string) {
+    const type = AttributeCatalogTypeSchema.parse(rawType);
+    return ok(await this.runAdminMutation(() => readDataExample(type)));
+  }
+
+  @Patch("data-examples/:type")
+  async patchDataExample(@Param("type") rawType: string, @Body() rawBody: unknown) {
+    const type = AttributeCatalogTypeSchema.parse(rawType);
+    const body = UpdateDataExampleRequestSchema.parse(rawBody);
+    return ok(await this.runAdminMutation(() => updateDataExample(type, body)));
+  }
+
   @Post("master-prompts")
   async postMasterPrompt(@Body() rawBody: unknown) {
     const body = CreateMasterPromptRequestSchema.parse(rawBody);
@@ -201,45 +224,65 @@ export class AdminController {
       orderBy: { updatedAt: "desc" }
     });
 
-    const shotsPrompt = await getDefaultMasterPrompt("shots", config.shotGenerationPrompt);
-    const scenarioPrompt = await getDefaultMasterPrompt("scenario", config.templateSelectionPrompt);
-    const scriptsPrompt = await getDefaultMasterPrompt("scripts");
-    const shotPrompt = await getConfiguredDefaultMasterPrompt("shot");
-    if (!shotPrompt) {
-      throw new BadRequestException("Active Shot master prompt is required before using Step 4 shot prompts.");
+    let shotsPrompt;
+    let scenarioPrompt;
+    let scriptsPrompt;
+    let shotPrompt;
+    try {
+      [shotsPrompt, scenarioPrompt, scriptsPrompt, shotPrompt] = await Promise.all([
+        getRequiredDefaultMasterPrompt("shots"),
+        getRequiredDefaultMasterPrompt("scenario"),
+        getRequiredDefaultMasterPrompt("scripts"),
+        getRequiredDefaultMasterPrompt("shot")
+      ]);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error
+          ? error.message
+          : "Active default master prompts are required before using the workspace.",
+      );
     }
-    const renderedShotsPrompt = await getDefaultMasterPromptContent("shots", config.shotGenerationPrompt);
-    const renderedScenarioPrompt = await getDefaultMasterPromptContent("scenario", config.templateSelectionPrompt);
-    const renderedScriptsPrompt = await getDefaultMasterPromptContent("scripts");
-    const renderedShotPrompt = await renderMasterPromptText(shotPrompt);
+    const [
+      renderedShotsPrompt,
+      renderedScenarioPrompt,
+      renderedScriptsPrompt,
+      renderedShotPrompt
+    ] = await Promise.all([
+      renderMasterPromptText(shotsPrompt),
+      renderMasterPromptText(scenarioPrompt),
+      renderMasterPromptText(scriptsPrompt),
+      renderMasterPromptText(shotPrompt)
+    ]);
 
     return ok({
       prompt: renderedShotsPrompt,
-      defaultPrompt: DEFAULT_SHOT_GENERATION_PROMPT,
+      defaultPrompt: renderedShotsPrompt,
       outputFormat: shotsPrompt.outputFormat,
-      defaultOutputFormat: DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
+      defaultOutputFormat: shotsPrompt.outputFormat,
       requiredPlaceholders: [...SHOT_PROMPT_REQUIRED_PLACEHOLDERS],
-      isDefault: shotsPrompt.isBuiltIn,
+      isDefault: shotsPrompt.isDefault,
       shotPrompt: renderedShotPrompt,
-      defaultShotPrompt: DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+      defaultShotPrompt: renderedShotPrompt,
       shotOutputFormat: shotPrompt.outputFormat,
-      defaultShotOutputFormat: DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
-      shotPromptIsDefault: false,
+      defaultShotOutputFormat: shotPrompt.outputFormat,
+      shotPromptIsDefault: shotPrompt.isDefault,
       composerPrompt: config.shotComposerPrompt ?? DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       defaultComposerPrompt: DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       composerRequiredPlaceholders: [...SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS],
       composerIsDefault: !config.shotComposerPrompt,
       scenarioAnalysisPrompt: renderedScenarioPrompt,
       scenarioAnalysisOutputFormat: scenarioPrompt.outputFormat,
-      defaultScenarioAnalysisPrompt: DEFAULT_TEMPLATE_SELECTION_PROMPT,
-      defaultScenarioAnalysisOutputFormat: DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
-      scenarioAnalysisIsDefault: scenarioPrompt.isBuiltIn,
+      defaultScenarioAnalysisPrompt: renderedScenarioPrompt,
+      defaultScenarioAnalysisOutputFormat: scenarioPrompt.outputFormat,
+      scenarioAnalysisIsDefault: scenarioPrompt.isDefault,
       scriptGenerationPrompt: renderedScriptsPrompt,
       scriptGenerationOutputFormat: scriptsPrompt.outputFormat,
-      defaultScriptGenerationPrompt: DEFAULT_SCRIPT_GENERATION_PROMPT,
-      defaultScriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
-      scriptGenerationIsDefault: scriptsPrompt.isBuiltIn,
+      defaultScriptGenerationPrompt: renderedScriptsPrompt,
+      defaultScriptGenerationOutputFormat: scriptsPrompt.outputFormat,
+      scriptGenerationIsDefault: scriptsPrompt.isDefault,
       showUserMasterPrompts: config.showUserMasterPrompts,
+      aiSelectAttributeText: config.aiSelectAttributeText,
+      userSelectAttributeText: config.userSelectAttributeText,
       aiHandoffProvider: config.aiHandoffProvider,
       aiHandoffTargetUrl: config.aiHandoffTargetUrl,
       aiHandoffPromptSelector: config.aiHandoffPromptSelector,
@@ -263,38 +306,65 @@ export class AdminController {
       }
     });
 
-    const shotPrompt = await getConfiguredDefaultMasterPrompt("shot");
-    if (!shotPrompt) {
-      throw new BadRequestException("Active Shot master prompt is required before using Step 4 shot prompts.");
+    let shotsPrompt;
+    let scenarioPrompt;
+    let scriptsPrompt;
+    let shotPrompt;
+    try {
+      [shotsPrompt, scenarioPrompt, scriptsPrompt, shotPrompt] = await Promise.all([
+        getRequiredDefaultMasterPrompt("shots"),
+        getRequiredDefaultMasterPrompt("scenario"),
+        getRequiredDefaultMasterPrompt("scripts"),
+        getRequiredDefaultMasterPrompt("shot")
+      ]);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error
+          ? error.message
+          : "Active default master prompts are required before using the workspace.",
+      );
     }
+    const [
+      renderedShotsPrompt,
+      renderedScenarioPrompt,
+      renderedScriptsPrompt,
+      renderedShotPrompt
+    ] = await Promise.all([
+      renderMasterPromptText(shotsPrompt),
+      renderMasterPromptText(scenarioPrompt),
+      renderMasterPromptText(scriptsPrompt),
+      renderMasterPromptText(shotPrompt)
+    ]);
 
     return ok({
-      prompt: config.shotGenerationPrompt ?? DEFAULT_SHOT_GENERATION_PROMPT,
-      defaultPrompt: DEFAULT_SHOT_GENERATION_PROMPT,
-      outputFormat: DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
-      defaultOutputFormat: DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT,
+      prompt: renderedShotsPrompt,
+      defaultPrompt: renderedShotsPrompt,
+      outputFormat: shotsPrompt.outputFormat,
+      defaultOutputFormat: shotsPrompt.outputFormat,
       requiredPlaceholders: [...SHOT_PROMPT_REQUIRED_PLACEHOLDERS],
-      isDefault: false,
-      shotPrompt: await renderMasterPromptText(shotPrompt),
-      defaultShotPrompt: DEFAULT_SINGLE_SHOT_MASTER_PROMPT,
+      isDefault: shotsPrompt.isDefault,
+      shotPrompt: renderedShotPrompt,
+      defaultShotPrompt: renderedShotPrompt,
       shotOutputFormat: shotPrompt.outputFormat,
-      defaultShotOutputFormat: DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT,
-      shotPromptIsDefault: false,
+      defaultShotOutputFormat: shotPrompt.outputFormat,
+      shotPromptIsDefault: shotPrompt.isDefault,
       composerPrompt: config.shotComposerPrompt ?? DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       defaultComposerPrompt: DEFAULT_SHOT_PROMPT_COMPOSER_PROMPT,
       composerRequiredPlaceholders: [...SHOT_PROMPT_COMPOSER_REQUIRED_PLACEHOLDERS],
       composerIsDefault: false,
-      scenarioAnalysisPrompt: config.templateSelectionPrompt ?? DEFAULT_TEMPLATE_SELECTION_PROMPT,
-      scenarioAnalysisOutputFormat: DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
-      defaultScenarioAnalysisPrompt: DEFAULT_TEMPLATE_SELECTION_PROMPT,
-      defaultScenarioAnalysisOutputFormat: DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT,
-      scenarioAnalysisIsDefault: !config.templateSelectionPrompt?.trim(),
-      scriptGenerationPrompt: await getDefaultMasterPromptContent("scripts"),
-      scriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
-      defaultScriptGenerationPrompt: DEFAULT_SCRIPT_GENERATION_PROMPT,
-      defaultScriptGenerationOutputFormat: DEFAULT_SCRIPT_GENERATION_OUTPUT_FORMAT,
-      scriptGenerationIsDefault: false,
+      scenarioAnalysisPrompt: renderedScenarioPrompt,
+      scenarioAnalysisOutputFormat: scenarioPrompt.outputFormat,
+      defaultScenarioAnalysisPrompt: renderedScenarioPrompt,
+      defaultScenarioAnalysisOutputFormat: scenarioPrompt.outputFormat,
+      scenarioAnalysisIsDefault: scenarioPrompt.isDefault,
+      scriptGenerationPrompt: renderedScriptsPrompt,
+      scriptGenerationOutputFormat: scriptsPrompt.outputFormat,
+      defaultScriptGenerationPrompt: renderedScriptsPrompt,
+      defaultScriptGenerationOutputFormat: scriptsPrompt.outputFormat,
+      scriptGenerationIsDefault: scriptsPrompt.isDefault,
       showUserMasterPrompts: config.showUserMasterPrompts,
+      aiSelectAttributeText: config.aiSelectAttributeText,
+      userSelectAttributeText: config.userSelectAttributeText,
       aiHandoffProvider: config.aiHandoffProvider,
       aiHandoffTargetUrl: config.aiHandoffTargetUrl,
       aiHandoffPromptSelector: config.aiHandoffPromptSelector,
