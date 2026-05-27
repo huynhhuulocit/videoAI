@@ -60,8 +60,8 @@ One Click reuses the Scenario data model and AI workflows instead of adding a ne
 2. `/one-click/{projectId}` renders a guided one-step-at-a-time UI.
 3. Step 1 calls the existing Script prompt/content generation workflow and writes the response back into `Story Content`; manually entered Story Content is also saved before the wizard advances.
 4. Step 2 is a Scenario step: it renders the active `Scenario` master prompt with Story Content and uses the scenario/template catalog. The UI hides the `Choose scenario` dropdown but still calls `template_selection` when the user clicks `Analyze scenario`.
-5. Successful Step 2 analysis saves the selected scenario attributes/options to the project and creates a Scenario record named/described from the One Click setup so later prompt composition and shot generation can reuse them.
-6. Step 3 calls `shot_generation` with the Step 1 Story Content, temporary `Shots` master prompt and selected scenario attributes when present. One Click does not show an existing shot-plan selector; the project-scoped shot generation endpoint is used so the resulting shot plan is saved, linked to the project and named/described from the One Click setup.
+5. Successful Step 2 analysis saves only the editable Scenario result output to the project. It does not parse the AI response to select Scenario attributes/options; those remain user-controlled input selections.
+6. Step 3 calls `shot_generation` with the Step 1 Story Content, saved Scenario result, temporary `Shots` master prompt and selected scenario attributes when present. One Click does not show an existing shot-plan selector; the project-scoped shot generation endpoint is used so the resulting shot plan is saved, linked to the project and named/described from the One Click setup.
 7. After a shot card exists, the user can open `Prompt` to inspect the composed per-shot prompt without calling AI, or click `Create video` to submit that prompt to the configured video provider/model through `POST /api/v1/projects/{projectId}/videos`. The shot-level Request/Response popups show the redacted provider request and response/job error for that shot. Provider failures must mark the video job failed and must not create fallback video success data.
 8. Generated shot plans, raw request/response logging, provider errors and prompt preview behavior remain the same as Scenario.
 
@@ -94,9 +94,9 @@ Steps:
 4. User clicks `Analyze scenario`.
 5. API creates an AI request log with flow type `template_selection`.
 6. API replaces optional `Scenario` placeholders (`{story}`, `{attributes}`) when present, then sends exactly the rendered master prompt to the active prompt provider/model. If the request omits a temporary master prompt, the API uses the admin-managed `Scenario` default. If that default is missing, the request fails with `AI_CONFIG_MISSING`.
-7. Provider returns strict JSON containing selected option IDs and a compact selection string such as `genre=Folk Tale;`.
-8. API validates that selected option IDs belong to the user's active template, normalizes the result to `templateSelection`, saves it in `projects.projects.template_selection` and stores raw request/response in the job/log result.
-9. Workspace applies the returned option IDs as checked boxes and shows a `Prompt` button before `Request` beside `Analyze scenario`; `Prompt` opens exactly the rendered prompt after placeholder replacement. Adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run. User can edit the checkboxes and save the current selection back to the project.
+7. Provider returns Scenario result output text in the format requested by the active Scenario master prompt.
+8. API saves the provider output in `projects.projects.scenario_result` and stores raw request/response in the job/log result. It does not normalize selected option IDs or mutate `projects.projects.template_selection`.
+9. Workspace fills the editable `Scenario result` textarea from the provider output without changing Scenario attribute checkboxes. It shows `Prompt` beside `Analyze scenario`; `Prompt` opens exactly the rendered prompt after placeholder replacement. Adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run. User can edit the checkboxes and Scenario result textarea, then save the current values back to the project.
 10. If scenario analysis fails, the failed job must include a stable `ApiError` code, message and safe details such as provider, model, HTTP status or schema issue count. The workspace must show those details inline under `Analyze scenario` with an actionable explanation. API keys and secrets must stay redacted in both user popups and admin AI logs.
 
 ## 2.2. Prompt Preview Before Submission
@@ -122,15 +122,15 @@ Steps:
 2. User enters or generates Step 1 `Story Content`. Standalone `/shots*` pages are no longer user-facing and redirect to `/projects`; shot plan generation and editing happen inside Project and One Click workspaces through project-scoped endpoints.
 3. In the project workspace, the UI shows the active `Shots` master prompt in an editable textarea and sends selected Step 2 Kịch bản/scenario options plus Step 3 Shots options only through explicit placeholders in that prompt.
 4. User clicks `Generate Shots`.
-5. API reads active prompt provider/model config and uses the temporary request `masterPrompt` override when present, otherwise the active `Shots` master prompt. Prompt placeholders such as `{story}`, `{attributes}`, `{scenarioAttributes}` and `{shotsAttributes}` are optional compatibility; backend sends exactly the rendered master prompt without hidden runtime context.
+5. API reads active prompt provider/model config and uses the temporary request `masterPrompt` override when present, otherwise the active `Shots` master prompt. Prompt placeholders such as `{story}`, `{scenario}`, `{attributes}`, `{scenarioAttributes}` and `{shotsAttributes}` are optional compatibility; backend sends exactly the rendered master prompt without hidden runtime context. `{scenario}` is the saved editable Scenario result from Step 2.
 6. System creates an AI request log with flow type `shot_generation`.
 7. API calls the active prompt provider using the encrypted provider key saved in Admin > AI Config. Environment API keys are not runtime fallback sources. `chatgpt`/`openai` uses the OpenAI Responses API.
    - Gemini receives the richer response JSON schema with duration bounds.
    - ChatGPT receives a provider-compatible strict JSON schema with `additionalProperties: false` on every object; duration bounds are enforced during backend normalization.
 8. User-facing script create/edit pages expose `Prompt`, `Request` and `Response` buttons for this workflow; the full prompt is computed before submission and the raw request/response popups use the completed job result.
-9. AI must return strict JSON with `name`, `durationSeconds` and `shots[]`. Each shot includes `title`, `description`, `durationSeconds` and editable `attributes[]`; every shot should include `Start state`, `End state` and `Dialogue`.
+9. AI must return strict JSON with `name`, `durationSeconds` and `shots[]`. Each shot includes `title`, `description`, `durationSeconds` and editable `attributes[]`; every shot should include `Start state`, `End state` and `Dialogue`. `Start state` and `End state` values must be non-empty. `Dialogue` may be an empty string when the selected scenario intentionally uses no spoken dialogue.
 10. System stores the redacted raw provider request and raw AI JSON in the AI logs and completed job result. The workspace shows a `Prompt` button before `Request` beside `Generate Shots` so users can inspect exactly the rendered prompt after placeholder replacement; adjacent `Request`/`Response` buttons open read-only popups with the latest raw data for the run.
-11. System validates the provider JSON before persistence: required text fields and duration must be present, each shot must include `Start state`, `End state` and `Dialogue`, plan-level attributes are preserved, and invalid/missing required fields fail with `AI_PROVIDER_FAILED`.
+11. System validates the provider JSON before persistence: required shot fields and duration must be present, each shot must include `Start state`, `End state` and `Dialogue`, `Start state`/`End state` values must be non-empty, plan-level attributes are preserved, and invalid/missing required fields fail with `AI_PROVIDER_FAILED`.
 12. System stores the normalized shot plan in `content.video_shot_plans`, including owner user ID, nullable source project ID, plan-level `attributes` JSON and per-shot `shots` JSON.
 13. If no saved key exists, the job fails with `AI_CONFIG_MISSING`. If the provider returns quota/rate-limit status such as HTTP `429`, the job fails with `AI_RATE_LIMITED`. If the provider fails for other reasons or returns invalid/contract-mismatched JSON, the job fails with `AI_PROVIDER_FAILED`. The system must not fallback to fake or mock shot generation.
 14. User can edit, add or remove shots, arbitrary shot attributes and the dedicated per-shot dialogue/voiceover textarea.
@@ -335,7 +335,7 @@ Workers must tolerate duplicate job execution and should check whether a result 
 - Master Prompt runtime data is included only when the prompt contains the explicit placeholder:
   - Story Content: `{storyContent}`, `{storyAttributes}`, `{outputFormat}`
   - Scenario: `{story}`, `{scenarioAttributes}`, `{outputFormat}`
-  - Shots: `{story}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`
+  - Shots: `{story}`, `{scenario}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`
   - Shot: `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`
 - `{outputFormat}` renders from the Output Format textarea saved on the active master prompt. If the prompt contains `{outputFormat}` and that saved field is empty, the workflow fails with a clear validation error. No hidden output contract text is appended.
 - The legacy `{attributes}` token remains compatibility-only and should not be expanded for new defaults or docs.

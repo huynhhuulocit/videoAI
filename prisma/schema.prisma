@@ -35,6 +35,7 @@ model ProjectRecord {
   userProjectTemplateId   String?  @map("user_project_template_id")
   projectTemplateSnapshot Json?    @map("project_template_snapshot")
   templateSelection       Json?    @map("template_selection")
+  scenarioResult          String?  @map("scenario_result")
   attributeSelections     Json?    @map("attribute_selections")
   status                  String   @default("active")
   createdAt               DateTime @default(now()) @map("created_at")

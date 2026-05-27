@@ -24,7 +24,7 @@ import {
 
 const aiShotAttributeSchema = z.object({
   name: z.string().trim().min(1),
-  value: z.string().trim().min(1)
+  value: z.string().trim()
 });
 
 const aiShotSchema = z.object({
@@ -156,12 +156,14 @@ export class ShotPlansService {
     const sourceText = input.sourceText;
     const requestedName = input.name?.trim();
     const requestedDescription = input.description?.trim();
+    const scenario = input.scenario?.trim() ?? "";
     const attributes = this.extractShotPlanAttributes(input);
     const scenarioAttributes = this.extractAttributeArray(input.scenarioAttributes);
     const shotsAttributes = this.extractAttributeArray(input.shotsAttributes);
     const prompt = this.buildShotGenerationPrompt(
       input.masterPrompt ?? config.shotGenerationPrompt,
       sourceText,
+      scenario,
       attributes,
       scenarioAttributes,
       shotsAttributes,
@@ -191,6 +193,7 @@ export class ShotPlansService {
           model,
           requestPayload: this.toJson({
             sourceText,
+            scenario,
             attributes,
             scenarioAttributes,
             shotsAttributes,
@@ -213,6 +216,7 @@ export class ShotPlansService {
         projectId,
         {
           sourceText,
+          scenario,
           attributes,
           scenarioAttributes,
           shotsAttributes,
@@ -290,6 +294,7 @@ export class ShotPlansService {
     projectId: string | null,
     context: {
       sourceText: string;
+      scenario: string;
       attributes: VideoShotAttribute[];
       scenarioAttributes: VideoShotAttribute[];
       shotsAttributes: VideoShotAttribute[];
@@ -368,6 +373,7 @@ export class ShotPlansService {
   private buildShotGenerationPrompt(
     configuredPrompt: string | null | undefined,
     sourceText: string,
+    scenario: string,
     attributes: VideoShotAttribute[],
     scenarioAttributes: VideoShotAttribute[],
     shotsAttributes: VideoShotAttribute[],
@@ -379,6 +385,7 @@ export class ShotPlansService {
     const shotsAttributeText = this.formatPlanAttributes(shotsAttributes);
     const renderedPrompt = this.renderOptionalPromptPlaceholders(template, {
       story: sourceText,
+      scenario,
       attributes: attributeText,
       scenarioAttributes: scenarioAttributeText,
       shotsAttributes: shotsAttributeText,
@@ -809,7 +816,7 @@ export class ShotPlansService {
     return attributes
       .map((attribute, index) => {
         const name = this.cleanText(attribute.name);
-        const value = this.cleanText(attribute.value);
+        const value = this.cleanOptionalText(attribute.value);
 
         return {
           id: `shot_${shotIndex + 1}_${this.slug(name)}_${index + 1}`,
@@ -824,22 +831,34 @@ export class ShotPlansService {
     shotIndex: number,
     rawResponse: unknown
   ) {
-    const hasStartState = attributes.some((attribute) =>
+    const startState = attributes.find((attribute) =>
       this.isNamedAttribute(attribute, "Start state")
     );
-    const hasEndState = attributes.some((attribute) =>
+    const endState = attributes.find((attribute) =>
       this.isNamedAttribute(attribute, "End state")
     );
-    const hasDialogue = attributes.some((attribute) =>
+    const dialogue = attributes.find((attribute) =>
       this.isNamedAttribute(attribute, "Dialogue")
     );
-    if (!hasStartState || !hasEndState || !hasDialogue) {
+    if (!startState || !endState || !dialogue) {
       throw new AiJobError(
         "AI_PROVIDER_FAILED",
         `AI shot ${shotIndex + 1} is missing required Start state, End state, or Dialogue attributes.`,
         {
           shotIndex: shotIndex + 1,
           requiredAttributes: ["Start state", "End state", "Dialogue"]
+        },
+        undefined,
+        rawResponse
+      );
+    }
+    if (!startState.value.trim() || !endState.value.trim()) {
+      throw new AiJobError(
+        "AI_PROVIDER_FAILED",
+        `AI shot ${shotIndex + 1} returned an empty Start state or End state.`,
+        {
+          shotIndex: shotIndex + 1,
+          requiredAttributes: ["Start state", "End state"]
         },
         undefined,
         rawResponse
@@ -859,6 +878,10 @@ export class ShotPlansService {
       throw new AiJobError("AI_PROVIDER_FAILED", "AI returned an empty required text field.");
     }
     return trimmed;
+  }
+
+  private cleanOptionalText(value: string) {
+    return value.replace(/\s+/g, " ").trim();
   }
 
   private slug(value: string) {

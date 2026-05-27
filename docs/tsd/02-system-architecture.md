@@ -159,7 +159,7 @@ Use Docker Compose for shared infrastructure:
 Current local ports:
 
 - PostgreSQL: `localhost:55432`.
-- Redis: `localhost:57379`.
+- Redis: `localhost:56379`.
 
 Run apps/services separately during development:
 

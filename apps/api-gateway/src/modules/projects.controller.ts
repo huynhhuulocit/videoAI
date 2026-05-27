@@ -27,6 +27,7 @@ import {
   MASTER_PROMPT_OUTPUT_FORMAT_PLACEHOLDER,
   SaveProjectStoryContentRequestSchema,
   SaveProjectAttributeSelectionsRequestSchema,
+  SaveProjectScenarioResultRequestSchema,
   SaveProjectTemplateSelectionRequestSchema,
   ShotSelectionSchema,
   TemplateAttributeSchema,
@@ -71,7 +72,7 @@ import {
 
 const aiShotAttributeSchema = z.object({
   name: z.string().trim().min(1),
-  value: z.string().trim().min(1),
+  value: z.string().trim(),
 });
 
 const aiShotSchema = z.object({
@@ -85,20 +86,6 @@ const aiShotPlanSchema = z.object({
   name: z.string().trim().min(1),
   durationSeconds: z.number().int().min(1).max(8),
   shots: z.array(aiShotSchema).min(1),
-});
-
-const aiTemplateSelectionAttributeSchema = z.object({
-  attributeId: z.string().optional(),
-  attributeName: z.string().optional(),
-  selectedOptionIds: z.array(z.string()).optional(),
-  selectedOptionLabels: z.array(z.string()).optional(),
-  reason: z.string().optional(),
-});
-
-const aiTemplateSelectionSchema = z.object({
-  attributes: z.array(aiTemplateSelectionAttributeSchema).default([]),
-  compactSelection: z.string().optional(),
-  notes: z.string().optional(),
 });
 
 const shotPlanJsonSchema = {
@@ -134,74 +121,7 @@ const shotPlanJsonSchema = {
   required: ["name", "durationSeconds", "shots"],
 } as const;
 
-const templateSelectionJsonSchema = {
-  type: "object",
-  properties: {
-    attributes: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          attributeId: { type: "string" },
-          attributeName: { type: "string" },
-          selectedOptionIds: {
-            type: "array",
-            items: { type: "string" },
-          },
-          selectedOptionLabels: {
-            type: "array",
-            items: { type: "string" },
-          },
-          reason: { type: "string" },
-        },
-        required: ["attributeId", "selectedOptionIds"],
-      },
-    },
-    compactSelection: { type: "string" },
-    notes: { type: "string" },
-  },
-  required: ["attributes", "compactSelection"],
-} as const;
-
-const openAiTemplateSelectionJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    attributes: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          attributeId: { type: "string" },
-          attributeName: { type: "string" },
-          selectedOptionIds: {
-            type: "array",
-            items: { type: "string" },
-          },
-          selectedOptionLabels: {
-            type: "array",
-            items: { type: "string" },
-          },
-          reason: { type: "string" },
-        },
-        required: [
-          "attributeId",
-          "attributeName",
-          "selectedOptionIds",
-          "selectedOptionLabels",
-          "reason",
-        ],
-      },
-    },
-    compactSelection: { type: "string" },
-    notes: { type: "string" },
-  },
-  required: ["attributes", "compactSelection", "notes"],
-} as const;
-
 type ParsedProviderShotPlan = z.infer<typeof aiShotPlanSchema>;
-type ParsedTemplateSelection = z.infer<typeof aiTemplateSelectionSchema>;
 
 type ProviderRequest = {
   provider: Provider;
@@ -660,6 +580,48 @@ export class ProjectsController {
       await this.validateTemplateSelection(body.templateSelection);
     }
 
+    const updateData: Prisma.ProjectRecordUpdateManyMutationInput = {
+      templateSelection: body.templateSelection
+        ? this.toJson(body.templateSelection)
+        : Prisma.JsonNull,
+      attributeSelections: this.toJson({
+        ...(await this.getExistingProjectAttributeSelections(projectId)),
+        scenario: body.templateSelection
+          ? this.templateSelectionToAttributeSelection(body.templateSelection)
+          : null,
+      }),
+    };
+    const scenarioResult =
+      body.scenarioResult !== undefined
+        ? body.scenarioResult?.trim() || null
+        : undefined;
+    if (scenarioResult !== undefined) {
+      updateData.scenarioResult = scenarioResult;
+    }
+
+    const result = await prisma.projectRecord.updateMany({
+      where: {
+        id: projectId,
+        ownerUserId: defaultUserId,
+        status: "active",
+      },
+      data: updateData,
+    });
+
+    return ok({
+      saved: result.count > 0,
+      templateSelection: body.templateSelection,
+      scenarioResult: scenarioResult ?? null,
+    });
+  }
+
+  @Patch(":projectId/scenario-result")
+  async saveScenarioResult(
+    @Param("projectId") projectId: string,
+    @Body() rawBody: unknown,
+  ) {
+    const body = SaveProjectScenarioResultRequestSchema.parse(rawBody);
+    const scenarioResult = body.scenarioResult?.trim() || null;
     const result = await prisma.projectRecord.updateMany({
       where: {
         id: projectId,
@@ -667,21 +629,13 @@ export class ProjectsController {
         status: "active",
       },
       data: {
-        templateSelection: body.templateSelection
-          ? this.toJson(body.templateSelection)
-          : Prisma.JsonNull,
-        attributeSelections: this.toJson({
-          ...(await this.getExistingProjectAttributeSelections(projectId)),
-          scenario: body.templateSelection
-            ? this.templateSelectionToAttributeSelection(body.templateSelection)
-            : null,
-        }),
+        scenarioResult,
       },
     });
 
     return ok({
       saved: result.count > 0,
-      templateSelection: body.templateSelection,
+      scenarioResult,
     });
   }
 
@@ -980,25 +934,19 @@ export class ProjectsController {
 
       if (type === "template_selection") {
         const resultRecord = this.toRecord(result);
-        const existingProject = await tx.projectRecord.findUnique({
-          where: { id: projectId },
-        });
-        const existingSelections = this.toRecord(
-          existingProject?.attributeSelections,
-        );
-        const scenarioSelection = this.templateSelectionToAttributeSelection(
-          resultRecord.templateSelection,
-        );
+        const scenarioResult = String(resultRecord.scenarioResult ?? "").trim();
+        if (!scenarioResult) {
+          throw new AiJobError(
+            "AI_PROVIDER_FAILED",
+            "Scenario analysis returned an empty result.",
+            { projectId },
+            resultRecord.rawResponse,
+          );
+        }
         await tx.projectRecord.update({
           where: { id: projectId },
           data: {
-            templateSelection: this.toJson(
-              resultRecord.templateSelection ?? null,
-            ),
-            attributeSelections: this.toJson({
-              ...existingSelections,
-              ...(scenarioSelection ? { scenario: scenarioSelection } : {}),
-            }),
+            scenarioResult,
           },
         });
       }
@@ -1067,6 +1015,7 @@ export class ProjectsController {
 
     if (type === "shot_generation") {
       const sourceText = String(payload.sourceText ?? "");
+      const scenario = String(payload.scenario ?? "");
       const attributes = this.extractShotPlanAttributes(input);
       const scenarioAttributes = this.extractVideoShotAttributes(
         payload.scenarioAttributes,
@@ -1080,6 +1029,7 @@ export class ProjectsController {
       return this.createShotPlanWithAi(
         projectId,
         sourceText,
+        scenario,
         attributes,
         scenarioAttributes,
         shotsAttributes,
@@ -1116,11 +1066,6 @@ export class ProjectsController {
         config,
         masterPrompt,
         scenarioAttributesText,
-        Boolean(payload.saveAsTemplate),
-        payload.templateName ? String(payload.templateName) : undefined,
-        payload.templateDescription
-          ? String(payload.templateDescription)
-          : undefined,
       );
     }
 
@@ -1377,9 +1322,6 @@ export class ProjectsController {
     config: AiConfig,
     masterPrompt?: string,
     scenarioAttributesText = "",
-    saveAsTemplate?: boolean,
-    templateNameOverride?: string,
-    templateDescriptionOverride?: string,
   ): Promise<TemplateSelectionAnalysisResult> {
     const template = templateId
       ? await prisma.videoTemplateRecord.findFirst({
@@ -1425,65 +1367,17 @@ export class ProjectsController {
       model,
       prompt,
     );
-    const rawResponse = await this.callTemplateSelectionProvider(
+    const result = await this.callTemplateSelectionProvider(
       provider,
       model,
       rawRequest,
     );
-    let templateSelection = this.normalizeTemplateSelection(rawResponse, {
-      templateId: sourceId,
-      templateName: sourceName,
-      attributes,
-    });
-
-    if (saveAsTemplate) {
-      const project = await prisma.projectRecord.findFirst({
-        where: {
-          id: projectId,
-          ownerUserId: defaultUserId,
-          status: "active",
-        },
-      });
-      if (!project) {
-        throw new BadRequestException("Project is missing or archived.");
-      }
-      const nameSource = templateNameOverride?.trim() || project.name.trim();
-      if (!nameSource) {
-        throw new BadRequestException(
-          "Scenario name is required before saving AI analysis.",
-        );
-      }
-      const name = nameSource.slice(0, 120);
-      const description = (
-        templateDescriptionOverride?.trim() ||
-        project.description?.trim() ||
-        ""
-      ).slice(0, 500);
-      const savedTemplate = await prisma.videoTemplateRecord.create({
-        data: {
-          id: `template_${Date.now()}`,
-          ownerUserId: defaultUserId,
-          name,
-          description: description || null,
-          idea: inputText,
-          attributes: this.toJson(templateSelection.attributes),
-          isDefault: false,
-          status: "active",
-        },
-      });
-      templateSelection = {
-        ...templateSelection,
-        templateId: savedTemplate.id,
-        templateName: savedTemplate.name,
-      };
-    }
 
     return {
       projectId,
-      templateSelection,
-      compactSelection: this.formatTemplateSelectionCompact(templateSelection),
+      scenarioResult: result.text,
       rawRequest,
-      rawResponse,
+      rawResponse: result.rawResponse,
       provider,
       model,
     };
@@ -1788,10 +1682,6 @@ export class ProjectsController {
               parts: [{ text: prompt }],
             },
           ],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseJsonSchema: templateSelectionJsonSchema,
-          },
         },
       };
     }
@@ -1809,21 +1699,13 @@ export class ProjectsController {
         body: {
           model,
           input: prompt,
-          text: {
-            format: {
-              type: "json_schema",
-              name: "template_option_selection",
-              strict: true,
-              schema: openAiTemplateSelectionJsonSchema,
-            },
-          },
         },
       };
     }
 
     throw new AiJobError(
       "AI_PROVIDER_FAILED",
-      `Provider ${provider} cannot analyze template options.`,
+      `Provider ${provider} cannot generate Scenario result.`,
       { provider, model },
     );
   }
@@ -1843,7 +1725,7 @@ export class ProjectsController {
 
     throw new AiJobError(
       "AI_PROVIDER_FAILED",
-      `Provider ${provider} cannot analyze template options.`,
+      `Provider ${provider} cannot generate Scenario result.`,
       { provider, model },
       rawRequest,
     );
@@ -1858,7 +1740,7 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key in Admin > AI Config.`,
+        `Missing API key for ${rawRequest.provider} Scenario result generation. Save a provider key in Admin > AI Config.`,
         { provider: rawRequest.provider, model },
         rawRequest,
       );
@@ -1878,15 +1760,20 @@ export class ProjectsController {
       throw new AiJobError(
         response.status === 429 ? "AI_RATE_LIMITED" : "AI_PROVIDER_FAILED",
         response.status === 429
-          ? `Gemini template option analysis is rate limited or out of quota (status ${response.status}).`
-          : `Gemini template option analysis failed with status ${response.status}.`,
+          ? `Gemini Scenario result generation is rate limited or out of quota (status ${response.status}).`
+          : `Gemini Scenario result generation failed with status ${response.status}.`,
         { provider: rawRequest.provider, model, status: response.status },
         providerPayload,
       );
     }
 
-    const text = this.extractGeminiText(providerPayload, "scenario analysis");
-    return this.parseTemplateSelectionJson(text, rawRequest.provider, model);
+    const text = this.cleanGeneratedScenarioResultText(
+      this.extractGeminiText(providerPayload, "Scenario result generation"),
+      rawRequest.provider,
+      model,
+      providerPayload,
+    );
+    return { text, rawResponse: providerPayload };
   }
 
   private async callOpenAiForTemplateSelection(
@@ -1898,7 +1785,7 @@ export class ProjectsController {
     if (!apiKey) {
       throw new AiJobError(
         "AI_CONFIG_MISSING",
-        `Missing API key for ${rawRequest.provider} template option analysis. Save a provider key in Admin > AI Config.`,
+        `Missing API key for ${rawRequest.provider} Scenario result generation. Save a provider key in Admin > AI Config.`,
         { provider: rawRequest.provider, model },
         rawRequest,
       );
@@ -1918,107 +1805,44 @@ export class ProjectsController {
       throw new AiJobError(
         response.status === 429 ? "AI_RATE_LIMITED" : "AI_PROVIDER_FAILED",
         response.status === 429
-          ? `ChatGPT template option analysis is rate limited or out of quota (status ${response.status}).`
-          : `ChatGPT template option analysis failed with status ${response.status}.`,
+          ? `ChatGPT Scenario result generation is rate limited or out of quota (status ${response.status}).`
+          : `ChatGPT Scenario result generation failed with status ${response.status}.`,
         { provider: rawRequest.provider, model, status: response.status },
         providerPayload,
       );
     }
 
-    const text = this.extractOpenAiText(providerPayload, "scenario analysis");
-    return this.parseTemplateSelectionJson(text, rawRequest.provider, model);
+    const text = this.cleanGeneratedScenarioResultText(
+      this.extractOpenAiText(providerPayload, "Scenario result generation"),
+      rawRequest.provider,
+      model,
+      providerPayload,
+    );
+    return { text, rawResponse: providerPayload };
   }
 
-  private parseTemplateSelectionJson(
+  private cleanGeneratedScenarioResultText(
     text: string,
     provider: Provider,
     model: string,
+    rawResponse: unknown,
   ) {
-    const rawResponse = this.parseProviderJson(
-      text,
-      provider,
-      model,
-      "scenario analysis",
-    );
-    const parsed = aiTemplateSelectionSchema.safeParse(rawResponse);
-    if (!parsed.success) {
+    const trimmed = text.trim();
+    if (!trimmed) {
       throw new AiJobError(
         "AI_PROVIDER_FAILED",
-        "AI returned JSON that does not match the template selection contract.",
-        { provider, model, issues: parsed.error.issues },
+        "AI returned empty Scenario result.",
+        { provider, model },
         rawResponse,
       );
     }
-    return parsed.data;
-  }
-
-  private normalizeTemplateSelection(
-    rawResponse: ParsedTemplateSelection,
-    template: {
-      templateId: string;
-      templateName: string;
-      attributes: TemplateAttribute[];
-    },
-  ): TemplateSelection {
-    const selectedAttributes = template.attributes
-      .map((attribute) => {
-        const aiAttribute = rawResponse.attributes.find((candidate) => {
-          const candidateId = candidate.attributeId?.trim().toLowerCase();
-          const candidateName = candidate.attributeName?.trim().toLowerCase();
-          return (
-            candidateId === attribute.id.toLowerCase() ||
-            candidateName === attribute.name.toLowerCase()
-          );
-        });
-
-        const selectedIds = new Set(
-          (aiAttribute?.selectedOptionIds ?? []).map((optionId) =>
-            optionId.trim(),
-          ),
-        );
-        const selectedLabels = new Set(
-          (aiAttribute?.selectedOptionLabels ?? []).map((label) =>
-            label.trim().toLowerCase(),
-          ),
-        );
-        const options = attribute.options.filter(
-          (option) =>
-            selectedIds.has(option.id) ||
-            selectedLabels.has(option.label.toLowerCase()) ||
-            selectedLabels.has(option.value.toLowerCase()),
-        );
-
-        return {
-          id: attribute.id,
-          name: attribute.name,
-          options,
-        };
-      })
-      .filter((attribute) => attribute.options.length > 0);
-
-    return {
-      templateId: template.templateId,
-      templateName: template.templateName,
-      attributes: selectedAttributes,
-    };
-  }
-
-  private formatTemplateSelectionCompact(selection: TemplateSelection) {
-    if (selection.attributes.length === 0) {
-      return "";
-    }
-
-    return selection.attributes
-      .map(
-        (attribute) =>
-          `${attribute.id}=${attribute.options.map((option) => option.label).join(",")};`,
-      )
-      .join("\n");
+    return trimmed;
   }
 
   private async createShotPlanWithAi(
     projectId: string,
     sourceText: string,
+    scenario: string,
     attributes: VideoShotAttribute[],
     scenarioAttributes: VideoShotAttribute[],
     shotsAttributes: VideoShotAttribute[],
@@ -2030,6 +1854,7 @@ export class ProjectsController {
     const prompt = this.buildShotGenerationPrompt(
       masterPrompt ?? config.shotGenerationPrompt,
       sourceText,
+      scenario,
       attributes,
       scenarioAttributes,
       shotsAttributes,
@@ -2185,6 +2010,7 @@ export class ProjectsController {
   private buildShotGenerationPrompt(
     configuredPrompt: string | null | undefined,
     sourceText: string,
+    scenario: string,
     attributes: VideoShotAttribute[],
     scenarioAttributes: VideoShotAttribute[],
     shotsAttributes: VideoShotAttribute[],
@@ -2208,6 +2034,7 @@ export class ProjectsController {
     );
     const renderedPrompt = this.renderOptionalPromptPlaceholders(masterPrompt, {
       story: sourceText,
+      scenario,
       attributes: attributeText,
       scenarioAttributes: scenarioAttributeText,
       shotsAttributes: shotsAttributeText,
@@ -2445,7 +2272,7 @@ export class ProjectsController {
   ): VideoShotAttribute[] {
     return attributes.map((attribute, index) => {
       const name = this.cleanText(attribute.name);
-      const value = this.cleanText(attribute.value);
+      const value = this.cleanOptionalText(attribute.value);
 
       return {
         id: `shot_${shotIndex + 1}_${this.slug(name)}_${index + 1}`,
@@ -2460,22 +2287,33 @@ export class ProjectsController {
     shotIndex: number,
     rawResponse: unknown,
   ) {
-    const hasStartState = attributes.some((attribute) =>
+    const startState = attributes.find((attribute) =>
       this.isNamedAttribute(attribute, "Start state"),
     );
-    const hasEndState = attributes.some((attribute) =>
+    const endState = attributes.find((attribute) =>
       this.isNamedAttribute(attribute, "End state"),
     );
-    const hasDialogue = attributes.some((attribute) =>
+    const dialogue = attributes.find((attribute) =>
       this.isNamedAttribute(attribute, "Dialogue"),
     );
-    if (!hasStartState || !hasEndState || !hasDialogue) {
+    if (!startState || !endState || !dialogue) {
       throw new AiJobError(
         "AI_PROVIDER_FAILED",
         `AI shot ${shotIndex + 1} is missing required Start state, End state, or Dialogue attributes.`,
         {
           shotIndex: shotIndex + 1,
           requiredAttributes: ["Start state", "End state", "Dialogue"],
+        },
+        rawResponse,
+      );
+    }
+    if (!startState.value.trim() || !endState.value.trim()) {
+      throw new AiJobError(
+        "AI_PROVIDER_FAILED",
+        `AI shot ${shotIndex + 1} returned an empty Start state or End state.`,
+        {
+          shotIndex: shotIndex + 1,
+          requiredAttributes: ["Start state", "End state"],
         },
         rawResponse,
       );
@@ -2500,6 +2338,10 @@ export class ProjectsController {
       );
     }
     return trimmed;
+  }
+
+  private cleanOptionalText(value: string) {
+    return value.replace(/\s+/g, " ").trim();
   }
 
   private requirePrompt(value: string | null | undefined, label: string) {

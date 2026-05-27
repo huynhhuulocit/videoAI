@@ -75,6 +75,7 @@ Fields:
 - `description`
 - `flow_type`: `script` or `product`
 - `template_selection`: nullable JSONB storing the project-level Kịch bản/scenario option selection selected manually or by AI analysis
+- `scenario_result`: nullable text storing the editable Step 2 Scenario result used by Step 3 `{scenario}` rendering
 - `status`
 - `created_at`
 - `updated_at`
@@ -403,7 +404,7 @@ Rules:
 - Deleting/archiving the current default is blocked until another active prompt of the same type is set as default.
 - If no active prompt exists for a type, runtime AI requests fail with `AI_CONFIG_MISSING`. Built-in prompt text is setup guidance only, not runtime fallback.
 - Prompt content is required but placeholders are optional.
-- Recommended placeholders by type: `scripts`/`Story Content` uses `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `scenario` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `shot` uses `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `scenario` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `shots` uses `{story}`, `{scenario}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `shot` uses `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
 - If `content` contains `{outputFormat}`, `output_format` is required for save/preview/runtime. The backend must fail clearly when it is missing instead of substituting fallback output instructions.
 
 ### 3.8. `config.ai_provider_keys`

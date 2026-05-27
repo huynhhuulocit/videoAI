@@ -54,7 +54,6 @@ Components:
 - `ShotMediaUpload`
 - `ShotSelector`
 - `GeneratedPromptPanel`
-- `AIResultPanel`
 - `JobProgress`
 - `GenerationActionBar`
 - `ProviderModelMeta`
@@ -131,7 +130,7 @@ Purpose:
 - Keep helper text in the main `Attribute/option schema` JSON by adding `description` directly to each attribute and option. Legacy `translate`, `label` and `value` fields remain parse-compatible but the editor no longer emits them.
 - Let project workspace select multiple options per attribute before prompt generation.
 - In the project workspace `Attributes` panel, expose saved Scenario description metadata through compact helper icons on attribute and option rows; hover or click opens the helper popover.
-- Let project workspace analyze the current story with AI, auto-select matching scenario options, and save the resulting selection to the project.
+- Let project workspace analyze the current story with AI, write the provider output into the editable `Scenario result` textarea, and save that result to the project without auto-selecting Scenario options.
 - In project workspace, render Story, Scenario and Shots attribute catalogs inside right-column `Attributes` panels that are collapsed by default, wide enough for label/count readability on desktop; individual attribute groups remain collapsible and show selected counts.
 
 ## 5.2. Project Shot Plan Components
@@ -149,17 +148,17 @@ Purpose:
 
 - Standalone shot-plan list/editor components are no longer user-facing.
 - `/shots`, `/shots/new`, and `/shots/{shotPlanId}` redirect to `/projects` for compatibility.
-- Project and One Click workspaces own shots generation, JSON/card editing, media attachment, raw Prompt/Request/Response review, and saving through project-scoped APIs.
-- Project and One Click workspaces include a sticky top save bar with truncated project title/description and a primary `Save Project` action. That action saves Step 1 Story Content, Step 2 selections, Step 3 Shots result JSON and Step 4 shot card edits in one operation.
+- Project and One Click workspaces own shots generation, JSON/card editing, media attachment, Scenario result editing, raw Prompt/Request/Response review, and saving through project-scoped APIs.
+- Project and One Click workspaces include a sticky top save bar with truncated project title/description and a primary `Save Project` action. That action saves Step 1 Story Content, Step 2 selections and Scenario result, Step 3 Shots result JSON and Step 4 shot card edits in one operation.
 - In the project workspace Step 3, show inline feedback directly below `Generate shots`: success when the shot plan is generated and detailed readable errors for AI provider/config/schema failures.
 - In the project workspace Step 3, always render `Shots result` below the generation action row. The field is empty until generated shots exist or user pastes JSON; valid JSON edits immediately rebuild the Step 4 shot cards, while invalid JSON shows a readable error and keeps the last valid cards. The workspace does not show a shot-plan selector or shot-plan name field.
 - In the project workspace Step 4, render the editable shot cards as a separate collapsible section. Keep add/remove/select, dialogue, generated shot attributes, per-shot admin `Shot Attribute` selection, reference media, per-shot prompt/video actions, and `Save shots` behavior in this section.
-- Display `Start state`, `End state` and `Dialogue` attributes returned by shot generation so users can preserve continuity between shots and edit per-shot spoken content.
+- Display `Start state`, `End state` and `Dialogue` attributes returned by shot generation so users can preserve continuity between shots and edit per-shot spoken content. `Start state` and `End state` values are required; `Dialogue` may be empty for intentional no-dialogue scenarios.
 - In project workspace Step 1, render the active admin-managed `Story Content` master prompt textarea only when Site Config `showUserMasterPrompts=true`; always render the Story Content textarea with counters. Generated content replaces the Story Content textarea and is reused by later steps.
-- In project workspace AI action rows that use master prompts, render a `Prompt` button before `Request`; it opens exactly the rendered master prompt after placeholder replacement, with no hidden runtime context appended. Render disabled-until-ready `Request` and `Response` buttons beside `Generate Story Content`, `Analyze scenario`, `Generate shots`, and Product Flow `Analyze`; clicking opens a full read-only JSON popup with the latest raw data for that action. All prompt/raw-data popups include a header copy icon.
-- In project workspace Step 2, render the Scenario master prompt textarea only when Site Config `showUserMasterPrompts=true`; keep `Analyze scenario`, `Prompt`, `Request`, and `Response` available when it is hidden.
+- In project workspace AI action rows that use master prompts, render `Prompt`, `Request`, and `Response`; `Prompt` opens exactly the rendered master prompt after placeholder replacement, with no hidden runtime context appended. Render disabled-until-ready `Request` and `Response` buttons beside `Generate Story Content`, `Analyze scenario`, `Generate shots`, and Product Flow `Analyze`; clicking opens a full read-only JSON popup with the latest raw data for that action. All prompt/raw popups include a header copy icon.
+- In project workspace Step 2, render the Scenario master prompt textarea only when Site Config `showUserMasterPrompts=true`; keep `Analyze scenario`, `Prompt`, `Request`, and `Response` available when it is hidden. Step 2 also renders an editable `Scenario result` textarea that is filled by AI analysis, can be edited manually, and is saved for Step 3 `{scenario}` rendering.
 - In project workspace Step 3, render the active admin-managed `Shots` master prompt in a counter-enabled textarea only when Site Config `showUserMasterPrompts=true`; send edits as a temporary `masterPrompt` override only in that mode. When the setting is false, generation payloads omit `masterPrompt` and the backend uses the active admin default.
-- In project workspace Step 3, render only `Shots Attributes` in the right-column attribute area beside the Shots master prompt/generation controls. Scenario options remain managed in Step 2 and can feed `{scenarioAttributes}` when the prompt contains that placeholder.
+- In project workspace Step 3, render only `Shots Attributes` in the right-column attribute area beside the Shots master prompt/generation controls. Scenario options remain managed in Step 2 and can feed `{scenarioAttributes}` when the prompt contains that placeholder. The saved Step 2 `Scenario result` textarea feeds the Step 3 `{scenario}` placeholder.
 - In One Click, Step 3 owns Shots generation and `Shots result` JSON; Step 4 owns the editable project-scoped shot cards generated or pasted in the wizard.
 - In project workspace shot cards, render shot-level attributes in a right-column collapsed `Attributes` panel with count, add, edit and remove controls, matching the Step 2 scenario attribute panel pattern and desktop width.
 - In project workspace shot cards, render shot attribute values as auto-growing multiline textareas so long prompt instructions wrap and expand the card height.

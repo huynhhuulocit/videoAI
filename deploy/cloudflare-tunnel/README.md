@@ -28,7 +28,7 @@ Do not open public inbound ports for this mode:
 - Do not port-forward `3000`.
 - Do not port-forward `4000`.
 - Do not expose PostgreSQL `55432`.
-- Do not expose Redis `57379`.
+- Do not expose Redis `56379`.
 
 `cloudflared` uses outbound connections to Cloudflare. Your app should be reachable publicly only through the Cloudflare hostname.
 
@@ -171,7 +171,7 @@ cloudflared tunnel info videoai-local
 - Cloudflare Access is enabled for the hostname.
 - Access policy allows only explicit customer/admin emails.
 - `SITE_GATE_ENABLED=true` and `SITE_GATE_PASSWORD` is not a placeholder.
-- Direct public access to ports `3000`, `4000`, `55432`, and `57379` is blocked.
+- Direct public access to ports `3000`, `4000`, `55432`, and `56379` is blocked.
 - The local app has a strong admin password.
 - Provider keys are stored through Admin or local `.env`; never commit them.
 - The tunnel PowerShell window is visible so you can stop sharing quickly.

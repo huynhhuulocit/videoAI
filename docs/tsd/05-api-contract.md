@@ -117,7 +117,7 @@ Request:
 
 Returns active project detail.
 
-Project detail may include `templateSelection`, the saved Kịch bản/scenario option selection for that project. The workspace uses it to restore checked options after reload.
+Project detail may include `templateSelection`, the saved Kịch bản/scenario option selection for that project, and `scenarioResult`, the editable Step 2 Scenario result used by Step 3 `{scenario}` rendering.
 
 ### `PATCH /api/v1/projects/{projectId}`
 
@@ -129,7 +129,7 @@ Archives a project by marking it non-active. Archived projects no longer appear 
 
 ### `POST /api/v1/projects/{projectId}/template-selection/analyze`
 
-Uses the active prompt provider/model to analyze the current Scenario story against a selected Kịch bản/scenario template. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override after replacing any placeholders present in that prompt. Temporary `masterPrompt` overrides are accepted only when Admin Site Config `showUserMasterPrompts=true`; otherwise the request is rejected and clients should omit the field. The provider returns strict JSON with selected option IDs. The API normalizes the response, saves the resulting `templateSelection` on the project, creates AI request/response logs and returns a completed job.
+Uses the active prompt provider/model to generate the current Step 2 `Scenario result` from Story Content and selected Scenario attribute inputs. The provider receives the admin-managed `Scenario` master prompt or optional temporary user override after replacing any placeholders present in that prompt. Temporary `masterPrompt` overrides are accepted only when Admin Site Config `showUserMasterPrompts=true`; otherwise the request is rejected and clients should omit the field. The provider response is treated as plain output text, the API saves it in `scenarioResult` on the project, creates AI request/response logs and returns a completed job. It does not parse AI output to select Scenario attributes.
 
 Request:
 
@@ -138,37 +138,22 @@ Request:
   "inputText": "Ăn khế trả vàng...",
   "templateId": "template_product_intro",
   "masterPrompt": "You are a video script analyst...",
-  "saveAsTemplate": true,
-  "templateName": "One Click video project",
-  "templateDescription": "Short setup description used for the saved Scenario."
+  "attributeSelections": {
+    "scenario": {
+      "attributes": []
+    }
+  }
 }
 ```
 
-`masterPrompt` is optional. When omitted, the API uses the active admin-managed scenario analysis prompt. If no active default exists, the job fails with `AI_CONFIG_MISSING`. `saveAsTemplate`, `templateName` and `templateDescription` are optional; One Click uses them so a successful Step 2 analysis saves a Scenario record named/described from setup.
+`masterPrompt` is optional. When omitted, the API uses the active admin-managed scenario analysis prompt. If no active default exists, the job fails with `AI_CONFIG_MISSING`. `attributeSelections.scenario` is optional and is used only for placeholder rendering such as `{scenarioAttributes}`; it is not mutated by the AI response.
 
 Completed job result:
 
 ```json
 {
   "projectId": "project_001",
-  "templateSelection": {
-    "templateId": "template_product_intro",
-    "templateName": "Template giới thiệu sản phẩm",
-    "attributes": [
-      {
-        "id": "genre",
-        "name": "Genre",
-        "options": [
-          {
-            "id": "genre-folk-tale",
-            "label": "Folk Tale",
-            "value": "Folk Tale"
-          }
-        ]
-      }
-    ]
-  },
-  "compactSelection": "genre=Folk Tale;",
+  "scenarioResult": "A concise scenario analysis result formatted by the active Scenario master prompt.",
   "rawRequest": {},
   "rawResponse": {},
   "provider": "gemini",
@@ -180,12 +165,12 @@ Failure behavior:
 
 - Missing saved key for the active prompt provider returns a failed job with `AI_CONFIG_MISSING` and safe details such as `provider` and `model`.
 - Provider quota or rate-limit responses such as HTTP `429` return a failed job with `AI_RATE_LIMITED`.
-- Provider HTTP failures, empty provider text or invalid/contract-mismatched JSON return a failed job with `AI_PROVIDER_FAILED`.
+- Provider HTTP failures or empty provider text return a failed job with `AI_PROVIDER_FAILED`.
 - The user workspace must render failed scenario-analysis jobs as an inline, understandable error near `Analyze scenario`, including code, provider/model, status hints and job ID. Raw provider payloads must not be shown inside the error text; successful job raw request/response can be opened from the adjacent workspace `Request`/`Response` buttons and from admin AI logs, with secrets redacted.
 
 ### `PATCH /api/v1/projects/{projectId}/template-selection`
 
-Saves the current manual or AI-generated Kịch bản/scenario selection to the project.
+Saves the current manual or AI-generated Kịch bản/scenario selection and optional editable Scenario result to the project.
 
 Request:
 
@@ -195,7 +180,20 @@ Request:
     "templateId": "template_product_intro",
     "templateName": "Template giới thiệu sản phẩm",
     "attributes": []
-  }
+  },
+  "scenarioResult": "genre=Folk Tale;"
+}
+```
+
+### `PATCH /api/v1/projects/{projectId}/scenario-result`
+
+Saves only the editable Scenario result textarea. Send `null` to clear it.
+
+Request:
+
+```json
+{
+  "scenarioResult": "genre=Folk Tale;"
 }
 ```
 
@@ -407,6 +405,8 @@ Lists all active shot plans owned by the current user. Shot plans are reusable b
 
 Generates a user-owned shot plan from story content. The API reads the active admin prompt provider/model and uses the optional request `masterPrompt` as a temporary `Shots` prompt override only when Admin Site Config `showUserMasterPrompts=true`; when `showUserMasterPrompts=false`, any non-empty `masterPrompt` override is rejected. When omitted, it uses the active admin default `Shots` master prompt. It optionally replaces placeholders, does not append hidden story/attribute/duration text, calls the provider with the saved encrypted provider key, stores the redacted raw provider request plus raw response in AI logs/job result, validates the returned JSON, and persists the generated shot JSON in PostgreSQL. In the project workspace, `attributes` should include the selected Step 2 Kịch bản/scenario options formatted as compact plan attributes such as `genre=Folk Tale,Drama;` only when the prompt includes `{attributes}`.
 
+`scenario` contains the saved Step 2 `Scenario result` textarea for prompts that include `{scenario}`. `attributes` remains compatibility-only for selected Step 2 scenario options when prompts still include `{attributes}`.
+
 For ChatGPT, the provider request uses the OpenAI Responses API with `text.format.type = "json_schema"`, `strict = true`, and `additionalProperties: false` on every schema object. Backend validation rejects provider output with missing required fields or durations outside `1-8`.
 
 Request:
@@ -416,7 +416,8 @@ Request:
   "sourceText": "Create a short product introduction video.",
   "name": "One Click video project",
   "description": "Short setup description used for the saved shot plan.",
-  "masterPrompt": "You are an expert video shot planner.\n\nStory:\n{story}\n\nScenario attributes:\n{scenarioAttributes}\n\nShots attributes:\n{shotsAttributes}",
+  "masterPrompt": "You are an expert video shot planner.\n\nStory:\n{story}\n\nScenario:\n{scenario}\n\nScenario attributes:\n{scenarioAttributes}\n\nShots attributes:\n{shotsAttributes}",
+  "scenario": "scenario-structure=3-Act Structure;\nscene-count=Auto;",
   "attributes": [
     {
       "id": "tone",
@@ -476,7 +477,7 @@ Completed job result:
 }
 ```
 
-`rawRequest` and `rawResponse` are stored in the job result and AI logs, and can be displayed from the latest job result through project workspace review popups. `content.video_shot_plans` stores normalized plan-level `attributes` and `shotPlan.shots` JSON, not separate raw request/response columns. Each normalized shot must include `Start state`, `End state` and `Dialogue` attributes; UI renders `Dialogue` as a dedicated textarea while persisting it in the shot JSON.
+`rawRequest` and `rawResponse` are stored in the job result and AI logs, and can be displayed from the latest job result through project workspace review popups. `content.video_shot_plans` stores normalized plan-level `attributes` and `shotPlan.shots` JSON, not separate raw request/response columns. Each normalized shot must include `Start state`, `End state` and `Dialogue` attributes; `Start state` and `End state` values must be non-empty, while `Dialogue` may be an empty string for no-dialogue scenarios. UI renders `Dialogue` as a dedicated textarea while persisting it in the shot JSON.
 
 Failure behavior:
 
@@ -1029,7 +1030,7 @@ Validation:
 - Content may keep the recommended placeholder format, but placeholders are optional and saves do not validate their presence.
 - `outputFormat` is optional unless `content` contains `{outputFormat}`. When the token is present and `outputFormat` is blank, create/update/preview/runtime must fail with a clear validation error.
 - Master prompt records do not store Story/Scenario/Shots/Shot workflow attribute selections. Those workflow attributes are selected in Project and One Click user flows.
-- Recommended placeholders by type: `scripts`/`Story Content` uses `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `scenario` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `shots` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `shot` uses `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
+- Recommended placeholders by type: `scripts`/`Story Content` uses `{storyContent}`, `{storyAttributes}`, `{outputFormat}`; `scenario` uses `{story}`, `{attributes}`, `{scenarioAttributes}`, `{outputFormat}`; `shots` uses `{story}`, `{scenario}`, `{attributes}`, `{scenarioAttributes}`, `{shotsAttributes}`, `{outputFormat}`; `shot` uses `{storyContent}`, `{shotTitle}`, `{shotDescription}`, `{shotDialogue}`, `{shotDuration}`, `{shotGeneratedAttributes}`, `{shotAttributes}`, `{referenceMedia}`, `{outputFormat}`.
 - `{masterPromptAttributes}` is admin-only. It is suggested only in admin master prompt editors and renders from the prompt record's saved `attributeSelection`.
 - User-facing temporary master prompt overrides containing `{masterPromptAttributes}` are rejected.
 

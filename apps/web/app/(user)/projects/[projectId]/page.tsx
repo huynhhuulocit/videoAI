@@ -31,6 +31,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
         projectDescription={project?.description ?? null}
         flowType={project?.flowType ?? "product"}
         savedTemplateSelection={project?.templateSelection ?? null}
+        savedScenarioResult={project?.scenarioResult ?? null}
         savedAttributeSelections={project?.attributeSelections ?? null}
         projectTemplateSnapshot={project?.projectTemplateSnapshot ?? null}
         defaultPrompt=""

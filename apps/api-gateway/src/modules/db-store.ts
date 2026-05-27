@@ -299,6 +299,9 @@ export function mapProject(row: DbProject): Project {
       row.templateSelection,
     );
   }
+  if (row.scenarioResult !== null) {
+    project.scenarioResult = row.scenarioResult;
+  }
   if (row.attributeSelections) {
     project.attributeSelections = ProjectAttributeSelectionsSchema.parse(
       row.attributeSelections,

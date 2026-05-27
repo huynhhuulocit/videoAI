@@ -38,7 +38,7 @@ One Click should open a guided shortcut, not a separate backend flow:
 - `/one-click` creates a normal Scenario project from a project name.
 - `/one-click/{projectId}` shows one step at a time with `Back` and `Next`.
 - Step 1 reuses Story Content generation and raw Prompt/Request/Response debugging, and saves Story Content to the database before moving to the next step.
-- Step 2 is a Scenario step: it shows Scenario master prompt, Story Content, the scenario catalog in use, and `Analyze scenario` with `Prompt`/`Request`/`Response`; it does not show a `Choose scenario` dropdown. It reuses the Scenario content editor pattern from Scenario create/edit so the current scenario name, description, schema JSON and attributes/options can be reviewed and saved inline. Successful analysis saves a Scenario with the One Click setup name and description.
+- Step 2 is a Scenario step: it shows Scenario master prompt, Story Content, the scenario catalog in use, and `Analyze scenario` with `Prompt`/`Request`/`Response`; it does not show a `Choose scenario` dropdown. It also shows an editable `Scenario result` textarea that is filled by AI analysis, can be edited manually, and is saved for Step 3 `{scenario}` rendering.
 - Step 3 reuses Shots master prompt and AI shot generation, including selected scenario attributes when Step 2 analysis has run. User workspaces do not show an existing shot-plan selector or shot-plan name; generated shots are rebuilt from the `Shots result` JSON.
 - Step 4 shows the editable shot cards rebuilt from `Shots result` JSON and saves them to the database as project-linked shot records.
 
@@ -61,7 +61,7 @@ Recommended layout:
 
 - Left or top context area: project name, status, last updated.
 - The top workspace action bar keeps project title, project description and `Save Project` on one row on desktop. Title and description use single-line truncation with ellipsis when long.
-- `Save Project` persists the current workspace state: Story Content, Story/Scenario/Shots attribute selections, Scenario selection when available, and the current synced Shots result/cards.
+- `Save Project` persists the current workspace state: Story Content, Story/Scenario/Shots attribute selections, Scenario selection, Scenario result, and the current synced Shots result/cards.
 - Main workspace renders the flow selected during project creation:
   - `Scenario`
   - `Product Flow`
@@ -84,7 +84,7 @@ Recommended layout:
   - The `Story Content` textarea is the source of truth for later Scenario analysis, Shots generation, per-shot prompt composition and Script creation.
   - Clicking `Generate Story Content` sends a temporary master prompt override only when the Site Config setting is `Yes`; when it is `No`, the frontend omits `masterPrompt`. The returned content replaces the Story Content textarea and becomes the source for following steps.
   - Story Content generation is a real AI provider request. If it fails, show the readable failure details directly under the button, including stable error code, provider/model when available, env/status hints when relevant and job ID. Do not show fallback sample content in the user workspace.
-  - Show a `Prompt` button before `Request` next to `Generate Story Content`; it opens a read-only popup containing exactly the master prompt after optional placeholder replacement. Runtime data appears only through placeholders present in the prompt.
+  - Show `Prompt`, `Request`, and `Response` next to `Generate Story Content`; `Prompt` opens a read-only popup containing exactly the master prompt after optional placeholder replacement. Runtime data appears only through placeholders present in the prompt.
   - Show `Request` and `Response` buttons next to `Generate Story Content`; they stay disabled until the latest AI run returns raw data and open a full read-only popup for inspection.
   - Include a prompt preview icon above the Story Content editor to inspect the composed AI request before submission.
 - Step 2 `Kịch bản tạo prompt` selector with attribute/option checkboxes.
@@ -93,12 +93,13 @@ Recommended layout:
   - The admin-managed scenario analysis master prompt textarea is shown only when Site Config `Show master prompts in user workspace = Yes`; when hidden, analysis uses the active admin default prompt.
   - The visible Scenario master prompt uses the shared cyan prompt surface.
   - `Analyze scenario` and `Save selection` actions appear in the prompt/content action area before the attribute/option catalog. If the master prompt textarea is hidden by Site Config, this action row still appears with `Prompt`, `Request`, and `Response`.
-  - Show a `Prompt` button before `Request` next to `Analyze scenario`; it opens a read-only popup containing exactly the Scenario master prompt after optional `{story}`/`{attributes}` replacement.
+  - Show `Prompt`, `Request`, and `Response` next to `Analyze scenario`; `Prompt` opens a read-only popup containing exactly the Scenario master prompt after optional `{story}`/`{attributes}` replacement.
   - Show `Request` and `Response` buttons next to `Analyze scenario`; they stay disabled until the latest AI run returns raw data and open a full read-only popup for inspection.
+  - Always show a `Scenario result` textarea below the Step 2 action/feedback area. `Analyze scenario` fills it from the provider output text without changing Scenario attribute selections, users can edit it manually, and `Save selection` or `Save Project` persists it to the project.
   - On desktop, the attribute/option catalog lives in a right-column `Attributes` panel; the master prompt, actions and AI error/result feedback stay in the left content column. The panel should be wide enough for Vietnamese labels and selected-count badges without cramped wrapping, about `380px` on wide desktop.
   - The `Attributes` panel is collapsed by default, and each attribute group inside it can also collapse/expand while keeping the selected option count visible.
   - Attribute and option rows that have saved Scenario description metadata show a compact helper icon. Hovering or clicking the icon opens a small popover with the saved description without toggling the row selection/collapse state.
-- AI scenario analysis action combines the active Scenario master prompt, Step 1 Story Content and selected Kịch bản attribute/option catalog, auto-selects matching options, and saves that selection to the project. A temporary prompt override is sent only when Site Config allows user-visible master prompts.
+- AI scenario analysis action combines the active Scenario master prompt, Step 1 Story Content and selected Kịch bản attribute/option inputs, then saves only the resulting Scenario output text to the project. It does not auto-select matching options. A temporary prompt override is sent only when Site Config allows user-visible master prompts.
 - Manual `Save selection` action for edited Kịch bản checkboxes so project reloads keep the same option selection.
 - Step 3 `Shots tạo prompt` planner below Kịch bản:
   - The whole step can collapse/expand.
@@ -108,9 +109,9 @@ Recommended layout:
   - Display the admin-managed `Shots` master prompt in an editable textarea before the generate action only when Site Config `Show master prompts in user workspace = Yes`. Edits are temporary for the current generation and do not overwrite the admin default.
   - The visible Shots master prompt uses the shared cyan prompt surface.
   - On desktop, `Shots Attributes` live in the right-column attribute panel beside the Shots master prompt and generation controls.
-  - The Step 3 right-column `Shots Attributes` panel is collapsed by default, keeps selected-count and attribute-count badges visible, and expands only when the user needs to review or adjust options for `{shotsAttributes}`. Scenario options are controlled in Step 2 and can still feed `{scenarioAttributes}` when the prompt contains that placeholder.
+  - The Step 3 right-column `Shots Attributes` panel is collapsed by default, keeps selected-count and attribute-count badges visible, and expands only when the user needs to review or adjust options for `{shotsAttributes}`. Scenario options are controlled in Step 2 and can still feed `{scenarioAttributes}` when the prompt contains that placeholder. The saved Step 2 `Scenario result` textarea is used by the Shots `{scenario}` placeholder.
   - Send the temporary `Shots` master prompt override only when the Site Config setting is `Yes`; when `No`, omit `masterPrompt` and let the backend use the active admin default.
-  - Show a `Prompt` button before `Request` next to `Generate shots`; it opens a read-only popup containing exactly the Shots master prompt after optional `{story}`/`{attributes}`/`{scenarioAttributes}`/`{shotsAttributes}` replacement.
+  - Show `Prompt`, `Request`, and `Response` next to `Generate shots`; `Prompt` opens a read-only popup containing exactly the Shots master prompt after optional `{story}`/`{scenario}`/`{attributes}`/`{scenarioAttributes}`/`{shotsAttributes}` replacement.
   - Show `Request` and `Response` buttons next to `Generate shots`; they stay disabled until the latest AI run returns raw data and open a full read-only popup before the normalized editable cards are reviewed.
   - `Generate shots` shows an inline success notice when shots are created and a detailed multi-line error notice when provider/config/schema failures occur. Error details include the stable code, provider/model/status/env hints and job ID when the backend returns them.
   - Always show `Shots result` directly below the generate action row. It contains the normalized shots JSON used to build the editable shot cards when available, or stays empty until user generates/pastes JSON. User edits to valid JSON immediately rebuild the cards; invalid JSON leaves the last valid cards in place and shows a readable error. `Save shots` persists the synced shots.

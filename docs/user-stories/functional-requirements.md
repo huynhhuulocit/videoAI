@@ -77,11 +77,12 @@
 - Trong `Bước 2`, catalog attribute/option phải được gom vào panel `Attributes` ở cột phải trên desktop; panel này mặc định thu gọn, đủ rộng để đọc label/count trên desktop, còn khu vực master prompt Scenario, action, lỗi và kết quả AI nằm ở cột nội dung bên trái.
 - Trong panel `Attributes` của workspace, attribute/option có mô tả từ Scenario phải có icon helper; hover hoặc click icon sẽ hiển thị mô tả mà không làm đổi trạng thái chọn/collapse.
 - Trong `Bước 3`, workspace chỉ hiển thị textarea `Shots` master prompt do admin quản lý khi Admin Site Config `showUserMasterPrompts=true`; user có thể sửa tạm thời prompt này cho lần tạo shots hiện tại mà không lưu đè default admin. Khi setting là `false`, frontend không gửi `masterPrompt` override và backend dùng active admin default.
-- Trong `Bước 3`, workspace chỉ hiển thị panel `Shots Attributes` trong cột phải bên cạnh `Shots` master prompt/generate controls. Panel này mặc định thu gọn, giữ selected-count visible, và cho user xem/chỉnh các option được đưa vào `{shotsAttributes}`. Scenario options được chỉnh ở `Bước 2` và vẫn có thể đi vào `{scenarioAttributes}` nếu prompt có placeholder đó.
+- Trong `Bước 2`, workspace phải hiển thị textarea `Scenario result`. `Analyze scenario` điền output text từ AI vào textarea này và không auto-select Scenario attribute/option; user có thể sửa thủ công; `Save selection` và `Save Project` phải lưu giá trị này vào database.
+- Trong `Bước 3`, workspace chỉ hiển thị panel `Shots Attributes` trong cột phải bên cạnh `Shots` master prompt/generate controls. Panel này mặc định thu gọn, giữ selected-count visible, và cho user xem/chỉnh các option được đưa vào `{shotsAttributes}`. Scenario options được chỉnh ở `Bước 2` và vẫn có thể đi vào `{scenarioAttributes}` nếu prompt có placeholder đó. `Scenario result` đã lưu ở `Bước 2` phải được dùng cho placeholder `{scenario}` trong Step 3.
 - Khi user tạo shots trong `Bước 3`, hệ thống phải gửi các attribute/option đã chọn ở `Bước 2` vào workflow `shot_generation` dưới dạng attribute cấp shot plan.
 - Request tạo shots trong `Bước 3` chỉ được gửi `Shots` master prompt tạm thời khi Admin Site Config `showUserMasterPrompts=true`; khi setting là `false`, backend phải reject mọi request user vẫn gửi `masterPrompt` override.
 - Sau khi user bấm `Generate shots`, UI phải hiển thị thông báo thành công ngay dưới action nếu tạo shot plan thành công; nếu lỗi AI/provider/config/schema thì hiển thị lỗi nhiều dòng dễ hiểu, gồm mã lỗi ổn định, provider/model/status/env/job ID khi có.
-- Ở `Bước 3`, UI luôn hiển thị textarea `Shots result` ngay dưới action generate. Textarea này trống khi chưa có shot plan, và chứa JSON normalized dùng để build shot cards khi đã generate/chọn/paste JSON; user có thể sửa JSON và bấm `Apply JSON` để đồng bộ lại shot cards trước khi `Save shots`.
+- Ở `Bước 3`, UI luôn hiển thị textarea `Shots result` ngay dưới action generate. Textarea này trống khi chưa có shot plan, và chứa JSON normalized dùng để build shot cards khi đã generate/chọn/paste JSON; user có thể sửa JSON hợp lệ để đồng bộ ngay với shot cards trước khi `Save shots`.
 - Shot plan phải được lưu trong database theo user để mọi project của cùng user đều có thể chọn lại.
 - Nếu nội dung hiện tại quá ngắn, hệ thống phải bổ sung các shot mặc định để shot plan có ít nhất 3 shot.
 - Mỗi shot có thời lượng mặc định 8 giây và chỉ được nằm trong khoảng 1-8 giây.
@@ -176,7 +177,7 @@
 - Kịch bản và JSON attribute/option đã normalize phải được lưu trong database.
 - Trong project workspace, `Scenario` phải load Kịch bản phía trên Shots; `Product Flow` phải load Kịch bản trước action phân tích sản phẩm.
 - Trong `Scenario`, lựa chọn kịch bản được dùng để compose prompt cục bộ cho từng shot. Trong `Product Flow`, lựa chọn kịch bản được gửi vào workflow analyze/generate.
-- Các request AI/log/result có liên quan phải lưu lại template/scenario selection; prompt panel cục bộ phải hiển thị lựa chọn kịch bản được dùng để compose prompt.
+- Các request AI/log có liên quan phải lưu lại template/scenario selection do user chọn và `Scenario result`; prompt panel cục bộ phải hiển thị dữ liệu kịch bản được dùng để compose prompt. `Analyze scenario` không được parse AI output để chọn attribute thay user.
 
 ## 8.1. Standalone shot plan routes
 

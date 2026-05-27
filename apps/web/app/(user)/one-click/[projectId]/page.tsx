@@ -40,6 +40,7 @@ export default async function OneClickWizardPage({
         flowType="script"
         workspaceMode="one-click"
         savedTemplateSelection={project.templateSelection ?? null}
+        savedScenarioResult={project.scenarioResult ?? null}
         savedAttributeSelections={project.attributeSelections ?? null}
         defaultPrompt=""
         defaultProductUrl=""

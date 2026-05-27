@@ -4,6 +4,9 @@ Break the Story Content into clear, editable video shots.
 Story Content:
 {story}
 
+Scenario analysis result:
+{scenario}
+
 Selected Shots attributes:
 {shotsAttributes}
 

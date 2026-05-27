@@ -275,9 +275,9 @@ const messages = {
   "workspace.shotsAdminManaged":
     "Shot generation prompts are managed in Admin > Master Prompt.",
   "workspace.shotsScenarioAttributes":
-    "Shot AI will use the Step 2 selected attributes: {attributes};",
+    "Shots will use the saved Step 2 scenario result for {scenario}: {attributes}",
   "workspace.shotsScenarioAttributesEmpty":
-    "No Step 2 attributes are selected for this shot generation yet.",
+    "No Step 2 scenario result is saved yet. Run Analyze scenario or Save selection before using {scenario}.",
   "workspace.shotsSourceFromScenario":
     "Shot generation uses the story content entered in Step 1.",
   "workspace.shotsSelect": "Select shots",
@@ -377,7 +377,7 @@ const messages = {
     "No active Admin Scenario attribute catalog is configured.",
   "workspace.templateSelect": "Choose scenario",
   "workspace.templateStoryHelp":
-    "This content is combined with the master prompt for option analysis and reused as the shot-generation source.",
+    "This content is combined with the master prompt for Scenario result generation and reused as the shot-generation source.",
   "workspace.templateStoryLabel": "Story content",
   "workspace.templateTitle": "Step 2 · Prompt scenario",
   "workspace.templateAnalyze": "Analyze scenario",
@@ -398,7 +398,7 @@ const messages = {
   "workspace.aiErrorProvider": "Provider: {provider}",
   "workspace.aiErrorProviderEnv": "the saved provider API key",
   "workspace.aiErrorProviderFailed":
-    "The provider/model returned an error or did not return the required JSON. Check provider/model, the master prompt, and AI Logs for the redacted raw response.",
+    "The provider/model returned an error or did not return usable output. Check provider/model, the master prompt, and AI Logs for the redacted raw response.",
   "workspace.aiErrorProviderMessage": "Technical message: {message}",
   "workspace.aiErrorRateLimited":
     "The provider is rate-limited or out of quota. Wait, switch model/provider, or check billing/quota.",
@@ -407,8 +407,13 @@ const messages = {
     "AI analysis did not complete successfully. Check configuration and try again.",
   "workspace.aiErrorValidation":
     "The request is invalid. Check the story content, master prompt, and selected scenario.",
-  "workspace.templateAnalyzeSuccess": "Matching options selected",
+  "workspace.templateAnalyzeSuccess": "Scenario result generated",
   "workspace.templateAnalysisResult": "AI suggested selection",
+  "workspace.scenarioResultLabel": "Scenario result",
+  "workspace.scenarioResultHelp":
+    "Edit the Scenario analysis result saved for Step 3. This value is used for the {scenario} placeholder.",
+  "workspace.scenarioResultPlaceholder":
+    "Analyze scenario to fill this result, or enter the scenario summary used by Shots.",
   "workspace.templateSelectionSave": "Save selection",
   "workspace.templateSelectionSaved": "Selection saved to project",
   "workspace.templateSelectionSaveFailed": "Cannot save scenario selection",
@@ -448,11 +453,16 @@ const messages = {
   "workspace.fullPromptButton": "Prompt",
   "workspace.fullPromptUnavailable":
     "Not enough data to build the full prompt. Enter content and a master prompt first.",
+  "workspace.aiResultButton": "Result",
+  "workspace.aiResultUnavailable": "No AI result yet. Run AI first.",
   "workspace.rawRequestButton": "Request",
   "workspace.rawResponseButton": "Response",
   "workspace.storyFullPrompt": "Full Story Content prompt",
   "workspace.storyFullPromptHelp":
     "The exact Story Content master prompt after replacing any placeholders present in it.",
+  "workspace.storyAiResult": "Story Content result",
+  "workspace.storyAiResultHelp":
+    "The normalized Story Content result returned by VideoAI after the latest generation. Raw provider request and response are excluded.",
   "workspace.storyRawRequest": "Raw Story Content request",
   "workspace.storyRawRequestHelp":
     "The redacted provider payload with the exact rendered master prompt sent to AI.",
@@ -462,6 +472,9 @@ const messages = {
   "workspace.scenarioFullPrompt": "Full Scenario analysis prompt",
   "workspace.scenarioFullPromptHelp":
     "The exact Scenario master prompt after replacing any {story}/{scenarioAttributes} placeholders present in it.",
+  "workspace.scenarioAiResult": "Scenario result",
+  "workspace.scenarioAiResultHelp":
+    "The normalized Scenario analysis result returned by VideoAI after the latest analysis. Raw provider request and response are excluded.",
   "workspace.scenarioRawRequest": "Raw Scenario analysis request",
   "workspace.scenarioRawRequestHelp":
     "The redacted provider payload with the exact rendered Scenario master prompt sent to AI.",
@@ -470,7 +483,16 @@ const messages = {
     "The provider response before the system normalizes it and selects matching options.",
   "workspace.shotsFullPrompt": "Full Shots prompt",
   "workspace.shotsFullPromptHelp":
-    "The exact Shots master prompt after replacing any {story}/{scenarioAttributes}/{shotsAttributes} placeholders present in it.",
+    "The exact Shots master prompt after replacing any {story}/{scenario}/{scenarioAttributes}/{shotsAttributes} placeholders present in it.",
+  "workspace.shotsAiResult": "Generated Shots result",
+  "workspace.shotsAiResultHelp":
+    "The normalized shot-plan result returned by VideoAI after the latest shot generation. Raw provider request and response are excluded.",
+  "workspace.shotVideoResult": "Video result",
+  "workspace.shotVideoResultHelp":
+    "The normalized video generation result returned by VideoAI for this shot. Raw provider request and response are excluded.",
+  "workspace.productAiResult": "Product analysis result",
+  "workspace.productAiResultHelp":
+    "The normalized product analysis result returned by VideoAI after the latest product analysis. Raw provider request and response are excluded.",
   "workspace.productRawRequest": "Raw product analysis request",
   "workspace.productRawRequestHelp":
     "The request payload used for the current product analysis, with sensitive data removed.",

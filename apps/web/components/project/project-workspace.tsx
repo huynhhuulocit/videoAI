@@ -159,6 +159,7 @@ type ProjectWorkspaceProps = {
   flowType: ProjectFlow;
   workspaceMode?: "project" | "one-click";
   savedTemplateSelection?: TemplateSelection | null;
+  savedScenarioResult?: string | null;
   savedAttributeSelections?: {
     story?: AttributeSelection | null | undefined;
     scenario?: AttributeSelection | null | undefined;
@@ -715,6 +716,21 @@ function formatRawJson(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function stripRawDebugFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripRawDebugFields);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== "rawRequest" && key !== "rawResponse")
+      .map(([key, item]) => [key, stripRawDebugFields(item)]),
+  );
 }
 
 function toAbsolutePreviewUrl(previewUrl: string | undefined) {
@@ -1837,6 +1853,7 @@ export function ProjectWorkspace({
   flowType,
   workspaceMode = "project",
   savedTemplateSelection,
+  savedScenarioResult,
   savedAttributeSelections,
   projectTemplateSnapshot,
   defaultPrompt,
@@ -1879,6 +1896,13 @@ export function ProjectWorkspace({
   const [rawTemplateResponse, setRawTemplateResponse] = useState<unknown>(null);
   const [rawProductRequest, setRawProductRequest] = useState<unknown>(null);
   const [rawProductResponse, setRawProductResponse] = useState<unknown>(null);
+  const [, setStoryAiResult] = useState<unknown>(null);
+  const [, setScenarioAiResult] = useState<unknown>(null);
+  const [, setShotsAiResult] = useState<unknown>(null);
+  const [, setProductAiResult] = useState<unknown>(null);
+  const [, setShotVideoResults] = useState<
+    Record<string, unknown>
+  >({});
   const [rawDataModal, setRawDataModal] = useState<RawDataModalState | null>(
     null,
   );
@@ -1915,7 +1939,9 @@ export function ProjectWorkspace({
     useState<AttributeSelectionModes>({});
   const [shotsSelectionModes, setShotsSelectionModes] =
     useState<AttributeSelectionModes>({});
-  const [templateAnalysisCompact, setTemplateAnalysisCompact] = useState("");
+  const [templateAnalysisCompact, setTemplateAnalysisCompact] = useState(
+    () => savedScenarioResult ?? "",
+  );
   const [generatedShotPrompts, setGeneratedShotPrompts] = useState<
     Record<string, string>
   >({});
@@ -2249,6 +2275,7 @@ export function ProjectWorkspace({
       setSelectedShotIds([]);
       setRawShotRequest(null);
       setRawShotResponse(null);
+      setShotsAiResult(null);
       return () => {
         cancelled = true;
       };
@@ -2788,6 +2815,15 @@ export function ProjectWorkspace({
     );
   }
 
+  async function saveProjectScenarioResult() {
+    await apiPatch<{ saved: boolean; scenarioResult: string | null }>(
+      `/projects/${projectId}/scenario-result`,
+      {
+        scenarioResult: templateAnalysisCompact.trim() || null,
+      },
+    );
+  }
+
   async function buildMediaItem(
     file: File,
     nextTotalBytes: number,
@@ -2895,6 +2931,8 @@ export function ProjectWorkspace({
     setRawStoryResponse(null);
     setRawProductRequest(null);
     setRawProductResponse(null);
+    setStoryAiResult(null);
+    setProductAiResult(null);
     const validUploadedIds = nextItems
       .filter((item) => item.status === "validated")
       .map((item) => item.id);
@@ -2924,6 +2962,10 @@ export function ProjectWorkspace({
         setGeneratedShotPrompts((current) => {
           const { [shotId]: _removedPrompt, ...nextPrompts } = current;
           return nextPrompts;
+        });
+        setShotVideoResults((current) => {
+          const { [shotId]: _removedResult, ...nextResults } = current;
+          return nextResults;
         });
         void persistShotPlanMedia(nextShotPlan, [
           ...validMediaIds,
@@ -3107,6 +3149,8 @@ export function ProjectWorkspace({
     setRawStoryResponse(null);
     setRawProductRequest(null);
     setRawProductResponse(null);
+    setStoryAiResult(null);
+    setProductAiResult(null);
   }
 
   function updateSelectedShotPlan(
@@ -3134,6 +3178,10 @@ export function ProjectWorkspace({
     setGeneratedShotPrompts((current) => {
       const { [shotId]: _removedPrompt, ...nextPrompts } = current;
       return nextPrompts;
+    });
+    setShotVideoResults((current) => {
+      const { [shotId]: _removedResult, ...nextResults } = current;
+      return nextResults;
     });
     setRawStoryRequest(null);
     setRawStoryResponse(null);
@@ -3170,6 +3218,10 @@ export function ProjectWorkspace({
     setGeneratedShotPrompts((current) => {
       const { [shotId]: _removedPrompt, ...nextPrompts } = current;
       return nextPrompts;
+    });
+    setShotVideoResults((current) => {
+      const { [shotId]: _removedResult, ...nextResults } = current;
+      return nextResults;
     });
     setRawStoryRequest(null);
     setRawStoryResponse(null);
@@ -3264,6 +3316,7 @@ export function ProjectWorkspace({
     setShotGenerationSuccessMessage("");
     setRawShotRequest(null);
     setRawShotResponse(null);
+    setShotsAiResult(null);
     setStatus({ label: t("workspace.shotsGenerating"), tone: "info" });
 
     try {
@@ -3279,6 +3332,9 @@ export function ProjectWorkspace({
             aiSelectAttributeText,
             userSelectAttributeText,
           ),
+          ...(templateAnalysisCompact.trim()
+            ? { scenario: templateAnalysisCompact.trim() }
+            : {}),
           shotsAttributes: attributeSelectionToShotAttributes(
             shotsAttributeSelection,
             shotsAttributeCatalog,
@@ -3299,6 +3355,7 @@ export function ProjectWorkspace({
       const shotPlan = result.shotPlan;
       setRawShotRequest(result.rawRequest);
       setRawShotResponse(result.rawResponse);
+      setShotsAiResult(stripRawDebugFields(result));
       setShotPlans((current) => [
         shotPlan,
         ...current.filter((item) => item.id !== shotPlan.id),
@@ -3425,12 +3482,16 @@ export function ProjectWorkspace({
           const savedTemplateSelection = await apiPatch<{
             saved: boolean;
             templateSelection: TemplateSelection | null;
+            scenarioResult: string | null;
           }>(`/projects/${projectId}/template-selection`, {
             templateSelection,
+            scenarioResult: templateAnalysisCompact,
           });
           if (!savedTemplateSelection.saved) {
             throw new Error(t("workspace.templateSelectionSaveFailed"));
           }
+        } else {
+          await saveProjectScenarioResult();
         }
       }
 
@@ -3543,6 +3604,7 @@ export function ProjectWorkspace({
     setStoryGenerationErrorMessage("");
     setRawStoryRequest(null);
     setRawStoryResponse(null);
+    setStoryAiResult(null);
     setScriptResult(null);
     setGeneratedShotPrompts({});
     setTemplateAnalysisCompact("");
@@ -3570,6 +3632,7 @@ export function ProjectWorkspace({
       const result = getJobResult<PromptResult>(completedJob);
       setRawStoryRequest(result.rawRequest ?? null);
       setRawStoryResponse(result.rawResponse ?? null);
+      setStoryAiResult(stripRawDebugFields(result));
       setPromptText(result.generatedPrompt);
       setFinalPrompt(result.generatedPrompt);
       setProductAnalysis(null);
@@ -3600,6 +3663,7 @@ export function ProjectWorkspace({
     setErrorMessage("");
     setRawProductRequest(null);
     setRawProductResponse(null);
+    setProductAiResult(null);
     setScriptResult(null);
     setStatus({ label: t("workspace.analyzingProduct"), tone: "info" });
 
@@ -3617,6 +3681,7 @@ export function ProjectWorkspace({
       const result = getJobResult<ProductAnalysisResult>(completedJob);
       setRawProductRequest(result.rawRequest ?? productRequestPayload);
       setRawProductResponse(result.rawResponse ?? result);
+      setProductAiResult(stripRawDebugFields(result));
       setProductAnalysis(result);
       setFinalPrompt(result.generatedPrompt);
       setStatus({ label: t("workspace.productSuccess"), tone: "success" });
@@ -3657,6 +3722,7 @@ export function ProjectWorkspace({
     setTemplateAnalysisCompact("");
     setRawTemplateRequest(null);
     setRawTemplateResponse(null);
+    setScenarioAiResult(null);
     setGeneratedShotPrompts({});
     setStatus({ label: t("workspace.templateAnalyzing"), tone: "info" });
 
@@ -3678,14 +3744,8 @@ export function ProjectWorkspace({
         getJobResult<TemplateSelectionAnalysisResult>(completedJob);
       setRawTemplateRequest(result.rawRequest);
       setRawTemplateResponse(result.rawResponse);
-      setSelectedTemplateId(result.templateSelection.templateId);
-      setSelectedOptionIds(
-        mergeWithRequiredOptionIds(
-          selectedTemplate,
-          templateSelectionToOptionIds(result.templateSelection),
-        ),
-      );
-      setTemplateAnalysisCompact(result.compactSelection);
+      setScenarioAiResult(stripRawDebugFields(result));
+      setTemplateAnalysisCompact(result.scenarioResult);
       setTemplateAnalysisErrorMessage("");
       setStatus({
         label: t("workspace.templateAnalyzeSuccess"),
@@ -3715,8 +3775,10 @@ export function ProjectWorkspace({
       await apiPatch<{
         saved: boolean;
         templateSelection: TemplateSelection | null;
+        scenarioResult: string | null;
       }>(`/projects/${projectId}/template-selection`, {
         templateSelection,
+        scenarioResult: templateAnalysisCompact,
       });
       await saveProjectAttributeSelections();
       setStatus({
@@ -3940,8 +4002,10 @@ export function ProjectWorkspace({
         userSelectAttributeText,
       ),
     );
+    const scenarioText = templateAnalysisCompact.trim();
     const renderedPrompt = renderPromptTemplate(masterPrompt, {
       story: sourceText,
+      scenario: scenarioText,
       attributes: attributeText,
       scenarioAttributes: scenarioAttributesText,
       shotsAttributes: shotsAttributesText,
@@ -4575,6 +4639,9 @@ export function ProjectWorkspace({
       setRawTemplateResponse(null);
       setRawShotRequest(null);
       setRawShotResponse(null);
+      setStoryAiResult(null);
+      setScenarioAiResult(null);
+      setShotsAiResult(null);
       setShotGenerationErrorMessage("");
       setShotGenerationSuccessMessage("");
       setTemplateAnalysisCompact("");
@@ -4594,6 +4661,9 @@ export function ProjectWorkspace({
       setRawTemplateResponse(null);
       setRawShotRequest(null);
       setRawShotResponse(null);
+      setStoryAiResult(null);
+      setScenarioAiResult(null);
+      setShotsAiResult(null);
       setShotGenerationErrorMessage("");
       setShotGenerationSuccessMessage("");
       setTemplateAnalysisCompact("");
@@ -4849,6 +4919,7 @@ export function ProjectWorkspace({
                     setStoryGenerationErrorMessage("");
                     setRawStoryRequest(null);
                     setRawStoryResponse(null);
+                    setStoryAiResult(null);
                     setRawDataModal(null);
                   }}
                   placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scripts}
@@ -4894,6 +4965,9 @@ export function ProjectWorkspace({
                     setRawTemplateResponse(null);
                     setRawShotRequest(null);
                     setRawShotResponse(null);
+                    setStoryAiResult(null);
+                    setScenarioAiResult(null);
+                    setShotsAiResult(null);
                     setShotGenerationErrorMessage("");
                     setShotGenerationSuccessMessage("");
                     setTemplateAnalysisCompact("");
@@ -5417,6 +5491,7 @@ export function ProjectWorkspace({
                 setTemplateAnalysisErrorMessage("");
                 setRawTemplateRequest(null);
                 setRawTemplateResponse(null);
+                setScenarioAiResult(null);
                 setRawDataModal(null);
               }}
               placeholderSuggestions={MASTER_PROMPT_PLACEHOLDERS.scenario}
@@ -5447,6 +5522,8 @@ export function ProjectWorkspace({
                 setRawTemplateResponse(null);
                 setRawShotRequest(null);
                 setRawShotResponse(null);
+                setScenarioAiResult(null);
+                setShotsAiResult(null);
                 setShotGenerationErrorMessage("");
                 setShotGenerationSuccessMessage("");
                 setRawDataModal(null);
@@ -5524,16 +5601,30 @@ export function ProjectWorkspace({
             </div>
           ) : null}
 
-          {templateAnalysisCompact ? (
-            <div className="rounded-md border border-sky-100 bg-sky-50 p-3 font-mono text-xs leading-5 text-sky-950">
-              <div className="mb-1 font-sans text-sm font-medium text-sky-900">
-                {t("workspace.templateAnalysisResult")}
-              </div>
-              <pre className="whitespace-pre-wrap break-words">
-                {templateAnalysisCompact}
-              </pre>
-            </div>
-          ) : null}
+          <div>
+            <label
+              className="text-sm font-medium"
+              htmlFor="oneClickScenarioResult"
+            >
+              {t("workspace.scenarioResultLabel")}
+            </label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("workspace.scenarioResultHelp")}
+            </p>
+            <TextareaWithCounter
+              id="oneClickScenarioResult"
+              rows={5}
+              value={templateAnalysisCompact}
+              onChange={(event) => {
+                setTemplateAnalysisCompact(event.target.value);
+                setShotGenerationErrorMessage("");
+                setShotGenerationSuccessMessage("");
+                setGeneratedShotPrompts({});
+              }}
+              className="mt-2 min-h-32 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
+              placeholder={t("workspace.scenarioResultPlaceholder")}
+            />
+          </div>
         </div>
       </div>
     );
@@ -5567,10 +5658,14 @@ export function ProjectWorkspace({
     setRawStoryResponse(null);
     setRawShotRequest(null);
     setRawShotResponse(null);
+    setScenarioAiResult(null);
+    setStoryAiResult(null);
+    setShotsAiResult(null);
     setShotGenerationErrorMessage("");
     setShotGenerationSuccessMessage("");
     setRawProductRequest(null);
     setRawProductResponse(null);
+    setProductAiResult(null);
     setRawDataModal(null);
   }
 
@@ -5723,6 +5818,11 @@ export function ProjectWorkspace({
       delete next[shot.id];
       return next;
     });
+    setShotVideoResults((current) => {
+      const next = { ...current };
+      delete next[shot.id];
+      return next;
+    });
     setErrorMessage("");
     setStatus({ label: t("workspace.shotVideoCreating"), tone: "info" });
 
@@ -5740,6 +5840,10 @@ export function ProjectWorkspace({
       setRawShotVideoResponses((current) => ({
         ...current,
         [shot.id]: result.rawResponse ?? result,
+      }));
+      setShotVideoResults((current) => ({
+        ...current,
+        [shot.id]: stripRawDebugFields(result),
       }));
       setShotVideoMessages((current) => ({
         ...current,
@@ -5958,11 +6062,7 @@ export function ProjectWorkspace({
       return null;
     }
 
-    const scenarioShotAttributes =
-      templateSelectionToShotAttributes(templateSelection);
-    const scenarioAttributeSummary = scenarioShotAttributes
-      .map((attribute) => `${attribute.name}=${attribute.value}`)
-      .join("; ");
+    const scenarioResultSummary = templateAnalysisCompact.trim();
 
     return (
       <>
@@ -5991,9 +6091,9 @@ export function ProjectWorkspace({
                 {t("workspace.shotsAdminManaged")}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {scenarioShotAttributes.length > 0
+                {scenarioResultSummary
                   ? t("workspace.shotsScenarioAttributes", {
-                      attributes: scenarioAttributeSummary,
+                      attributes: scenarioResultSummary,
                     })
                   : t("workspace.shotsScenarioAttributesEmpty")}
               </p>
@@ -6015,6 +6115,7 @@ export function ProjectWorkspace({
                         setShotGenerationPrompt(event.target.value);
                         setRawShotRequest(null);
                         setRawShotResponse(null);
+                        setShotsAiResult(null);
                         setShotGenerationErrorMessage("");
                         setShotGenerationSuccessMessage("");
                         setRawDataModal(null);
@@ -6691,6 +6792,7 @@ export function ProjectWorkspace({
                             setTemplateAnalysisErrorMessage("");
                             setRawTemplateRequest(null);
                             setRawTemplateResponse(null);
+                            setScenarioAiResult(null);
                             setRawDataModal(null);
                           }}
                           placeholderSuggestions={
@@ -6767,16 +6869,30 @@ export function ProjectWorkspace({
                     </div>
                   ) : null}
 
-                  {templateAnalysisCompact ? (
-                    <div className="mt-4 rounded-md border border-sky-100 bg-sky-50 p-3 font-mono text-xs leading-5 text-sky-950">
-                      <div className="mb-1 font-sans text-sm font-medium text-sky-900">
-                        {t("workspace.templateAnalysisResult")}
-                      </div>
-                      <pre className="whitespace-pre-wrap break-words">
-                        {templateAnalysisCompact}
-                      </pre>
-                    </div>
-                  ) : null}
+                  <div className="mt-4">
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="scenarioResult"
+                    >
+                      {t("workspace.scenarioResultLabel")}
+                    </label>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t("workspace.scenarioResultHelp")}
+                    </p>
+                    <TextareaWithCounter
+                      id="scenarioResult"
+                      rows={5}
+                      value={templateAnalysisCompact}
+                      onChange={(event) => {
+                        setTemplateAnalysisCompact(event.target.value);
+                        setShotGenerationErrorMessage("");
+                        setShotGenerationSuccessMessage("");
+                        setGeneratedShotPrompts({});
+                      }}
+                      className="mt-2 min-h-32 w-full resize-y rounded-md border border-border bg-white p-3 font-mono text-xs leading-5 outline-none focus:ring-2 focus:ring-sky-200"
+                      placeholder={t("workspace.scenarioResultPlaceholder")}
+                    />
+                  </div>
                 </div>
 
                 <aside className="min-w-0 xl:col-start-2 xl:row-start-1">
@@ -7168,6 +7284,7 @@ export function ProjectWorkspace({
                   setProductUrl(event.target.value);
                   setRawProductRequest(null);
                   setRawProductResponse(null);
+                  setProductAiResult(null);
                 }}
                 className="h-10 w-full rounded-md border border-border px-3 text-sm outline-none focus:ring-2 focus:ring-sky-200"
               />

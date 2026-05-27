@@ -138,6 +138,11 @@ export const MASTER_PROMPT_PLACEHOLDERS: Record<
       description: "Story Content used as the source for shot generation.",
     },
     {
+      token: "{scenario}",
+      description:
+        "The saved Scenario analysis compact result from Step 2.",
+    },
+    {
       token: "{attributes}",
       description: "Selected Scenario or shot-plan attributes in compact form.",
     },
@@ -297,6 +302,7 @@ export const ProjectSchema = z.object({
     .lazy(() => TemplateSelectionSchema)
     .nullable()
     .optional(),
+  scenarioResult: z.string().nullable().optional(),
   attributeSelections: z
     .lazy(() => ProjectAttributeSelectionsSchema)
     .optional(),
@@ -721,9 +727,6 @@ export const AnalyzeTemplateSelectionRequestSchema = z.object({
   catalogId: z.string().min(1).optional(),
   masterPrompt: z.string().trim().min(1).max(12000).optional(),
   attributeSelections: ProjectAttributeSelectionsSchema.optional(),
-  saveAsTemplate: z.boolean().optional().default(false),
-  templateName: z.string().trim().min(1).max(120).optional(),
-  templateDescription: z.string().trim().max(500).optional(),
 });
 export type AnalyzeTemplateSelectionRequest = z.infer<
   typeof AnalyzeTemplateSelectionRequestSchema
@@ -731,8 +734,7 @@ export type AnalyzeTemplateSelectionRequest = z.infer<
 
 export const TemplateSelectionAnalysisResultSchema = z.object({
   projectId: z.string(),
-  templateSelection: TemplateSelectionSchema,
-  compactSelection: z.string(),
+  scenarioResult: z.string(),
   rawRequest: z.unknown(),
   rawResponse: z.unknown(),
   provider: ProviderSchema,
@@ -744,9 +746,17 @@ export type TemplateSelectionAnalysisResult = z.infer<
 
 export const SaveProjectTemplateSelectionRequestSchema = z.object({
   templateSelection: TemplateSelectionSchema.nullable(),
+  scenarioResult: z.string().max(12000).nullable().optional(),
 });
 export type SaveProjectTemplateSelectionRequest = z.infer<
   typeof SaveProjectTemplateSelectionRequestSchema
+>;
+
+export const SaveProjectScenarioResultRequestSchema = z.object({
+  scenarioResult: z.string().max(12000).nullable(),
+});
+export type SaveProjectScenarioResultRequest = z.infer<
+  typeof SaveProjectScenarioResultRequestSchema
 >;
 
 export const SaveProjectAttributeSelectionsRequestSchema = z.object({
@@ -766,7 +776,7 @@ export type SaveProjectStoryContentRequest = z.infer<
 export const VideoShotAttributeSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
-  value: z.string().min(1),
+  value: z.string(),
 });
 export type VideoShotAttribute = z.infer<typeof VideoShotAttributeSchema>;
 
@@ -840,6 +850,7 @@ export type GenerateTemplateResult = z.infer<
 
 export const GenerateShotsRequestSchema = z.object({
   sourceText: z.string().min(1).max(12000),
+  scenario: z.string().max(12000).optional(),
   attributes: z.array(VideoShotAttributeSchema).default([]),
   scenarioAttributes: z.array(VideoShotAttributeSchema).default([]),
   shotsAttributes: z.array(VideoShotAttributeSchema).default([]),
@@ -1065,6 +1076,9 @@ export const DEFAULT_SHOT_GENERATION_PROMPT = [
   "Story:",
   "{story}",
   "",
+  "Scenario analysis result:",
+  "{scenario}",
+  "",
   "Scenario attributes in compact format attribute=option1,option2;:",
   "{scenarioAttributes}",
   "",
@@ -1078,7 +1092,7 @@ export const DEFAULT_SHOT_GENERATION_OUTPUT_FORMAT = [
   "Use last-state / end-state continuity.",
   "Every shot must include Start state, End state and Dialogue attributes.",
   "The next shot's Start state must continue from the previous shot's End state.",
-  "Dialogue should be natural, short and useful for generating voice or captions.",
+  "Dialogue should be natural, short and useful for generating voice or captions; use an empty Dialogue value only when the selected scenario explicitly requests no spoken dialogue.",
   "Return the generated shots in the provider JSON schema.",
 ].join("\n");
 
@@ -1140,43 +1154,21 @@ export const DEFAULT_SINGLE_SHOT_OUTPUT_FORMAT = [
 
 export const DEFAULT_TEMPLATE_SELECTION_PROMPT = [
   "You are a video script analyst.",
-  "Read the user's story/script and choose the best matching scenario options from the provided attributes.",
+  "Read the user's story/script and create a Scenario result that can guide shot generation.",
+  "Use the selected Scenario attributes when the prompt includes them.",
   "",
   "Story:",
   "{story}",
   "",
-  "Scenario attributes/catalog:",
+  "Selected Scenario attributes:",
   "{scenarioAttributes}",
-  "",
-  "Rules:",
-  "- Use only optionId values from the provided scenario catalog.",
-  "- Select 1 to 3 useful options per attribute when the story clearly supports them.",
-  "- If no option fits an attribute, return an empty selectedOptionIds array for that attribute.",
   "",
   "{outputFormat}",
 ].join("\n");
 
 export const DEFAULT_TEMPLATE_SELECTION_OUTPUT_FORMAT = [
-  "Return strict JSON only. No markdown, no prose outside JSON.",
-  "",
-  "Required JSON shape:",
-  JSON.stringify(
-    {
-      attributes: [
-        {
-          attributeId: "videoPurpose",
-          attributeName: "Video Purpose",
-          selectedOptionIds: ["videoPurpose-storytelling"],
-          selectedOptionLabels: ["Storytelling"],
-          reason: "Why these options fit the story.",
-        },
-      ],
-      compactSelection: "videoPurpose=Storytelling;",
-      notes: "Short summary of the selection.",
-    },
-    null,
-    2,
-  ),
+  "Return the Scenario result in the exact format requested by this prompt.",
+  "Do not select or mutate Scenario attribute options.",
 ].join("\n");
 
 export const DEFAULT_SCRIPT_GENERATION_PROMPT = [
